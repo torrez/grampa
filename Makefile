@@ -100,7 +100,7 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html
 # If just building the index.
 #
 $(BUILD_DIR)index.tmp: $(TMP_FILES)
-	@cat > $(BUILD_DIR)index.tmp $(wordlist 1, 10, $(TMP_FILES))
+	@cat > $(BUILD_DIR)index.tmp $(call reverse, $(wordlist 1, 10, $(TMP_FILES)))
 
 #
 # This builds all the .tmp files used for
