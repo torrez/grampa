@@ -33,5 +33,5 @@ The contents of the post _must_ be in this format:
 
 ## welp
 
-So yeah, this is my idea. I don’t think it’s totally ready for use but here it is! I wrote it while my kid napped and it feels good to have it done but I don’t know when I’ll be able to update it. Plus it gave me a chance to learn how to make a Makefile and how to make inline awk scripts that sort of do what I want. I didn’t know either before sitting down to do this.
+So yeah, this is my idea. I don’t think it’s totally ready for use but here it is! I wrote it while my kid slept and it feels good to have it done but I don’t know when I’ll be able to update it. Plus it gave me a chance to learn how to make a Makefile and how to make inline awk scripts that sort of do what I want. I didn’t know either before sitting down to do this.
 
