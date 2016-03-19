@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# put a command in here to copy your files
+# to wherever they need to be.
+
+# you should ignore .tmp files when deploying
+
+# this script is called with the first argument set to "build/" or
+# whatever you've set your $(BUILD_DIR) to.
+
+echo $1;

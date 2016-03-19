@@ -1,0 +1,5 @@
+<h4>{{title}}</h4>
+{{body}}
+<p>
+<a href="{{permalink}}">posted on {{pub_date}}</a>
+</p>

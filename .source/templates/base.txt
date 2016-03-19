@@ -1,0 +1,10 @@
+<html>
+	<head>
+		<title>{{page_title}}</title>
+	</head>
+<body>
+
+	{{main}}
+
+</body>
+</html>

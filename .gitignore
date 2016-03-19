@@ -1,0 +1,6 @@
+*.swp
+posts/
+config
+build/
+deploy.sh
+templates/
