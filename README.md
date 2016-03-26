@@ -19,19 +19,20 @@ Your file’s title can be as long as you like and contain at least one word.
 The contents of the post _must_ be in this format:
 
 	title: A text title
-	tags: these, aint, used, yet
+	category: example
 	-----------------------------------
 	<p>
 	Body of your post.
 	</p>
 
+If you put `Markdown.pl` from (this zip file)[https://daringfireball.net/projects/markdown/] in the root directory then every body will be run through it.
+
 ## things i still need to do
 
-1. Atom feed (duh)
-1. Markdown format option (duh)
+1. Atom feed
 1. Better deployment examples
+1. Location for all static files
 
 ## welp
 
-So yeah, this is my idea. I don’t think it’s totally ready for use but here it is! I wrote it while my kid slept and it feels good to have it done but I don’t know when I’ll be able to update it. Plus it gave me a chance to learn how to make a Makefile and how to make inline awk scripts that sort of do what I want. I didn’t know either before sitting down to do this.
-
+All of this is in flux. I’m not ready to say anyone can use this, but it might be fun to read the Makefile to see how it works.

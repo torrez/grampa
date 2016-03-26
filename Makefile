@@ -112,6 +112,21 @@ $(BUILD_DIR)%.tmp: posts/%.txt
 	@echo "---"
 	@echo $(call html_post_filename, $@)
 	@echo "---"
+
+	@if [ -x Markdown.pl ]; \
+		then \
+		split -p----------------------------------- $^ build/; \
+		tail -n +2 build/ab > build/ac; \
+		./Markdown.pl build/ac > build/ac.md; \
+		cat build/aa .source/splitter.txt build/ac.md > build/$(notdir $^); \
+		rm build/aa build/ab build/ac; \
+	fi;
+
+	@if [ ! -x Markdown.pl ]; \
+		then \
+		cp $^ build/; \
+	fi;
+
 	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call path_from_filename, $@)/$(call html_post_filename, $@)" 'BEGIN {\
 		post_output = "";\
 	}\
@@ -122,8 +137,9 @@ $(BUILD_DIR)%.tmp: posts/%.txt
 			}else if($$1 ~ "title:"){\
 				$$1="";\
 				title = $$0;\
-			}else if($$1 ~ "tags:"){\
-				tags = $$0\
+			}else if($$1 ~ "category:"){\
+				$$1="";\
+				category = $$0\
 			}\
 		}else{\
 			body = body "\n" $$0;\
@@ -135,11 +151,12 @@ $(BUILD_DIR)%.tmp: posts/%.txt
 			sub(/\{\{body\}\}/, body, $$0);\
 			sub(/\{\{pub_date\}\}/, pub_date, $$0);\
 			sub(/\{\{permalink\}\}/, permalink, $$0);\
+			sub(/\{\{category\}\}/, category, $$0);\
 			post_output = post_output $$0 "\n";\
 		}\
 		print post_output;\
 	}\
-	' $< > $@;
+	' build/$(notdir $<) > $@;
 	@echo "Done";
 
 #
