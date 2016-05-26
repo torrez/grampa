@@ -198,6 +198,7 @@ setup: config
 	@mkdir -p build;
 	@mkdir -p posts;
 	@mkdir -p templates;
+	@mkdir -p scripts;
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
 
