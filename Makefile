@@ -119,7 +119,7 @@ $(BUILD_DIR)%.tmp: posts/%.txt
 		tail -n +2 build/ab > build/ac; \
 		./Markdown.pl build/ac > build/ac.md; \
 		cat build/aa .source/splitter.txt build/ac.md > build/$(notdir $^); \
-		rm build/aa build/ab build/ac; \
+		rm build/aa build/ab build/ac build/ac.md; \
 	fi;
 
 	@if [ ! -x Markdown.pl ]; \
