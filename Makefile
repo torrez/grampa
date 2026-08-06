@@ -83,12 +83,49 @@ export BLOG_NAME
 date_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) "+%B %d, %Y")
 
 #
-# Takes a filepath of a (tmp,txt,html) file
-# and returns just the file name. Date info
-# stripped.
+# Post filenames are y-m-d-<category>_<title>.txt.
+# Splitting on the underscore first gives two halves:
+# the date and category on the left, the title slug on
+# the right. Everything else falls out of those.
 #
-post_filename = $(subst $(space),-,$(wordlist 4, $(words $(subst -,$(space), $(notdir $(1)))), $(subst -,$(space), $(notdir $(1)))))
-html_post_filename = $(call post_filename, $(1:.tmp=.html))
+underscore_split = $(subst _,$(space),$(notdir $(1)))
+date_and_category = $(firstword $(call underscore_split,$(1)))
+title_slug = $(word 2,$(call underscore_split,$(1)))
+post_slug = $(basename $(call title_slug,$(1)))
+
+#
+# The category is whatever follows the three date
+# fields in the left half, rejoined with hyphens so
+# that multi-word categories survive.
+#
+dc_words = $(subst -,$(space),$(call date_and_category,$(1)))
+category_slug = $(subst $(space),-,$(wordlist 4, $(words $(call dc_words,$(1))), $(call dc_words,$(1))))
+
+#
+# Display form of a category *slug*, and the page it
+# links to. category_display takes a slug; the others
+# take a filename.
+#
+category_display = $(subst -,$(space),$(1))
+category_url = /category/$(call category_slug,$(1)).html
+
+#
+# A malformed filename is a parse-time error, so the
+# build stops before any recipe runs. Assigning with
+# := forces the check to happen now; the result is
+# discarded.
+#
+check_post_name = \
+	$(if $(word 3,$(call underscore_split,$(1))),$(error posts/$(1): more than one _ in filename; expected y-m-d-category_title.txt))\
+	$(if $(word 2,$(call underscore_split,$(1))),,$(error posts/$(1): no category in filename; expected y-m-d-category_title.txt))\
+	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))
+CHECKED_POST_NAMES := $(foreach f,$(POST_NAMES),$(call check_post_name,$(f)))
+
+#
+# Never leave a half-written target behind for the next
+# build to trust.
+#
+.DELETE_ON_ERROR:
 
 #
 # Makes a y/m/d/ for a .tmp file.
@@ -96,19 +133,31 @@ html_post_filename = $(call post_filename, $(1:.tmp=.html))
 path_from_filename = $(subst $(space),/,$(wordlist 1, 3, $(subst -,$(space), $(notdir $(1)))))
 
 #
+# The page a post builds to, without build/ or the
+# .html extension. The category is deliberately absent
+# -- it lives in the source filename but never in a
+# URL, so permalinks did not change when categories
+# moved into filenames.
+#
+page_for = $(call path_from_filename,$(1))/$(call post_slug,$(1))
+
+#
+# Because the category is in the filename but not the
+# URL, a page cannot be mapped back to its fragment by
+# turning slashes into hyphens. Search instead.
+#
+# O(posts) per target, so O(posts squared) per build.
+# Fine at blog scale; if it ever drags, generate
+# explicit per-post rules with foreach and eval.
+#
+tmp_for_page = $(strip $(foreach f,$(TMP_FILES),$(if $(filter $(1),$(call page_for,$(f))),$(f))))
+post_for_page = $(patsubst $(WORK_DIR)%.tmp,posts/%.txt,$(call tmp_for_page,$(1)))
+
+#
 # Generates all the post.html files that
 # need to be built.
 #
-html_post_files = $(foreach f,$(TMP_FILES),$(call path_from_filename, $(f))/$(call post_filename, $(f:.tmp=.html)))
-
-#
-# Maps the stem of a build/y/m/d/name.html target back
-# to the two files that page is built from. The stem
-# is y/m/d/name, so slashes back into hyphens gives
-# the original post name.
-#
-tmp_for = $(WORK_DIR)$(subst /,-,$(1)).tmp
-post_for = posts/$(subst /,-,$(1)).txt
+html_post_files = $(foreach f,$(TMP_FILES),$(call page_for,$(f)).html)
 
 #
 # Replaces the first {{key}} on a line. Every template
@@ -234,11 +283,11 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html
 # already an indirect one via the .tmp file, so this
 # costs no extra rebuilds.
 #
-$(BUILD_DIR)%.html: $$(call tmp_for,$$*) $$(call post_for,$$*) templates/base.txt config
+$(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templates/base.txt config
 	@echo "Building $(@)"
 	@mkdir -p $(dir $(@))
 
-	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for,$*) | head -1); \
+	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for_page,$*) | head -1); \
 	if [ -n "$$title" ]; \
 		then \
 		export PAGE_TITLE="$$title - $$BLOG_NAME"; \
@@ -285,7 +334,7 @@ $(WORK_DIR)%.tmp: posts/%.txt templates/post.txt
 		cp $< $(WORK_DIR)$*.staged; \
 	fi;
 
-	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call path_from_filename, $@)/$(call html_post_filename, $@)" "$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
+	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call page_for,$@).html" "$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
 	@rm -f $(WORK_DIR)$*.staged
 	@echo "Done";
 

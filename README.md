@@ -12,16 +12,25 @@ Check out this repo and run `make setup`. The `config` file doesn’t actually d
 
 ## post format
 
-A post file name _must_ be in the format: y-m-d-title-of-post.txt
+A post file name _must_ be in the format: y-m-d-category_title-of-post.txt
 
-Your file’s title can be as long as you like and contain at least one word.
+Anything to the left of the `_` is the date and the category. Anything to the
+right is the title of the post. Exactly one `_` per filename, please — neither
+the category nor the title may contain one. Categories can contain hyphens, so
+`project-ideas` is fine.
 
-Zero-padding the date is optional — posts sort correctly either way — but `2026-08-06` gives you a tidier URL than `2026-8-6`.
+	posts/2026-08-06-home_installing-a-doorbell.txt
+	posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
+
+Zero-padding the date is optional — posts sort correctly either way — but
+`2026-08-06` gives you a tidier URL than `2026-8-6`.
+
+The category never appears in the URL. That post above lives at
+`/2026/08/06/installing-a-doorbell.html`.
 
 The contents of the post _must_ be in this format:
 
 	title: A text title
-	category: example
 	-----------------------------------
 	<p>
 	Body of your post.
