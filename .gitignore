@@ -3,6 +3,7 @@ posts/
 config
 build/
 work/
+tests/tmp/
 deploy.sh
 templates/
 Markdown.pl

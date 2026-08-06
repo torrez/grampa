@@ -319,3 +319,11 @@ setup: config
 .PHONY: deploy
 deploy:
 	@./deploy.sh $(BUILD_DIR)
+
+#
+# Runs the test suite in tests/tmp sandboxes. Never
+# touches your real posts/ or build/.
+#
+.PHONY: test
+test:
+	@./tests/run.sh
