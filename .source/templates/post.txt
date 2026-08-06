@@ -1,6 +1,5 @@
 <h4>{{title}}</h4>
-{{category}}.gif
 {{body}}
 <p>
-<a href="{{permalink}}">posted on {{pub_date}}</a>
+<a href="{{permalink}}">posted on {{pub_date}}</a> in <a href="{{category_url}}">{{category}}</a>
 </p>

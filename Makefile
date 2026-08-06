@@ -190,9 +190,6 @@ BEGIN {
         }else if ($$0 ~ /^title:/){
             title = $$0;
             sub(/^title:[ \t]*/, "", title);
-        }else if ($$0 ~ /^category:/){
-            category = $$0;
-            sub(/^category:[ \t]*/, "", category);
         }
     }else{
         body = (body == "" ? $$0 : body "\n" $$0);
@@ -204,6 +201,7 @@ END {
         new_line = fill(new_line, "body", body);
         new_line = fill(new_line, "pub_date", pub_date);
         new_line = fill(new_line, "permalink", permalink);
+        new_line = fill(new_line, "category_url", category_url);
         new_line = fill(new_line, "category", category);
         post_output = post_output new_line "\n";
     }
@@ -334,7 +332,11 @@ $(WORK_DIR)%.tmp: posts/%.txt templates/post.txt
 		cp $< $(WORK_DIR)$*.staged; \
 	fi;
 
-	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call page_for,$@).html" "$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
+	@awk -v pub_date="$(call date_from_filename, $@)" \
+		-v permalink="/$(call page_for,$@).html" \
+		-v category="$(call category_display,$(call category_slug,$@))" \
+		-v category_url="$(call category_url,$@)" \
+		"$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
 	@rm -f $(WORK_DIR)$*.staged
 	@echo "Done";
 

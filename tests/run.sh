@@ -307,6 +307,41 @@ EOF
 	assert_out_grep "2026-08-06-_orphan.txt"
 }
 
+test_category_link_on_post_page() {
+	sandbox category_link_post
+	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
+title: Installing A Doorbell
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_grep build/2026/08/06/installing-a-doorbell.html 'in <a href="/category/home.html">home</a>'
+	assert_not_grep build/2026/08/06/installing-a-doorbell.html ".gif"
+	assert_not_grep build/2026/08/06/installing-a-doorbell.html "{{category}}"
+}
+
+test_category_link_display_name_has_spaces() {
+	sandbox category_display
+	add_post 2026-07-04-project-ideas_raspberry-pi-backup.txt <<'EOF'
+title: Raspberry Pi Backup
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_grep build/2026/07/04/raspberry-pi-backup.html 'href="/category/project-ideas.html">project ideas</a>'
+}
+
+test_category_link_on_index() {
+	sandbox category_link_index
+	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
+title: Installing A Doorbell
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_grep build/index.html 'href="/category/home.html">home</a>'
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -322,5 +357,8 @@ test_multi_hyphen_category_parses
 test_filename_without_underscore_fails
 test_filename_with_two_underscores_fails
 test_filename_with_empty_category_fails
+test_category_link_on_post_page
+test_category_link_display_name_has_spaces
+test_category_link_on_index
 
 pass_fail_summary
