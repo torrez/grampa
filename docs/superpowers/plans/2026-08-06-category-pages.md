@@ -33,7 +33,13 @@ Nothing in this repo is currently testable except by hand. This task builds the 
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `tests/run.sh`, runnable as `./tests/run.sh` or `make test`. Shell functions later tasks call: `sandbox`, `add_post NAME CONTENT`, `build`, `build_expect_fail`, `assert_file`, `assert_no_file`, `assert_grep FILE PATTERN`, `assert_not_grep FILE PATTERN`, `assert_eq LABEL EXPECTED ACTUAL`, `pass_fail_summary`. Every test function is named `test_*` and is invoked by name at the bottom of the file.
+- Produces: `tests/run.sh`, runnable as `./tests/run.sh` or `make test`. Shell functions later tasks call: `sandbox`, `add_post NAME CONTENT`, `build`, `build_expect_fail`, `assert_file`, `assert_no_file`, `assert_grep FILE PATTERN`, `assert_not_grep FILE PATTERN`, `assert_out_grep PATTERN`, `assert_out_not_grep PATTERN`, `assert_eq LABEL EXPECTED ACTUAL`, `pass_fail_summary`. Every test function is named `test_*` and is invoked by name at the bottom of the file.
+
+**Do not assert on make output with `assert_grep <(echo "$BUILD_OUT")`.** Process
+substitution yields `/dev/fd/N`, which is not a regular file on macOS, so `assert_grep`'s
+`[ -f ]` guard fails and the assertion reports "cannot grep missing file" no matter what the
+code does. Verified before writing this plan. Use `assert_out_grep` / `assert_out_not_grep`,
+which match `$BUILD_OUT` as a string.
 
 - [ ] **Step 1: Write the test harness with baseline tests**
 
@@ -144,6 +150,20 @@ assert_not_grep() {
 		return
 	fi
 	if grep -qF "$2" "$1"; then fail "did NOT expect '$2' in $1" "$(cat "$1")"; else ok; fi
+}
+
+#
+# Assertions against the captured make output. These
+# exist because process substitution gives a /dev/fd
+# path that is not a regular file on macOS, so the
+# file-based helpers above cannot be used on it.
+#
+assert_out_grep() {
+	if printf '%s\n' "$BUILD_OUT" | grep -qF "$1"; then ok; else fail "expected '$1' in make output" "$BUILD_OUT"; fi
+}
+
+assert_out_not_grep() {
+	if printf '%s\n' "$BUILD_OUT" | grep -qF "$1"; then fail "did NOT expect '$1' in make output" "$BUILD_OUT"; else ok; fi
 }
 
 assert_eq() {
@@ -264,7 +284,7 @@ category: example
 EOF
 	build || return
 	build || return
-	assert_not_grep <(echo "$BUILD_OUT") "Building"
+	assert_out_not_grep "Building"
 }
 
 test_parallel_build_is_clean() {
@@ -279,7 +299,9 @@ category: n
 EOF
 	done
 	build -j8 || return
-	assert_eq "pages built" "6" "$(find build -name '*.html' -not -name index.html | wc -l | tr -d ' ')"
+	# Counts dated post pages only, so category pages
+	# added in Task 4 do not change the expected number.
+	assert_eq "post pages built" "6" "$(find build -type f -name '*.html' -path 'build/2*' | wc -l | tr -d ' ')"
 	assert_eq "no stray intermediates" "" "$(ls work/ | grep -v '\.tmp$' | tr '\n' ' ' | sed 's/ *$//')"
 }
 
@@ -299,7 +321,8 @@ pass_fail_summary
 
 Then `chmod +x tests/run.sh`.
 
-Note: `assert_not_grep <(echo "$BUILD_OUT") ...` relies on bash process substitution, which is fine because the Makefile sets `SHELL := /bin/bash` and the script has a bash shebang.
+Note: the script needs bash, not sh — it uses `local`, `$((…))` and `${1:-}`. The shebang
+covers it, and `make test` invokes the script directly rather than sourcing it.
 
 - [ ] **Step 2: Add the test target to the Makefile**
 
@@ -332,10 +355,23 @@ If anything fails here it is a bug in the harness, not in the Makefile — these
 
 - [ ] **Step 5: Verify the harness actually catches failures**
 
-Temporarily break something to confirm the suite is not vacuously passing:
+Temporarily break the date format to confirm the suite is not vacuously passing. Restore
+from a copy, **not** `git checkout` — the `test` target from Step 2 is not committed yet and
+a checkout would revert it:
 
-Run: `sed -i '' 's/%B %d, %Y/%B %m, %Y/' Makefile && make test; git checkout Makefile`
-Expected: `test_builds_a_post_and_index` FAILS on the `posted on August 06, 2026` assertion, summary shows `failed: 1`, exit status non-zero. Then the Makefile is restored.
+```bash
+cp Makefile Makefile.orig
+sed -i '' 's/%B %d, %Y/%B %m, %Y/' Makefile
+make test; echo "exit: $?"
+mv Makefile.orig Makefile
+```
+
+Expected: `test_builds_a_post_and_index` FAILS on the `posted on August 06, 2026`
+assertion, summary shows a non-zero `failed:` count, exit non-zero. Then confirm the
+restore worked and the suite is green again:
+
+Run: `grep -c '%B %d, %Y' Makefile && make test`
+Expected: `1`, then `failed: 0`.
 
 - [ ] **Step 6: Commit**
 
@@ -436,7 +472,7 @@ title: Oops
 <p>Hi.</p>
 EOF
 	build_expect_fail || return
-	assert_grep <(echo "$BUILD_OUT") "2026-08-06-no-category-here.txt"
+	assert_out_grep "2026-08-06-no-category-here.txt"
 	assert_no_file build/2026/08/06/no-category-here.html
 }
 
@@ -448,7 +484,7 @@ title: Oops
 <p>Hi.</p>
 EOF
 	build_expect_fail || return
-	assert_grep <(echo "$BUILD_OUT") "2026-08-06-a_b_c.txt"
+	assert_out_grep "2026-08-06-a_b_c.txt"
 }
 
 test_filename_with_empty_category_fails() {
@@ -459,7 +495,7 @@ title: Oops
 <p>Hi.</p>
 EOF
 	build_expect_fail || return
-	assert_grep <(echo "$BUILD_OUT") "2026-08-06-_orphan.txt"
+	assert_out_grep "2026-08-06-_orphan.txt"
 }
 ```
 
@@ -945,8 +981,8 @@ EOF
 	build || return
 	touch -t 202701010000 posts/2026-08-06-home_doorbell.txt
 	build || return
-	assert_grep <(echo "$BUILD_OUT") "build/category/home.html"
-	assert_not_grep <(echo "$BUILD_OUT") "build/category/project-ideas.html"
+	assert_out_grep "build/category/home.html"
+	assert_out_not_grep "build/category/project-ideas.html"
 }
 
 test_category_pages_are_html_only_in_build() {
