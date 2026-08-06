@@ -194,6 +194,33 @@ categories, and URLs — there is no index or database.
   root. Without it, the post is staged into `work/` verbatim and bodies stay HTML.
 - `build/atom.xml` and `templates/atom.txt`/`index.txt` are unimplemented stubs.
 
+## Review cycle
+
+Every piece of work in this repo gets reviewed by the **Fable model** before it moves on.
+Dispatch it with the `Agent` tool using `model: "fable"`. Fold its recommendations in — this
+is not an advisory read, findings get addressed or explicitly argued down in writing.
+
+Four checkpoints, no exceptions:
+
+| When | What Fable reviews |
+| --- | --- |
+| Spec written | The design doc, against the Makefile and the test suite |
+| Plan written | The implementation plan, against the approved spec |
+| Each task finished | That task's diff, before starting the next task |
+| Before merging | The whole branch, end to end |
+
+Give the reviewer real context, not just a diff: this is a Makefile, so the failure modes
+are pattern-rule ambiguity, `=` versus `:=` expansion timing, `.SECONDARY` and intermediate
+reaping, awk `&`-in-replacement semantics, and shell quoting. A reviewer without that
+framing will comment on prose and miss the build breaking. Tell it which decisions are
+already settled with the user so it doesn't relitigate them, and tell it to prove claims by
+running commands in a sandbox — copying `Makefile` and `.source/` into a scratch directory
+the way `tests/run.sh` does — rather than asserting from inspection.
+
+Ask for findings split into blocking / recommended / optional, plus a list of what it
+actively verified. The verified list is worth as much as the findings: it stops the same
+ground being re-checked at the next checkpoint.
+
 ## Conventions
 
 - Tabs in the Makefile, obviously. Multi-line awk scripts are written inline with `\`

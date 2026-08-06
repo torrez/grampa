@@ -55,8 +55,8 @@ pipeline. See "Duplication we are keeping on purpose" below.
 - Delete the `$(BUILD_DIR)atom.xml` rule (`Makefile:432-436`).
 - Delete `.source/templates/atom.txt`.
 - Remove `1. Atom feed` from the README todo list; add the feed to the feature prose.
-- Update the CLAUDE.md line calling `atom.xml`/`atom.txt` unimplemented stubs. `index.txt`
-  remains a stub and keeps its mention.
+
+CLAUDE.md needs more than the stub sentence — see "Documentation updates" below.
 
 Existing installs have a `templates/atom.txt` in their gitignored working copy. `make
 setup` will not remove it and nothing reads it, so it is inert. Note it in the README
@@ -126,13 +126,35 @@ STAGED_FILES = $(addprefix $(WORK_DIR),$(POST_NAMES:.txt=.staged))
 
 $(WORK_DIR)%.staged: posts/%.txt
 	@mkdir -p $(WORK_DIR)
-	@# the existing Markdown split / Markdown.pl / reassemble block
-	@# from Makefile:404-429, writing to $@ instead of $(WORK_DIR)$*.staged
-	@# and without the trailing rm
+	@# Markdown.pl branch: the existing split / Markdown.pl /
+	@# reassemble block from Makefile:410-417, writing to $@
+	@# rather than to $(WORK_DIR)$*.staged, and without the
+	@# trailing rm at Makefile:429.
+	@# No-Markdown.pl branch: cp $< $@, as at Makefile:419-422.
 
-$(WORK_DIR)%.tmp:     $(WORK_DIR)%.staged templates/post.txt
-$(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
+$(WORK_DIR)%.tmp: $(WORK_DIR)%.staged templates/post.txt
+	@echo "Building $@"
+	@mkdir -p $(WORK_DIR)
+	@awk -v pub_date="$(call date_from_filename, $@)" \
+		-v permalink="/$(call page_for,$@).html" \
+		-v category="$(call category_display,$(call category_slug,$@))" \
+		-v category_url="$(call category_url,$@)" \
+		"$$RENDER_POST" $< > $@;
+	@echo "Done";
 ```
+
+The `%.tmp` rule is written out in full deliberately. Its recipe is the existing one from
+`Makefile:400-430` with the whole Markdown block lifted out, the prerequisite changed from
+`posts/%.txt` to `work/%.staged`, `$<` now naming the staged file, and the trailing `rm -f`
+dropped.
+
+**Do not express this as a bare dependency line.** For an *explicit* target, a recipe-less
+`target: prereq` line adds prerequisites to the existing rule. For a *pattern* rule it does
+not — it declares a separate, recipe-less pattern rule, and the template dependency
+silently evaporates. Verified on this machine's make 3.81: with a recipe-less
+`work/%.tmp: work/%.staged templates/post.txt` alongside the recipe-bearing rule, touching
+`templates/post.txt` rebuilt nothing at all. Every pattern rule below carries its own
+complete prerequisite list and recipe.
 
 `.staged` joins `.SECONDARY` alongside `.tmp` so make keeps it between builds.
 
@@ -155,6 +177,7 @@ RECENT_ITEMS  = $(wordlist 1, 10, $(call reverse, $(RSSITEM_FILES)))
 
 $(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
 	@echo "Building $@"
+	@mkdir -p $(WORK_DIR)
 	@awk -v pub_date="$(call rfc822_from_filename,$@)" \
 		-v item_path="/$(call page_for,$@).html" \
 		-v category="$(call category_display,$(call category_slug,$@))" \
@@ -219,12 +242,22 @@ function xml_escape(s) {
 
 The `"\\&amp;"` matters: in a gsub *replacement* a bare `&` means "the matched text" — the
 same trap that made `fill()` necessary instead of `sub()`, and that once rendered a post
-titled `Tom & Jerry` as `Tom {{title}} Jerry`. A bare `&` happens to produce the right
-output here by accident, which is worse than producing the wrong one, so it is escaped
-explicitly and carries a comment pointing at the `fill()` one.
+titled `Tom & Jerry` as `Tom {{title}} Jerry`.
 
-Applied to: item title, body, category, link; channel title and link. **Not** applied to
-`{{items}}` in the channel template — those are already-escaped XML.
+On the first line a bare `&` would come out right by accident. On the other two it is
+actively wrong, because the matched text is no longer an ampersand:
+
+```
+input:                Tom & Jerry <p>a=1&b=2</p>
+with "\\&amp;" etc:   Tom &amp; Jerry &lt;p&gt;a=1&amp;b=2&lt;/p&gt;      correct
+with bare "&lt;" etc: Tom &amp; Jerry <lt;p>gt;a=1&amp;b=2<lt;/p>gt;   garbage
+```
+
+All three get the explicit escape, and a comment points at the `fill()` one — so nobody
+later "simplifies" two-thirds of the function on the strength of the first line working.
+
+Applied to: item title, body, category, link; channel title, link, and description.
+**Not** applied to `{{items}}` in the channel template — those are already-escaped XML.
 
 ### `RENDER_ITEM`
 
@@ -245,6 +278,28 @@ unescaped.
 Both are `export`ed like `RENDER_POST` and `WRAP_IN_BASE`, and interpolate `$(FILL_FN)` and
 the new escape helper.
 
+### Guarding the template read
+
+Both new programs read their template as `while ((getline line < "templates/rss.txt") > 0)`,
+with the explicit `> 0`. The existing programs write `while (getline < "…")`, which is a
+latent hang: `getline` on a missing file returns `-1`, and `-1` is truthy. Verified:
+
+```
+$ awk 'BEGIN{ n=0; while ((r = (getline line < "nope.txt"))) { n++; if (n>3) { print "LOOPS FOREVER, getline returns " r; exit } } }'
+LOOPS FOREVER, getline returns -1
+```
+
+This matters because the two new templates arrive only via `make setup`. A new install gets
+them; an **existing** install has a populated `templates/` and no reason to re-run setup, so
+it would spin on a missing `templates/rss.txt` the moment it set `url=`. The guard turns
+that into an empty feed instead of a hang, and the rollout note below turns it into neither.
+
+Note this also contradicts CLAUDE.md, which says running from the wrong working directory
+"silently produces pages with empty bodies rather than an error." It hangs. Correcting that
+sentence is part of the doc updates below. The existing `RENDER_POST` and `WRAP_IN_BASE`
+carry the same latent bug; fixing them is out of scope here and belongs in the full-repo
+review, but it should not be forgotten.
+
 ### Duplication we are keeping on purpose
 
 `WRAP_IN_CHANNEL` is nearly `WRAP_IN_BASE` with a different `getline` path, and
@@ -262,10 +317,23 @@ gets designed from.
 RSS 2.0 requires RFC-822:
 
 ```make
-rfc822_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
+rfc822_from_filename = $(shell LC_ALL=C date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
 ```
 
 Verified: `2026-08-06` produces `Thu, 06 Aug 2026 00:00:00 -0700`.
+
+**`LC_ALL=C` is not optional.** RFC 822 day and month names are literal English tokens, and
+`$(shell)` inherits the user's locale. Verified on this machine:
+
+```
+$ LC_ALL=fr_FR.UTF-8 date -v2026y -v8m -v6d -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z"
+jeu., 06 août 2026 00:00:00 -0700
+```
+
+That is an invalid `pubDate`, and it would ship silently from any non-English machine.
+`date_from_filename` has the same sensitivity but not the same problem — there the output is
+prose for a human, so every locale is correct. Here it is a protocol violation, so only this
+helper gets the `LC_ALL=C`.
 
 **`-v0H -v0M -v0S` is load-bearing.** `date -v2026y -v8m -v6d` keeps the *current* clock
 time, so without pinning to midnight every build emits different `pubDate`s and `rss.xml`
@@ -320,6 +388,23 @@ Because `make setup` copies with `yes n | cp -i` and never clobbers, this reache
 installs only. Existing installs edit `templates/base.txt` by hand. The README documents
 the snippet.
 
+### Rollout for existing installs
+
+**Existing installs must re-run `make setup`** to pick up `rss.txt` and `rss-item.txt`. It
+is safe — `yes n | cp -i` never clobbers, so it copies only the two files that are missing.
+Without it, setting `url=` points the build at templates that do not exist. The README's
+`url=` documentation says this explicitly.
+
+The `base.txt` autodiscovery line is the one thing setup cannot deliver to an existing
+install, since their `templates/base.txt` already exists. That is a hand-edit, and the
+README carries the snippet.
+
+**The autodiscovery link dangles when `url=` is unset.** Two settled decisions interact:
+`base.txt` advertises `/rss.xml` unconditionally, and no `url=` means no feed is built — so
+an install without `url=` serves pages pointing at a 404. Neither decision changes; the
+README's `url=` section notes the interaction so the fix (set `url=`, or delete the line) is
+obvious to anyone who trips on it.
+
 ## Testing
 
 All in `tests/run.sh`, in the existing style — `sandbox`, `add_post`, `build`, `assert_*`,
@@ -337,6 +422,7 @@ plus a line in the runner list at the bottom. Turning the feed on means overwrit
 | `test_feed_is_byte_stable_across_rebuilds` | `make clean && make` twice, `cmp` the two feeds |
 | `test_changing_url_rebuilds_the_feed` | Build with one `url=`, rewrite config, rebuild, links use the new host |
 | `test_feed_link_omits_the_category` | Same invariant as `test_url_omits_the_category`, on the feed |
+| `test_feed_with_zero_posts` | `url=` set, no posts: build succeeds, does not hang, feed is a valid empty channel |
 | `test_base_template_advertises_the_feed` | `application/rss+xml` in `build/index.html` |
 
 Three of these carry more weight than the rest.
@@ -355,22 +441,72 @@ into shared code.
 `%.rssitem`. Drop that prerequisite and every other test still passes, while real installs
 get a feed full of stale hostnames that no rebuild ever corrects.
 
+`test_feed_with_zero_posts` exists because the feed path re-derives every piece of
+machinery that made `test_zero_posts_does_not_hang` (`tests/run.sh:190`) necessary in the
+first place. The design handles it — `cat /dev/null` keeps `work/rss.tmp` off stdin, and
+awk's `END` block runs on empty input, so `WRAP_IN_CHANNEL` still emits a well-formed
+channel with no items — but nothing currently pins that.
+
+`test_feed_is_byte_stable_across_rebuilds` has to copy the first `rss.xml` somewhere outside
+`build/` before the second `make clean` wipes it.
+
 ### Existing tests
 
+**`test_parallel_build_is_clean` (`tests/run.sh:248`) must be updated.** It asserts:
+
+```sh
+assert_eq "no stray intermediates" "" "$(ls work/ | grep -v '\.tmp$' | tr '\n' ' ' | sed 's/ *$//')"
+```
+
+Persisting `.staged` files — the deliberate consequence of the `.SECONDARY` change — turn
+that red immediately, and on default config, so no `url=` is needed to trip it. The grep
+becomes `grep -vE '\.(tmp|staged|rssitem)$'`, which preserves the assertion's actual intent:
+no leftover `.aa` / `.body` / `.mdbody` scratch from the `split` dance.
+
+This is the one existing test the change breaks, and it is worth being precise about why the
+first pass missed it: the audit checked the two "only `.html` under `build/`" tests, which
+is an assertion about the *output* directory, and did not check the one assertion about
+`work/`. The refactor's whole point is that it changes what lives in `work/`.
+
 `test_build_contains_only_html` (`tests/run.sh:179`) and
-`test_category_pages_are_html_only_in_build` (`tests/run.sh:519`) assert that every file
-under `build/` ends in `.html`. Both use the default config, which has no `url=`, so both
-stay green unmodified. That the skip-by-default behaviour costs no test edits is a sign it
-sits naturally in the existing design.
+`test_category_pages_are_html_only_in_build` (`tests/run.sh:519`) do stay green unmodified.
+Both use the default config, which has no `url=`, so no `rss.xml` is ever built.
 
 ### Deliberately not tested
 
 That `build/atom.xml` is gone. Asserting the absence of a file a passing build never
 created is a test that cannot fail, and the suite has none of those.
 
+## Documentation updates
+
+CLAUDE.md has more surface affected than the atom stub sentence. All of the following are
+false or incomplete once this ships:
+
+| Location | Change |
+| --- | --- |
+| Build pipeline section | Stub sentence: drop `atom.xml` and `templates/atom.txt`; `index.txt` stays a stub and keeps its mention |
+| `## config` section | "It is the only key anything reads" — now `name=` and `url=` |
+| Gotchas, `config` bullet | Same claim, stated a second time |
+| Build pipeline diagram | No `.staged` step, no feed branch |
+| Layout table, `work/` row | "`.tmp` fragments, Markdown scratch" — now also `.staged` and `.rssitem` |
+| Make helper functions list | Add `rfc822_from_filename` |
+| Commands section | The missing-template claim is wrong: it hangs, it does not produce empty bodies (see "Guarding the template read") |
+| Gotchas | Add the stale-`rss.xml`-after-removing-`url=` item from Known limitations below |
+
+README gains: the `url=` key and what unsetting it means, the re-run-`make setup` note for
+existing installs, the `base.txt` autodiscovery snippet, and the dangling-link interaction.
+
 ## Known limitations
 
 - **Removing `url=` leaves a stale `build/rss.xml`.** Same class as the existing "deleting
   a post leaves its HTML behind" and "renaming a category leaves its old page" gotchas.
   `make clean` fixes it.
+- **Deleting a post leaves it in the feed.** `work/rss.tmp` is newer than every surviving
+  `.rssitem`, so nothing re-`cat`s it and the deleted post's `<item>` persists. Exactly the
+  existing index/HTML gotcha, and `make clean` fixes it the same way.
+- **Adding or removing `Markdown.pl` does not invalidate `.staged`**, whose only
+  prerequisite is `posts/%.txt`. Bodies keep their previous rendering until a post is
+  touched or `make clean` runs. This is byte-for-byte the current `.tmp` behaviour — the
+  refactor changes nothing — but promoting `.staged` to a real file makes the staleness
+  easier to notice, so it is written down.
 - **The feed is BSD-only**, like the rest of the build, because of `date -v`.
