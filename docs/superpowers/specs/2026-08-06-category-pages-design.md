@@ -129,9 +129,18 @@ fragments and wraps them with the existing `WRAP_IN_BASE`, with `PAGE_TITLE` set
 
 `build` gains `$(addprefix $(BUILD_DIR)category/,$(addsuffix .html,$(CATEGORY_SLUGS)))`.
 
-Two pattern rules now match `build/category/notes.html` — this one and `build/%.html`. GNU
-make picks the rule with the shortest stem, which is this one (`notes`, versus
-`category/notes`). Verified on make 3.81.
+Two pattern rules now match `build/category/notes.html` — this one and `build/%.html`.
+
+**Correction, found during implementation.** This spec originally claimed GNU make picks the
+shortest stem. That is wrong, and the test that appeared to confirm it was confounded: the
+category rule happened to be defined first *and* have the shorter stem. On make 3.81 what
+actually decides is prerequisite satisfiability in definition order. `tmp_for_page` returns
+*empty* for a category stem, and an empty prerequisite list is trivially satisfiable, so the
+generic `%.html` rule will happily claim `build/category/notes.html` if it is defined first —
+emitting a nested HTML document with the wrong title rather than failing.
+
+So the category rule **must be defined above `%.html`**, and that ordering is load-bearing.
+Verified by moving it below and watching the output break.
 
 ### The fragment lookup
 

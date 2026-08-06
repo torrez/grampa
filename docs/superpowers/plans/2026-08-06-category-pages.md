@@ -1039,7 +1039,8 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 
 - [ ] **Step 5: Add the category page rule**
 
-Immediately before the `config:` rule near the end of the Makefile, add:
+Add this rule **above** the existing `$(BUILD_DIR)%.html` rule. The ordering is load-bearing
+— see the comment in the code below, which corrects an error in the original plan.
 
 ```make
 #
@@ -1049,8 +1050,16 @@ Immediately before the `config:` rule near the end of the Makefile, add:
 # categories at parse time.
 #
 # Two pattern rules match build/category/notes.html:
-# this one and %.html. Make picks the shortest stem,
-# which is this one.
+# this one and the %.html rule below. On GNU make 3.81,
+# when a target's prerequisites are satisfiable under
+# more than one pattern rule, make uses the first such
+# rule in the order it appears in the makefile -- NOT
+# the shortest stem, despite what the manual implies.
+# tmp_for_page returns empty for a category stem, and an
+# empty prerequisite list is trivially satisfiable, so a
+# %.html rule defined first will claim this target and
+# emit a nested HTML document with the wrong title.
+# Verified empirically both ways.
 #
 $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
 	@echo "Building $@"
