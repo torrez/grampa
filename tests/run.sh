@@ -342,6 +342,119 @@ EOF
 	assert_grep build/index.html 'href="/category/home.html">home</a>'
 }
 
+test_category_page_lists_its_posts_newest_first() {
+	sandbox category_page
+	add_post 2026-01-02-home_older-doorbell.txt <<'EOF'
+title: Older Doorbell
+-----------------------------------
+<p>Older body.</p>
+EOF
+	add_post 2026-08-06-home_newer-doorbell.txt <<'EOF'
+title: Newer Doorbell
+-----------------------------------
+<p>Newer body.</p>
+EOF
+	build || return
+	assert_file build/category/home.html
+	assert_grep build/category/home.html "<h4>Newer Doorbell</h4>"
+	assert_grep build/category/home.html "<h4>Older Doorbell</h4>"
+	assert_grep build/category/home.html "Newer body."
+	assert_eq "newest first" "Newer Doorbell" "$(grep -o '<h4>[^<]*</h4>' build/category/home.html | head -1 | sed 's/<[^>]*>//g')"
+}
+
+test_category_pages_do_not_mix_categories() {
+	sandbox category_separate
+	add_post 2026-08-06-home_doorbell.txt <<'EOF'
+title: Doorbell
+-----------------------------------
+<p>Home body.</p>
+EOF
+	add_post 2026-08-07-project-ideas_pi-backup.txt <<'EOF'
+title: Pi Backup
+-----------------------------------
+<p>Project body.</p>
+EOF
+	build || return
+	assert_file build/category/home.html
+	assert_file build/category/project-ideas.html
+	assert_not_grep build/category/home.html "Pi Backup"
+	assert_not_grep build/category/project-ideas.html "Doorbell"
+}
+
+test_category_page_is_not_capped_at_ten() {
+	sandbox category_uncapped
+	local i
+	for i in 1 2 3 4 5 6 7 8 9; do
+		add_post "2026-01-0$i-n_post-0$i.txt" <<EOF
+title: Post 0$i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	add_post 2026-01-10-n_post-10.txt <<'EOF'
+title: Post 10
+-----------------------------------
+<p>Body 10.</p>
+EOF
+	add_post 2026-01-11-n_post-11.txt <<'EOF'
+title: Post 11
+-----------------------------------
+<p>Body 11.</p>
+EOF
+	build || return
+	assert_eq "index still capped" "10" "$(grep -c 'posted on' build/index.html)"
+	assert_eq "category page has all 11" "11" "$(grep -c 'posted on' build/category/n.html)"
+	assert_grep build/category/n.html "Post 01"
+}
+
+test_category_page_title_uses_display_name_and_blog_name() {
+	sandbox category_title
+	add_post 2026-07-04-project-ideas_pi-backup.txt <<'EOF'
+title: Pi Backup
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=Andre Torrez\n' > config
+	build || return
+	assert_grep build/category/project-ideas.html "<title>project ideas - Andre Torrez</title>"
+}
+
+test_editing_one_category_does_not_rebuild_another() {
+	sandbox category_scope
+	add_post 2026-08-06-home_doorbell.txt <<'EOF'
+title: Doorbell
+-----------------------------------
+<p>Home body.</p>
+EOF
+	add_post 2026-08-07-project-ideas_pi-backup.txt <<'EOF'
+title: Pi Backup
+-----------------------------------
+<p>Project body.</p>
+EOF
+	build || return
+	touch -t 202701010000 posts/2026-08-06-home_doorbell.txt
+	# GNU make 3.81's mtime comparisons resolve to whole
+	# seconds. Without this, a rebuild that lands in the
+	# same wall-clock second as the first build can look
+	# "not newer" than files the first build produced, and
+	# get skipped -- flaky, not a real rebuild-scope bug.
+	sleep 1
+	build || return
+	assert_out_grep "build/category/home.html"
+	assert_out_not_grep "build/category/project-ideas.html"
+}
+
+test_category_pages_are_html_only_in_build() {
+	sandbox category_html_only
+	add_post 2026-08-06-home_doorbell.txt <<'EOF'
+title: Doorbell
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -360,5 +473,11 @@ test_filename_with_empty_category_fails
 test_category_link_on_post_page
 test_category_link_display_name_has_spaces
 test_category_link_on_index
+test_category_page_lists_its_posts_newest_first
+test_category_pages_do_not_mix_categories
+test_category_page_is_not_capped_at_ten
+test_category_page_title_uses_display_name_and_blog_name
+test_editing_one_category_does_not_rebuild_another
+test_category_pages_are_html_only_in_build
 
 pass_fail_summary

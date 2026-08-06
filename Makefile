@@ -59,6 +59,21 @@ space = $(empty) $(empty)
 RECENT_FILES = $(wordlist 1, 10, $(call reverse, $(TMP_FILES)))
 
 #
+# Every category that has at least one post. sort
+# dedupes and orders in one call, so this needs no
+# shell at all -- categories are in the filenames.
+#
+CATEGORY_SLUGS = $(sort $(foreach f,$(POST_NAMES),$(call category_slug,$(f))))
+CATEGORY_PAGES = $(addprefix $(BUILD_DIR)category/,$(addsuffix .html,$(CATEGORY_SLUGS)))
+
+#
+# The fragments belonging to one category, newest
+# first. Reversing before filtering keeps the ordering
+# the index already established.
+#
+tmp_files_in_category = $(foreach f,$(call reverse,$(TMP_FILES)),$(if $(filter $(1),$(call category_slug,$(f))),$(f)))
+
+#
 # The weblog name, read from the config file. Blank
 # lines and # comments are ignored and the last name=
 # line wins, which is what config.example promises.
@@ -266,8 +281,30 @@ clean:
 # The only phony rule that builds all the index files
 #
 .PHONY: build
-build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html
+build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES)
 	@echo "Build completed."
+
+#
+# One archive page per category, every post in it,
+# newest first. Prerequisites are exact -- only the
+# fragments in this category -- because make knows the
+# categories at parse time.
+#
+# Two pattern rules match build/category/notes.html:
+# this one and the %.html rule below. On GNU make 3.81,
+# when a target's prerequisites are satisfiable under
+# more than one pattern rule, make uses the first such
+# rule in the order it appears in the makefile -- NOT
+# the shortest stem, despite what the manual implies.
+# Verified empirically: swapping the order of these two
+# rules changes which one fires. So this rule must stay
+# above the %.html rule below it.
+#
+$(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
+	@echo "Building $@"
+	@mkdir -p $(dir $@)
+	@PAGE_TITLE="$(call category_display,$*) - $$BLOG_NAME" \
+		awk "$$WRAP_IN_BASE" $(call tmp_files_in_category,$*) > $@;
 
 #
 # This builds almost everything. The stem of a target
