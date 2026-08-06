@@ -16,6 +16,8 @@ A post file name _must_ be in the format: y-m-d-title-of-post.txt
 
 Your file’s title can be as long as you like and contain at least one word.
 
+Zero-padding the date is optional — posts sort correctly either way — but `2026-08-06` gives you a tidier URL than `2026-8-6`.
+
 The contents of the post _must_ be in this format:
 
 	title: A text title
