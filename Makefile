@@ -157,6 +157,34 @@ path_from_filename = $(subst $(space),/,$(wordlist 1, 3, $(subst -,$(space), $(n
 page_for = $(call path_from_filename,$(1))/$(call post_slug,$(1))
 
 #
+# Two posts in different categories can still want the same
+# page: the category is not in the URL, so
+# 2026-08-06-home_dup.txt and 2026-08-06-work_dup.txt both
+# claim build/2026/08/06/dup.html. One of them would win by
+# nothing better than filename sort order, and the loser's
+# fragment would still be linked from the index and from its
+# category page. That was impossible while the filename *was*
+# the URL, so it is caught here instead: a parse-time error
+# naming both files, before any recipe runs.
+#
+# sort dedupes, so a shorter deduped list is proof that some
+# page is claimed twice -- cheap enough to check on every
+# build. Only when it is do we walk the list to find which
+# page, and which files.
+#
+# This lives below page_for rather than beside
+# check_post_name because CHECKED_POST_NAMES is an immediate
+# assignment and page_for is not defined yet up there.
+#
+POST_PAGES := $(foreach f,$(POST_NAMES),$(call page_for,$(f)))
+files_for_page = $(strip $(foreach f,$(POST_NAMES),$(if $(filter $(1),$(call page_for,$(f))),posts/$(f))))
+check_page_collisions = \
+	$(foreach p,$(sort $(POST_PAGES)),\
+		$(if $(word 2,$(filter $(p),$(POST_PAGES))),\
+			$(error two posts build the same page /$(p).html: $(call files_for_page,$(p)); the category is not part of a URL, so rename one of them)))
+CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(POST_PAGES)))),$(call check_page_collisions))
+
+#
 # Because the category is in the filename but not the
 # URL, a page cannot be mapped back to its fragment by
 # turning slashes into hyphens. Search instead.
@@ -296,9 +324,19 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # more than one pattern rule, make uses the first such
 # rule in the order it appears in the makefile -- NOT
 # the shortest stem, despite what the manual implies.
-# Verified empirically: swapping the order of these two
-# rules changes which one fires. So this rule must stay
-# above the %.html rule below it.
+#
+# Both are satisfiable here: tmp_for_page returns empty
+# for a category stem, since no single fragment maps to a
+# category page, and an empty prerequisite list is
+# trivially satisfiable. So a %.html rule defined first
+# would claim build/category/notes.html and build it out
+# of templates/base.txt -- a base.txt document nested
+# inside another one, titled with the blog name instead
+# of the category. No error, just a wrong page.
+#
+# Verified empirically in both orders. Reordering these
+# two rules breaks the build silently, so this rule must
+# stay above the %.html rule below it.
 #
 $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
 	@echo "Building $@"
@@ -318,11 +356,25 @@ $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.t
 # already an indirect one via the .tmp file, so this
 # costs no extra rebuilds.
 #
+# A stem no post maps to -- a typo'd target on the command
+# line -- leaves tmp_for_page empty, which makes the
+# prerequisite list satisfiable anyway (see the note above)
+# and would otherwise wrap templates/base.txt in itself and
+# exit 0. Say so and stop instead. sed keeps a /dev/null
+# operand for the same reason cat has one below: with no file
+# to read it would sit on stdin.
+#
 $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templates/base.txt config
+	@if [ -z "$(call tmp_for_page,$*)" ]; \
+		then \
+		echo "$@: no post in posts/ builds this page" >&2; \
+		exit 1; \
+	fi
+
 	@echo "Building $(@)"
 	@mkdir -p $(dir $(@))
 
-	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for_page,$*) | head -1); \
+	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for_page,$*) /dev/null | head -1); \
 	if [ -n "$$title" ]; \
 		then \
 		export PAGE_TITLE="$$title - $$BLOG_NAME"; \

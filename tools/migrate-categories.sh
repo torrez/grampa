@@ -126,7 +126,13 @@ if [ "$APPLY" = yes ]; then
 	echo "renamed $changed, skipped $skipped, errors $errors"
 else
 	echo "would rename $changed, skip $skipped, errors $errors"
-	echo "nothing changed. re-run with --apply to do it."
+	# posts/ is gitignored, so it is the only thing here git
+	# cannot give back. --apply renames in place and has no
+	# undo.
+	echo "nothing changed. back up posts/ first -- it is not in git,"
+	echo "and --apply has no undo:"
+	echo "    cp -R posts posts.bak"
+	echo "then re-run with --apply to do it."
 fi
 
 [ "$errors" -eq 0 ]

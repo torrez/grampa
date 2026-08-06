@@ -307,6 +307,78 @@ EOF
 	assert_out_grep "2026-08-06-_orphan.txt"
 }
 
+#
+# The category is not in the URL, so two posts sharing a date
+# and title slug in different categories both want
+# /2026/08/06/dup.html. One would win on filename sort order
+# and the other would still be linked from the index and its
+# own category page, pointing at the wrong post. Parse-time
+# error naming both files instead.
+#
+test_duplicate_permalink_fails() {
+	sandbox duplicate_permalink
+	add_post 2026-08-06-home_dup.txt <<'EOF'
+title: Home Dup
+-----------------------------------
+<p>Home body.</p>
+EOF
+	add_post 2026-08-06-work_dup.txt <<'EOF'
+title: Work Dup
+-----------------------------------
+<p>Work body.</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep "posts/2026-08-06-home_dup.txt"
+	assert_out_grep "posts/2026-08-06-work_dup.txt"
+	assert_no_file build/2026/08/06/dup.html
+	assert_no_file build/index.html
+	assert_no_file build/category/work.html
+}
+
+#
+# The same title slug on two different dates is a different
+# page each time, so it must still build.
+#
+test_same_slug_on_different_dates_is_fine() {
+	sandbox same_slug_other_date
+	add_post 2026-08-06-home_dup.txt <<'EOF'
+title: Home Dup
+-----------------------------------
+<p>Home body.</p>
+EOF
+	add_post 2026-08-07-work_dup.txt <<'EOF'
+title: Work Dup
+-----------------------------------
+<p>Work body.</p>
+EOF
+	build || return
+	assert_file build/2026/08/06/dup.html
+	assert_file build/2026/08/07/dup.html
+	assert_grep build/2026/08/06/dup.html "<h4>Home Dup</h4>"
+	assert_grep build/2026/08/07/dup.html "<h4>Work Dup</h4>"
+}
+
+#
+# A stem no post maps to leaves tmp_for_page empty, which
+# makes the %.html rule's prerequisites satisfiable anyway --
+# so it used to wrap templates/base.txt in itself and exit 0,
+# or hang on stdin. It has to fail and say why.
+#
+test_unknown_page_target_fails_cleanly() {
+	sandbox unknown_page
+	add_post 2026-08-06-home_real.txt <<'EOF'
+title: Real Post
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	build_expect_fail build/2026/08/06/typo.html || return
+	assert_out_grep "no post"
+	assert_out_grep "build/2026/08/06/typo.html"
+	assert_no_file build/2026/08/06/typo.html
+	assert_file build/2026/08/06/real.html
+}
+
 test_category_link_on_post_page() {
 	sandbox category_link_post
 	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
@@ -594,6 +666,9 @@ test_multi_hyphen_category_parses
 test_filename_without_underscore_fails
 test_filename_with_two_underscores_fails
 test_filename_with_empty_category_fails
+test_duplicate_permalink_fails
+test_same_slug_on_different_dates_is_fine
+test_unknown_page_target_fails_cleanly
 test_category_link_on_post_page
 test_category_link_display_name_has_spaces
 test_category_link_on_index

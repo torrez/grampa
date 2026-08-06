@@ -62,6 +62,11 @@ the `_` is the date and the category; everything right of it is the title slug. 
 `_` per filename — neither the category nor the title may contain one. Categories may
 contain hyphens (`project-ideas`). A malformed name is a parse-time `$(error)`.
 
+So is a duplicate permalink. Because the category is not in the URL, two posts sharing a
+date and title slug in different categories — `2026-08-06-home_dup.txt` and
+`2026-08-06-work_dup.txt` — both want `/2026/08/06/dup.html`. `CHECKED_POST_PAGES` errors
+naming both files rather than letting filename sort order pick a winner.
+
 ```
 posts/2026-08-06-home_installing-a-doorbell.txt   →  /2026/08/06/installing-a-doorbell.html
 posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
@@ -129,6 +134,7 @@ title. Verified empirically in both orders. Reordering these two rules breaks th
 silently, so keep `build/category/%.html` first.
 
 - `templates/post.txt` — `{{title}}` `{{body}}` `{{pub_date}}` `{{permalink}}` `{{category}}`
+  `{{category_url}}`
 - `templates/base.txt` — `{{main}}` `{{page_title}}`
 
 Substitution goes through the awk `fill()` helper, **not** `sub()`. `sub()` treats `&` in
@@ -155,8 +161,9 @@ title containing `"`, `'`, `$`, or `&` can't break the build.
 The top of the Makefile defines string helpers because make has no real string library:
 `reverse`, `space`, `date_from_filename`, `underscore_split`, `date_and_category`,
 `title_slug`, `post_slug`, `dc_words`, `category_slug`, `category_display`,
-`category_url`, `check_post_name`, `path_from_filename`, `page_for`, `tmp_for_page`,
-`post_for_page`, `html_post_files`, `tmp_files_in_category`. They all operate on post
+`category_url`, `check_post_name`, `path_from_filename`, `page_for`, `files_for_page`,
+`check_page_collisions`, `tmp_for_page`, `post_for_page`, `html_post_files`,
+`tmp_files_in_category`. They all operate on post
 filenames by `subst`-ing hyphens (and, since categories moved into the name, underscores)
 into spaces and using `wordlist`. Filenames are the only metadata store for dates,
 categories, and URLs — there is no index or database.

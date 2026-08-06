@@ -28,6 +28,19 @@ Zero-padding the date is optional — posts sort correctly either way — but
 The category never appears in the URL. That post above lives at
 `/2026/08/06/installing-a-doorbell.html`.
 
+Two posts can’t share a date and title slug, even in different categories — since the
+category isn’t in the URL they’d both want the same page, and `make` will stop and tell you
+which two files to sort out.
+
+## category pages
+
+Every category you use gets its own page at `/category/<slug>.html` — so `home` above
+becomes `/category/home.html` — listing every post in it, newest first, full bodies. The
+front page still stops at ten posts, but category pages don’t, so nothing ever falls off the
+end of the site. Each post links to its own category page from the posted-on line, and you
+don’t have to do anything to make any of this happen: the categories come out of your
+filenames.
+
 The contents of the post _must_ be in this format:
 
 	title: A text title
