@@ -471,9 +471,16 @@ category: Project Ideas
 -----------------------------------
 <p>Hi.</p>
 EOF
-	# Dry run must change nothing.
+	# Dry run must change nothing: both original files
+	# still exist with their original content, and neither
+	# target name has been created yet.
 	./tools/migrate-categories.sh >/dev/null 2>&1
 	assert_file posts/2026-08-06-installing-a-doorbell.txt
+	assert_file posts/2026-07-04-raspberry-pi-backup.txt
+	assert_grep posts/2026-08-06-installing-a-doorbell.txt "category: Home"
+	assert_grep posts/2026-07-04-raspberry-pi-backup.txt "category: Project Ideas"
+	assert_no_file posts/2026-08-06-home_installing-a-doorbell.txt
+	assert_no_file posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
 	# Apply.
 	./tools/migrate-categories.sh --apply >/dev/null 2>&1
 	assert_file posts/2026-08-06-home_installing-a-doorbell.txt
@@ -487,6 +494,89 @@ EOF
 	assert_file build/2026/07/04/raspberry-pi-backup.html
 	assert_file build/category/home.html
 	assert_file build/category/project-ideas.html
+}
+
+#
+# A migrated post's name has an underscore but its front
+# matter no longer has a category: line -- that combination
+# is what "already migrated" actually looks like. Detecting
+# it from the underscore alone is ambiguous (see the test
+# below), so this checks the front-matter half of the rule.
+#
+test_migration_skips_already_migrated_by_missing_category() {
+	sandbox migration_skip_already_migrated
+	cp -R "$REPO/tools" .
+	cat > posts/2026-08-06-home_installing-a-doorbell.txt <<'EOF'
+title: Installing A Doorbell
+-----------------------------------
+<p>Hi.</p>
+EOF
+	./tools/migrate-categories.sh --apply > migrate.out 2>&1
+	assert_grep migrate.out "skip"
+	assert_grep migrate.out "posts/2026-08-06-home_installing-a-doorbell.txt"
+	assert_grep migrate.out "errors 0"
+	assert_file posts/2026-08-06-home_installing-a-doorbell.txt
+}
+
+#
+# A legacy title containing an underscore was never
+# forbidden by the old format, so an underscore in the name
+# is not by itself proof of "already migrated." When
+# front matter still has a category: line too, the script
+# cannot tell which case it is and must refuse rather than
+# guess -- see the Makefile's own CHECKED_POST_NAMES, which
+# would silently misparse this same file as category "weird",
+# title "title".
+#
+test_migration_refuses_ambiguous_underscore_title() {
+	sandbox migration_ambiguous_underscore
+	cp -R "$REPO/tools" .
+	local status
+	cat > posts/2026-01-03-weird_title.txt <<'EOF'
+title: Weird Title
+category: Home
+-----------------------------------
+<p>Hi.</p>
+EOF
+	./tools/migrate-categories.sh --apply > migrate.out 2>&1
+	status=$?
+	assert_eq "apply exit code" "1" "$status"
+	assert_grep migrate.out "ERROR"
+	assert_grep migrate.out "posts/2026-01-03-weird_title.txt"
+	assert_file posts/2026-01-03-weird_title.txt
+	assert_grep posts/2026-01-03-weird_title.txt "category: Home"
+}
+
+#
+# A source file that cannot be removed (read-only,
+# permission-restricted, chflags uchg -- all realistic)
+# must not be reported as a success while the migrated
+# content sits under a second name and the original is
+# still there under the first.
+#
+test_migration_reports_error_when_rm_fails() {
+	sandbox migration_rm_fails
+	cp -R "$REPO/tools" .
+	local status
+	cat > posts/2026-02-02-rmtest.txt <<'EOF'
+title: RM Test
+category: Home
+-----------------------------------
+<p>Hi.</p>
+EOF
+	chflags uchg posts/2026-02-02-rmtest.txt
+	./tools/migrate-categories.sh --apply > migrate.out 2>&1
+	status=$?
+	chflags nouchg posts/2026-02-02-rmtest.txt
+	assert_eq "apply exit code signals failure" "1" "$status"
+	assert_grep migrate.out "ERROR"
+	assert_grep migrate.out "posts/2026-02-02-rmtest.txt"
+	assert_grep migrate.out "posts/2026-02-02-home_rmtest.txt"
+	assert_grep migrate.out "errors 1"
+	# Both files exist -- that's the honest state, not a
+	# silent duplicate reported as a clean success.
+	assert_file posts/2026-02-02-rmtest.txt
+	assert_file posts/2026-02-02-home_rmtest.txt
 }
 
 mkdir -p "$TMPROOT"
@@ -514,5 +604,8 @@ test_category_page_title_uses_display_name_and_blog_name
 test_editing_one_category_does_not_rebuild_another
 test_category_pages_are_html_only_in_build
 test_migration_converts_old_posts
+test_migration_skips_already_migrated_by_missing_category
+test_migration_refuses_ambiguous_underscore_title
+test_migration_reports_error_when_rm_fails
 
 pass_fail_summary
