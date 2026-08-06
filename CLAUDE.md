@@ -44,6 +44,16 @@ is gitignored and created by `make setup`:
 `make setup` copies with `yes n | cp -i`, so it never clobbers existing files. It is safe
 to re-run.
 
+## config
+
+```
+name=My Weblog
+```
+
+`name=` sets `{{page_title}}`: the index gets `My Weblog`, a post page gets
+`Post Title - My Weblog`. Blank lines and `#` comments are ignored, the last `name=` wins,
+and surrounding whitespace is trimmed. It is the only key anything reads.
+
 ## Post format
 
 Filename **must** be `posts/<y>-<m>-<d>-<slug-words>.txt`. The first three
@@ -83,11 +93,27 @@ The `%.html` rule maps a page back to its fragment with `.SECONDEXPANSION`: the 
 hyphens names `work/2026-08-06-first-post.tmp`. That is what makes per-post incremental
 builds possible.
 
-Template placeholders are substituted with awk `sub()`, which replaces only the **first**
-match per line. A placeholder used twice on one line will only expand once.
-
 - `templates/post.txt` — `{{title}}` `{{body}}` `{{pub_date}}` `{{permalink}}` `{{category}}`
 - `templates/base.txt` — `{{main}}` `{{page_title}}`
+
+Substitution goes through the awk `fill()` helper, **not** `sub()`. `sub()` treats `&` in
+the replacement as "the matched text", so a post titled `Tom & Jerry` rendered as
+`Tom {{title}} Jerry`. `fill()` uses `index()`/`substr()` and has no such magic. Like
+`sub()` it replaces only the **first** `{{key}}` on a line, so a placeholder used twice on
+one line expands once.
+
+### awk programs
+
+The two awk programs live in `define` blocks (`RENDER_POST`, `WRAP_IN_BASE`) that are
+`export`ed and invoked as `awk "$$RENDER_POST"`. They share `fill()` by interpolating
+`$(FILL_FN)`. Passing the program through the environment rather than inlining it means
+awk source doesn't have to survive shell quoting, and it avoids the `\`-continuation-per-line
+style the rest of a Makefile forces. Note that awk's `$0` is still `$$0` inside a `define`.
+
+The blog name reaches awk the same way: `BLOG_NAME` is `export`ed by make and each recipe
+composes `PAGE_TITLE` in the environment, which `WRAP_IN_BASE` reads via
+`ENVIRON["PAGE_TITLE"]`. Nothing is interpolated into a shell string, so a blog name or post
+title containing `"`, `'`, `$`, or `&` can't break the build.
 
 ### Make helper functions
 
@@ -105,15 +131,15 @@ store for dates and URLs — there is no index or database.
   still worth doing for the URLs' sake — an unpadded post becomes `/2026/7/4/slug.html`.
 - **BSD-only.** `date_from_filename` uses `date -v` (BSD/macOS). It fails on GNU
   coreutils, so builds are macOS-only as written.
-- **`config` is inert.** `make config` copies it, nothing reads it. `name=` is unused;
-  page titles are hardcoded in the Makefile's awk (`Dungeon` for posts, `Grampa` for the
-  index). Wiring `name=` through to `{{page_title}}` is the obvious next cleanup.
+- **`config` is read lazily, not at parse time.** `CONFIG_NAME` uses `=`, not `:=`, because
+  on a first-ever run the `config` target hasn't copied the file into place yet when the
+  Makefile is parsed. `config` is also a prerequisite of both HTML rules, so changing the
+  name rebuilds every page. `name=` is the only key anything reads; the last one wins, and
+  an absent or empty value falls back to `Grampa`.
 - **`templates/post.txt` renders `{{category}}.gif`** as literal text, which looks like
   leftover scaffolding rather than an intent.
 - **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
   `make clean && make` after removing a post.
-- The two `base.txt`-wrapping awk blocks (`%.html` and `index.html`) are now identical
-  except for the hardcoded `page_title`. They're worth folding into one.
 - `Markdown.pl` is optional and gitignored — get it from
   <https://daringfireball.net/projects/markdown/> and make it executable in the repo
   root. Without it, the post is staged into `work/` verbatim and bodies stay HTML.

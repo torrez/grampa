@@ -59,6 +59,25 @@ space = $(empty) $(empty)
 RECENT_FILES = $(wordlist 1, 10, $(call reverse, $(TMP_FILES)))
 
 #
+# The weblog name, read from the config file. Blank
+# lines and # comments are ignored and the last name=
+# line wins, which is what config.example promises.
+#
+# Lazily expanded on purpose: the config target may
+# not have copied the file into place yet when this
+# Makefile is parsed.
+#
+CONFIG_NAME = $(shell sed -n 's/^name=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
+BLOG_NAME = $(if $(strip $(CONFIG_NAME)),$(CONFIG_NAME),Grampa)
+
+#
+# Exported rather than interpolated into the recipes,
+# so a name containing a quote, a $$ or an & can't
+# break the build or the substitution.
+#
+export BLOG_NAME
+
+#
 # Creates a formatted date from a file name.
 #
 date_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) "+%B %d, %Y")
@@ -81,6 +100,102 @@ path_from_filename = $(subst $(space),/,$(wordlist 1, 3, $(subst -,$(space), $(n
 # need to be built.
 #
 html_post_files = $(foreach f,$(TMP_FILES),$(call path_from_filename, $(f))/$(call post_filename, $(f:.tmp=.html)))
+
+#
+# Maps the stem of a build/y/m/d/name.html target back
+# to the two files that page is built from. The stem
+# is y/m/d/name, so slashes back into hyphens gives
+# the original post name.
+#
+tmp_for = $(WORK_DIR)$(subst /,-,$(1)).tmp
+post_for = posts/$(subst /,-,$(1)).txt
+
+#
+# Replaces the first {{key}} on a line. Every template
+# substitution goes through this rather than awk's
+# sub(), because sub() treats & in the replacement as
+# "the matched text" -- a post titled "Tom & Jerry"
+# came out as "Tom {{title}} Jerry".
+#
+define FILL_FN
+function fill(line, key, value,    marker, at) {
+    marker = "{{" key "}}";
+    at = index(line, marker);
+    if (at == 0) return line;
+    return substr(line, 1, at - 1) value substr(line, at + length(marker));
+}
+endef
+
+#
+# Renders one post into a fragment via
+# templates/post.txt.
+#
+define RENDER_POST
+BEGIN {
+    post_output = "";
+}
+{
+    if (!seen){
+        if ($$0 ~ /^-----------------------------------/){
+            seen = 1;
+        }else if ($$0 ~ /^title:/){
+            title = $$0;
+            sub(/^title:[ \t]*/, "", title);
+        }else if ($$0 ~ /^category:/){
+            category = $$0;
+            sub(/^category:[ \t]*/, "", category);
+        }
+    }else{
+        body = (body == "" ? $$0 : body "\n" $$0);
+    }
+}
+END {
+    while (getline < "templates/post.txt"){
+        new_line = fill($$0, "title", title);
+        new_line = fill(new_line, "body", body);
+        new_line = fill(new_line, "pub_date", pub_date);
+        new_line = fill(new_line, "permalink", permalink);
+        new_line = fill(new_line, "category", category);
+        post_output = post_output new_line "\n";
+    }
+    print post_output;
+}
+$(FILL_FN)
+endef
+
+#
+# Wraps a rendered fragment in templates/base.txt.
+# Both the post pages and the index use this; the only
+# thing that differs is $$PAGE_TITLE, which each recipe
+# puts in the environment.
+#
+define WRAP_IN_BASE
+BEGIN {
+    html_output = "";
+    main_output = "";
+    new_line = "";
+}
+{
+    main_output = main_output $$0 "\n"
+}
+END {
+    while (getline < "templates/base.txt"){
+        new_line = fill($$0, "main", main_output);
+        new_line = fill(new_line, "page_title", ENVIRON["PAGE_TITLE"]);
+        html_output = html_output new_line "\n";
+    }
+    print html_output;
+}
+$(FILL_FN)
+endef
+
+#
+# Passed to awk through the environment, so nothing in
+# a template or a post title has to survive shell
+# quoting on the way in.
+#
+export RENDER_POST
+export WRAP_IN_BASE
 
 
 #
@@ -113,28 +228,24 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html
 # path, so turning the slashes back into hyphens names
 # the one .tmp file this page is built from.
 #
-$(BUILD_DIR)%.html: $(WORK_DIR)$$(subst /,-,$$*).tmp templates/base.txt
+# The post's own title comes from its front matter --
+# the .tmp fragment has already baked it into HTML --
+# so the source post is a prerequisite too. It is
+# already an indirect one via the .tmp file, so this
+# costs no extra rebuilds.
+#
+$(BUILD_DIR)%.html: $$(call tmp_for,$$*) $$(call post_for,$$*) templates/base.txt config
 	@echo "Building $(@)"
 	@mkdir -p $(dir $(@))
 
-	@awk 'BEGIN {\
-		html_output = "";\
-		post_output = "";\
-		new_line = "";\
-	}\
-	{\
-		post_output = post_output $$0 "\n"\
-	}\
-	END {\
-		while (getline < "templates/base.txt"){\
-			new_line = $$0;\
-			sub(/\{\{main\}\}/, post_output, new_line);\
-			sub(/\{\{page_title\}\}/, "Dungeon", new_line);\
-			html_output = html_output new_line "\n";\
-		}\
-		print html_output;\
-	}\
-	' $< > $@;
+	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for,$*) | head -1); \
+	if [ -n "$$title" ]; \
+		then \
+		export PAGE_TITLE="$$title - $$BLOG_NAME"; \
+	else \
+		export PAGE_TITLE="$$BLOG_NAME"; \
+	fi; \
+	awk "$$WRAP_IN_BASE" $< > $@;
 
 #
 # If just building the index. cat needs /dev/null in
@@ -174,36 +285,7 @@ $(WORK_DIR)%.tmp: posts/%.txt templates/post.txt
 		cp $< $(WORK_DIR)$*.staged; \
 	fi;
 
-	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call path_from_filename, $@)/$(call html_post_filename, $@)" 'BEGIN {\
-		post_output = "";\
-	}\
-	{\
-		if (!seen){\
-			if ($$0 ~ /^-----------------------------------/){\
-				seen = 1;\
-			}else if ($$0 ~ /^title:/){\
-				title = $$0;\
-				sub(/^title:[ \t]*/, "", title);\
-			}else if ($$0 ~ /^category:/){\
-				category = $$0;\
-				sub(/^category:[ \t]*/, "", category);\
-			}\
-		}else{\
-			body = (body == "" ? $$0 : body "\n" $$0);\
-		}\
-	}\
-	END {\
-		while (getline < "templates/post.txt"){\
-			sub(/\{\{title\}\}/, title, $$0);\
-			sub(/\{\{body\}\}/, body, $$0);\
-			sub(/\{\{pub_date\}\}/, pub_date, $$0);\
-			sub(/\{\{permalink\}\}/, permalink, $$0);\
-			sub(/\{\{category\}\}/, category, $$0);\
-			post_output = post_output $$0 "\n";\
-		}\
-		print post_output;\
-	}\
-	' $(WORK_DIR)$*.staged > $@;
+	@awk -v pub_date="$(call date_from_filename, $@)" -v permalink="/$(call path_from_filename, $@)/$(call html_post_filename, $@)" "$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
 	@rm -f $(WORK_DIR)$*.staged
 	@echo "Done";
 
@@ -217,27 +299,10 @@ $(BUILD_DIR)atom.xml:
 # Building the index.html file requires
 # the work/index.tmp file to be built.
 #
-$(BUILD_DIR)index.html: $(WORK_DIR)index.tmp templates/base.txt
+$(BUILD_DIR)index.html: $(WORK_DIR)index.tmp templates/base.txt config
 	@echo "Building index.html"
 	@mkdir -p $(dir $@)
-	@awk 'BEGIN {\
-		html_output = "";\
-		index_output = "";\
-		new_line = "";\
-	}\
-	{\
-		index_output = index_output $$0 "\n"\
-	}\
-	END {\
-		while (getline < "templates/base.txt"){\
-			new_line = $$0;\
-			sub(/\{\{main\}\}/, index_output, new_line);\
-			sub(/\{\{page_title\}\}/, "Grampa", new_line);\
-			html_output = html_output new_line "\n";\
-		}\
-		print html_output;\
-	}\
-	' $< > $@;
+	@PAGE_TITLE="$$BLOG_NAME" awk "$$WRAP_IN_BASE" $< > $@;
 
 config:
 	@yes n | cp -i .source/config.example config
