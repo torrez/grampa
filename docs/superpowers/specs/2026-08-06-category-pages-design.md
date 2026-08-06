@@ -17,6 +17,52 @@ Categories are parsed, substituted, and then wasted. Nothing links anywhere.
 Replace that line with a link to a per-category archive page listing every post in that
 category, newest first.
 
+## Post filenames
+
+Category moves out of front matter and into the filename, after the date, separated from
+the title slug by an underscore:
+
+```
+posts/2026-08-06-home_installing-a-doorbell.txt
+posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
+posts/2026-01-02-japan-vacation_what-we-did-in-tokyo.txt
+```
+
+- Everything left of the `_` is the date and the category
+- Everything right of the `_` is the title slug
+- Exactly one `_` per filename. Neither the category nor the title may contain one
+- Categories may contain hyphens (`project-ideas`)
+
+This keeps the filename as grampa's only metadata store, which is the property that lets
+the whole tool work without a database. Front matter shrinks to just `title:`.
+
+Splitting on `_` before splitting on `-` makes every field fall out cleanly, and the title
+slug becomes *simpler* to extract than it is today — no more `wordlist 4,$(words …)`:
+
+| Derived value | How |
+| --- | --- |
+| date | `wordlist 1,3` of the hyphen-split name — unchanged |
+| category slug | words `4..end` of the hyphen-split left half, rejoined with hyphens |
+| title slug | word 2 of the underscore-split name |
+| category display | category slug with hyphens turned to spaces |
+| unique categories | `$(sort $(foreach …))` — dedupes and sorts in one call |
+
+Prototyped against all three example names above before adopting.
+
+### Why the date stays in the filename
+
+Considered deriving it instead. It does not work:
+
+- **mtime** — git does not store mtimes and sets them to checkout time. Verified: a fresh
+  clone of this repo reports `README.md` as modified today, against a real commit date of
+  2016-03-19. A clone would date every post "today", and fixing a typo would re-date an old
+  post.
+- **git log** — correct and stable, but ~12ms per file, and make needs every date *at parse
+  time* to compute the target list and the sort order. That is ~12ms × posts × every `make`
+  invocation, including no-op rebuilds. It also leaves uncommitted posts dateless, breaks
+  under shallow clones, and silently re-dates the archive on a rebase.
+- **front matter `date:`** — works, but only relocates the field.
+
 ## Decisions
 
 | Question | Decision |
@@ -24,30 +70,28 @@ category, newest first.
 | Page content | Full posts, reusing the existing `.tmp` fragments — the same shape as `index.html` |
 | How many posts | All of them, newest first. The main index stays capped at 10 |
 | URL | `/category/<slug>.html` |
-| Post with no `category:` | Fail the build with a message naming the file |
-| Rebuild scope | Category pages depend on every fragment; editing any post rebuilds all of them |
-| Multiple categories per post | Out of scope. Front matter stays a single `category:` line |
+| Category source | The post filename, not front matter |
+| Display name | Slug with hyphens as spaces: `project-ideas` → `project ideas` |
+| Rebuild scope | Exact. Each category page depends only on the fragments in that category |
+| Multiple categories per post | Out of scope. One category per post |
 | A category index listing all categories | Out of scope |
 
-## Slugs
+Two decisions from the first draft of this spec are now moot. Validating a missing category
+is unnecessary — it is structurally present in the name. And coarse dependencies are no
+longer a useful trade: because categories are known to make at parse time, exact
+per-category prerequisites cost nothing, so editing one post no longer re-cats every
+category page.
 
-The category value is free text, so it needs slugifying for the filename: lowercase,
-spaces to hyphens, drop anything outside `[a-z0-9-]`, collapse runs of hyphens, trim
-leading and trailing hyphens.
+## URLs do not change
 
-`category: Web Stuff` → `/category/web-stuff.html`
+The URL is built from the date and the title slug only, so the category prefix does not
+appear in it:
 
-Slugifying happens in exactly one place, a `SLUGIFY` make variable holding a shell
-pipeline. Two callers need it — the parse-time category list and the `%.tmp` recipe — and
-two implementations would drift.
+```
+posts/2026-08-06-home_installing-a-doorbell.txt  →  /2026/08/06/installing-a-doorbell.html
+```
 
-The *display* text stays as written. `Web Stuff` renders as `Web Stuff`, links to
-`web-stuff.html`.
-
-Two spellings can slugify to the same page — `Web Stuff` and `web-stuff` both give
-`web-stuff`. They share one page, which is the useful behaviour. The page's display name is
-taken from the newest post in the group, so it is deterministic rather than dependent on
-filesystem order.
+Existing permalinks survive the migration untouched.
 
 ## Template
 
@@ -63,7 +107,7 @@ work:
 </p>
 ```
 
-- `{{category}}` — display text, as written in the front matter
+- `{{category}}` — display name, hyphens as spaces
 - `{{category_url}}` — `/category/<slug>.html`
 
 The link moves into the "posted on" paragraph rather than floating after the `<h4>` where
@@ -72,54 +116,56 @@ the `.gif` sat, because it is metadata and belongs with the other metadata.
 Post fragments are shared by post pages, the index, and now category pages, so the link
 appears in all three from this one change.
 
-## Discovering categories
+## Build wiring
 
-`CATEGORY_SLUGS` is computed at parse time by one awk pass over `posts/*.txt`, reading only
-front matter — it stops at the delimiter, so a line beginning `category:` in a post *body*
-is not picked up. Output is slugified and deduped.
+```
+$(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
+```
 
-This is the first time the Makefile reads post *contents* to decide what to build, rather
-than deriving everything from filenames. It is a real departure from the existing design
-and worth calling out, but there is no alternative: categories live inside posts, and a
-sidecar file written during the build would not exist on the first parse of a clean tree.
+`tmp_files_in_category` filters the reversed `TMP_FILES` list by category slug, giving exact
+prerequisites and newest-first ordering with no shell involved. The recipe cats those
+fragments and wraps them with the existing `WRAP_IN_BASE`, with `PAGE_TITLE` set to
+`<display name> - <blog name>`.
 
 `build` gains `$(addprefix $(BUILD_DIR)category/,$(addsuffix .html,$(CATEGORY_SLUGS)))`.
 
-## Build rule
-
-```
-$(BUILD_DIR)category/%.html: $(TMP_FILES) templates/base.txt config
-```
-
-The recipe walks posts newest-first, keeps those whose slugified category equals the stem,
-cats their fragments, and wraps the result with the existing `WRAP_IN_BASE`, with
-`PAGE_TITLE` set to `<Display Name> - <Blog Name>`. The display name comes from the first
-matching post.
-
-Ordering is free: `POST_FILES` is already numerically sorted by date, so reversing it gives
-newest-first.
-
 Two pattern rules now match `build/category/notes.html` — this one and `build/%.html`. GNU
 make picks the rule with the shortest stem, which is this one (`notes`, versus
-`category/notes`). Verified on make 3.81 before adopting the approach.
+`category/notes`). Verified on make 3.81.
 
-The dependency on every `.tmp` file is deliberately coarse. Editing one post re-cats every
-category page. The precise alternative is a `$(shell)` grep per category at parse time; for
-a personal blog the extra `cat` and `awk` runs are not worth that.
+### The fragment lookup
 
-## Failing on a missing category
+Because the category is in the filename but not in the URL, the existing trick of mapping
+`build/2026/08/06/slug.html` to its fragment by turning slashes into hyphens no longer
+works — it would look for `work/2026-08-06-slug.tmp` and miss the `home_` part.
 
-Validation lives in the `%.tmp` recipe, which is per-post and can name the offending file:
+A `tmp_for_page` helper resolves it by searching `TMP_FILES` for the fragment whose derived
+page path equals the target's stem. This keeps the single `%.html` pattern rule and the
+existing "helper functions at the top" style.
 
-```
-posts/2026-08-06-a-post.txt: missing a category: line
-```
+It is O(posts) per target, so O(posts²) in make string operations across a build. That is
+fine at personal-blog scale; if it ever gets slow, the fix is generating explicit per-post
+rules with `$(foreach)` and `$(eval)`, which is O(posts) but harder to read.
 
-`README.md` already documents `category:` as required, so this turns a documented
-requirement into an enforced one instead of emitting `in <a href="/category/.html"></a>`.
+## Validation
 
-`.DELETE_ON_ERROR:` is added at the same time, so a failed rule cannot leave a truncated
+A filename with no `_`, or with more than one, is a hard parse-time `$(error)` naming the
+file. This replaces the front-matter check from the first draft and fails before any recipe
+runs.
+
+`.DELETE_ON_ERROR:` is added as general hygiene, so a failed rule cannot leave a truncated
 `.tmp` behind for the next build to treat as good.
+
+## Migration
+
+This is a breaking change to post filenames, and the `$(error)` above makes it a loud one.
+Existing posts need renaming from `y-m-d-title.txt` to `y-m-d-category_title.txt`, with the
+`category:` line dropped from front matter.
+
+That is fully automatable, since the old category is sitting in the front matter of each
+post: read it, slugify it, splice it into the name, delete the line. A one-time script does
+the whole `posts/` directory. It will be written and run as part of implementation, not left
+as a manual chore.
 
 ## Known limitation
 
@@ -129,14 +175,19 @@ documented in CLAUDE.md. `make clean` fixes both. Not solved here.
 
 ## Testing
 
-- Category with spaces and mixed case → correct slug, display text preserved
-- Category with punctuation → punctuation dropped from the slug
+- Single-word category (`home`) and multi-hyphen category (`project-ideas`) → correct slug,
+  correct display name, correct URL
 - Two posts sharing a category → both on the page, newest first
-- Post with no `category:` line → build fails, message names the file, no partial output
-- A body line beginning `category:` → not mistaken for front matter
+- Posts in different categories → each appears only on its own page
+- Filename with no `_` → parse-time error naming the file, nothing built
+- Filename with two `_` → same
+- Post URLs identical to before the change, for the same date and title slug
 - Category link present on post pages, the index, and category pages
 - Category page `<title>` uses the display name and the configured blog name
+- Exact rebuild scope: editing a post in category A does not rebuild category B's page
 - `make -j8` clean; no-op rebuild after a successful build
 - `build/` still contains only publishable HTML
+- Migration script: converts a realistic `posts/` directory, leaves front matter valid,
+  produces identical post URLs before and after
 - Existing suite still passes: date formatting, index ordering and 10-post cap, the
   `Markdown.pl` path, ampersands in titles and bodies, zero posts
