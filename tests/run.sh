@@ -455,6 +455,40 @@ EOF
 	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
+test_migration_converts_old_posts() {
+	sandbox migration
+	cp -R "$REPO/tools" .
+	# Old-format posts, category in front matter.
+	cat > posts/2026-08-06-installing-a-doorbell.txt <<'EOF'
+title: Installing A Doorbell
+category: Home
+-----------------------------------
+<p>Hi.</p>
+EOF
+	cat > posts/2026-07-04-raspberry-pi-backup.txt <<'EOF'
+title: Raspberry Pi Backup
+category: Project Ideas
+-----------------------------------
+<p>Hi.</p>
+EOF
+	# Dry run must change nothing.
+	./tools/migrate-categories.sh >/dev/null 2>&1
+	assert_file posts/2026-08-06-installing-a-doorbell.txt
+	# Apply.
+	./tools/migrate-categories.sh --apply >/dev/null 2>&1
+	assert_file posts/2026-08-06-home_installing-a-doorbell.txt
+	assert_file posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
+	assert_no_file posts/2026-08-06-installing-a-doorbell.txt
+	assert_not_grep posts/2026-08-06-home_installing-a-doorbell.txt "category:"
+	assert_grep posts/2026-08-06-home_installing-a-doorbell.txt "title: Installing A Doorbell"
+	# And the migrated tree builds to the original URLs.
+	build || return
+	assert_file build/2026/08/06/installing-a-doorbell.html
+	assert_file build/2026/07/04/raspberry-pi-backup.html
+	assert_file build/category/home.html
+	assert_file build/category/project-ideas.html
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -479,5 +513,6 @@ test_category_page_is_not_capped_at_ten
 test_category_page_title_uses_display_name_and_blog_name
 test_editing_one_category_does_not_rebuild_another
 test_category_pages_are_html_only_in_build
+test_migration_converts_old_posts
 
 pass_fail_summary

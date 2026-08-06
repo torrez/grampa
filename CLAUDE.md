@@ -15,6 +15,7 @@ make           # incremental build into build/  (= `make config build`)
 make clean     # wipe build/ and work/
 make build     # build, skipping the config check
 make deploy    # runs ./deploy.sh build/
+make test      # run tests/run.sh in throwaway sandboxes
 ```
 
 Builds are incremental: `make` only reprocesses posts whose `.txt` changed, plus anything
@@ -56,13 +57,20 @@ and surrounding whitespace is trimmed. It is the only key anything reads.
 
 ## Post format
 
-Filename **must** be `posts/<y>-<m>-<d>-<slug-words>.txt`. The first three
-hyphen-separated fields are parsed as the date; everything after is the slug. The slug may
-contain hyphens; it must be at least one word.
+Filename **must** be `posts/<y>-<m>-<d>-<category>_<slug-words>.txt`. Everything left of
+the `_` is the date and the category; everything right of it is the title slug. Exactly one
+`_` per filename — neither the category nor the title may contain one. Categories may
+contain hyphens (`project-ideas`). A malformed name is a parse-time `$(error)`.
+
+```
+posts/2026-08-06-home_installing-a-doorbell.txt   →  /2026/08/06/installing-a-doorbell.html
+posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
+```
+
+The category never appears in a URL.
 
 ```
 title: A text title
-category: example
 -----------------------------------
 <p>
 Body of your post.
@@ -93,6 +101,33 @@ The `%.html` rule maps a page back to its fragment with `.SECONDEXPANSION`: the 
 hyphens names `work/2026-08-06-first-post.tmp`. That is what makes per-post incremental
 builds possible.
 
+Category pages are a third consumer of the same fragments:
+
+```
+work/2026-08-06-home_installing-a-doorbell.tmp
+  ├─ awk + templates/base.txt → build/2026/08/06/installing-a-doorbell.html
+  ├─ cat 10 newest            → work/index.tmp → build/index.html
+  └─ awk over all fragments in the category → build/category/home.html
+```
+
+The category page rule takes its fragments as multiple awk input files, so it needs no
+intermediate `.tmp` the way the index does. Its prerequisites are exact, because
+`CATEGORY_SLUGS` is derived from filenames at parse time.
+
+Because the category is in the filename but not the URL, a page cannot be mapped back to its
+fragment by turning slashes into hyphens. `tmp_for_page` searches `TMP_FILES` instead, which
+is O(posts) per target and so O(posts²) per build — fine at blog scale, fixable with
+`$(eval)`-generated explicit rules if it ever drags.
+
+**`build/category/%.html` must stay defined above the `%.html` rule.** On GNU make 3.81,
+when a target's prerequisites are satisfiable under more than one pattern rule, make picks
+the first such rule in makefile order, not the shortest stem. `tmp_for_page` returns empty
+for a category stem (there is no single fragment a category page maps to), and an empty
+prerequisite list is trivially satisfiable — so if `%.html` appeared first, it would claim
+`build/category/home.html` and emit a nested `base.txt`-wrapped document with the wrong
+title. Verified empirically in both orders. Reordering these two rules breaks the build
+silently, so keep `build/category/%.html` first.
+
 - `templates/post.txt` — `{{title}}` `{{body}}` `{{pub_date}}` `{{permalink}}` `{{category}}`
 - `templates/base.txt` — `{{main}}` `{{page_title}}`
 
@@ -118,10 +153,13 @@ title containing `"`, `'`, `$`, or `&` can't break the build.
 ### Make helper functions
 
 The top of the Makefile defines string helpers because make has no real string library:
-`reverse`, `space`, `date_from_filename`, `post_filename`, `html_post_filename`,
-`path_from_filename`, `html_post_files`. They all operate on post filenames by
-`subst`-ing hyphens into spaces and using `wordlist`. Filenames are the only metadata
-store for dates and URLs — there is no index or database.
+`reverse`, `space`, `date_from_filename`, `underscore_split`, `date_and_category`,
+`title_slug`, `post_slug`, `dc_words`, `category_slug`, `category_display`,
+`category_url`, `check_post_name`, `path_from_filename`, `page_for`, `tmp_for_page`,
+`post_for_page`, `html_post_files`, `tmp_files_in_category`. They all operate on post
+filenames by `subst`-ing hyphens (and, since categories moved into the name, underscores)
+into spaces and using `wordlist`. Filenames are the only metadata store for dates,
+categories, and URLs — there is no index or database.
 
 ## Gotchas
 
@@ -136,8 +174,12 @@ store for dates and URLs — there is no index or database.
   Makefile is parsed. `config` is also a prerequisite of both HTML rules, so changing the
   name rebuilds every page. `name=` is the only key anything reads; the last one wins, and
   an absent or empty value falls back to `Grampa`.
-- **`templates/post.txt` renders `{{category}}.gif`** as literal text, which looks like
-  leftover scaffolding rather than an intent.
+- **Categories come from filenames, not front matter.** `CATEGORY_SLUGS` is
+  `$(sort $(foreach …))` over `POST_NAMES`, so discovering them needs no shell and no
+  reading of post contents. Renaming a category means renaming files — see
+  `tools/migrate-categories.sh` for the pattern.
+- **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
+  post. `make clean` fixes it.
 - **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
   `make clean && make` after removing a post.
 - `Markdown.pl` is optional and gitignored — get it from
