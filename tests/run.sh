@@ -147,12 +147,21 @@ assert_no_file() {
 	if [ -f "$1" ]; then fail "expected file NOT to exist: $1"; else ok; fi
 }
 
+#
+# The -- in each grep below is load-bearing, not style.
+# grampa's front-matter delimiter is 35 hyphens, so a test
+# that greps for one hands grep something it reads as an
+# unrecognized long option: exit 2, usage on stderr, and
+# assert_not_grep's else-branch counts any nonzero exit as
+# a pass. An assertion that can only pass is worse than no
+# assertion, so do not drop these.
+#
 assert_grep() {
 	if [ ! -f "$1" ]; then
 		fail "cannot grep missing file: $1"
 		return
 	fi
-	if grep -qF "$2" "$1"; then ok; else fail "expected '$2' in $1" "$(cat "$1")"; fi
+	if grep -qF -- "$2" "$1"; then ok; else fail "expected '$2' in $1" "$(cat "$1")"; fi
 }
 
 assert_not_grep() {
@@ -160,7 +169,7 @@ assert_not_grep() {
 		fail "cannot grep missing file: $1"
 		return
 	fi
-	if grep -qF "$2" "$1"; then fail "did NOT expect '$2' in $1" "$(cat "$1")"; else ok; fi
+	if grep -qF -- "$2" "$1"; then fail "did NOT expect '$2' in $1" "$(cat "$1")"; else ok; fi
 }
 
 #
@@ -170,11 +179,11 @@ assert_not_grep() {
 # file-based helpers above cannot be used on it.
 #
 assert_out_grep() {
-	if printf '%s\n' "$BUILD_OUT" | grep -qF "$1"; then ok; else fail "expected '$1' in make output" "$BUILD_OUT"; fi
+	if printf '%s\n' "$BUILD_OUT" | grep -qF -- "$1"; then ok; else fail "expected '$1' in make output" "$BUILD_OUT"; fi
 }
 
 assert_out_not_grep() {
-	if printf '%s\n' "$BUILD_OUT" | grep -qF "$1"; then fail "did NOT expect '$1' in make output" "$BUILD_OUT"; else ok; fi
+	if printf '%s\n' "$BUILD_OUT" | grep -qF -- "$1"; then fail "did NOT expect '$1' in make output" "$BUILD_OUT"; else ok; fi
 }
 
 assert_eq() {
@@ -527,6 +536,116 @@ EOF
 	# of the Markdown branch's scratch files behind.
 	assert_eq "no stray intermediates" "" \
 		"$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+#
+# split names its chunks .aa, .ab ... .az, .ba, and the old
+# reassembly glob was $*.a[b-z]* -- so a body with more than
+# 25 delimiter lines lost everything from .ba on, silently,
+# at exit 0. Thirty delimiters puts five sections past that
+# ceiling.
+#
+test_many_delimiter_lines_stage_completely() {
+	sandbox many_delimiters
+	markdown_stub <<'EOF'
+#!/bin/sh
+cat "$1"
+EOF
+	# printf -- because the format starts with a hyphen.
+	# The first delimiter is the front-matter separator;
+	# the other 29 are body text and stay put.
+	{
+		printf 'title: T\n'
+		i=1
+		while [ "$i" -le 30 ]; do
+			printf -- '-----------------------------------\n<p>section %d</p>\n' "$i"
+			i=$((i + 1))
+		done
+	} | add_post 2026-01-01-home_many.txt
+	build || return
+	assert_grep build/2026/01/01/many.html "<p>section 1</p>"
+	assert_grep build/2026/01/01/many.html "<p>section 30</p>"
+}
+
+#
+# Both rm -f's used $(WORK_DIR)$*.a[a-z]*, which reaches
+# past its own post: for stem 2026-01-01-home_x that glob
+# matches 2026-01-01-home_x.ab.staged and .tmp -- a same-date
+# sibling's real outputs, deleted mid-build. Dotted slugs are
+# degenerate, but eating another post's work is not an
+# acceptable way to say so.
+#
+test_same_date_sibling_slug_does_not_collide() {
+	sandbox sibling_slug
+	markdown_stub <<'EOF'
+#!/bin/sh
+cat "$1"
+EOF
+	add_post 2026-01-01-home_x.txt <<'EOF'
+title: X
+-----------------------------------
+<p>plain x</p>
+EOF
+	add_post 2026-01-01-home_x.ab.txt <<'EOF'
+title: X dotted
+-----------------------------------
+<p>dotted sibling</p>
+EOF
+	# This has to assert on the FIRST build. A second make
+	# exits 0 -- the survivor's files are up to date and its
+	# rm never runs again -- so retrying here would make the
+	# test incapable of failing.
+	build || return
+	assert_grep build/2026/01/01/x.html "<p>plain x</p>"
+	assert_grep build/2026/01/01/x.ab.html "<p>dotted sibling</p>"
+}
+
+#
+# A post with no delimiter left the body glob matching
+# nothing, so cat failed -- into `cat ... | tail`, whose
+# status is tail's. The && chain catches a failing step and
+# never a failing stage of a pipe, so the build stayed at
+# exit 0 with the error loose on stderr. The output
+# assertion is the one that pins this: the exit status never
+# told the truth here.
+#
+test_post_without_delimiter_stages_cleanly() {
+	sandbox no_delimiter
+	markdown_stub <<'EOF'
+#!/bin/sh
+cat "$1"
+EOF
+	add_post 2026-01-01-home_bare.txt <<'EOF'
+title: Bare
+EOF
+	build || return
+	assert_out_not_grep "No such file"
+	# Same outcome as the verbatim branch: the whole file is
+	# front matter, so the title renders and the body is empty.
+	assert_grep build/2026/01/01/bare.html "Bare"
+}
+
+#
+# A post opening with the delimiter: split -p left that line
+# inside the front-matter chunk, the body glob then matched
+# nothing, and the reassembly put a stray 35-hyphen line into
+# the rendered body. awk drops the first delimiter wherever
+# it is. Note this assertion only works because the grep
+# helpers pass -- to grep; see the comment above them.
+#
+test_delimiter_on_first_line_leaves_no_stray_delimiter() {
+	sandbox delimiter_first_line
+	markdown_stub <<'EOF'
+#!/bin/sh
+cat "$1"
+EOF
+	add_post 2026-01-01-home_lead.txt <<'EOF'
+-----------------------------------
+<p>body only</p>
+EOF
+	build || return
+	assert_grep build/2026/01/01/lead.html "<p>body only</p>"
+	assert_not_grep build/2026/01/01/lead.html "-----------------------------------"
 }
 
 #
@@ -1624,6 +1743,10 @@ test_failed_markdown_leaves_no_stale_chunks
 test_markdown_branch_is_parallel_safe
 test_markdown_body_reaches_the_feed
 test_non_executable_markdown_falls_back_to_verbatim
+test_many_delimiter_lines_stage_completely
+test_same_date_sibling_slug_does_not_collide
+test_post_without_delimiter_stages_cleanly
+test_delimiter_on_first_line_leaves_no_stray_delimiter
 test_placeholders_in_a_body_are_not_expanded
 test_placeholders_in_a_title_are_not_expanded
 test_placeholders_in_the_feed_are_not_expanded

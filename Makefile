@@ -554,6 +554,50 @@ $(XML_ESCAPE_FN)
 endef
 
 #
+# Splits a post into its front matter and its body, one
+# file each, for the staging step below. This is the only
+# awk program here that writes files rather than stdout,
+# because Markdown.pl has to be handed the body alone and
+# the pieces glued back together afterwards.
+#
+# It shares nothing with PARSE_FRONT_MATTER even though the
+# two recognise the same delimiter: that one accumulates a
+# title and a body into variables for a renderer, this one
+# routes lines to two files and keeps no state but `seen`.
+# Factoring them together would couple the staging step to
+# the renderers to save one regex.
+#
+# Only the FIRST delimiter splits. Later ones are body text
+# -- a post about grampa's own post format has them -- which
+# is what the !seen guard is for.
+#
+# The END block is load-bearing. awk creates a redirect's
+# file on first write, so a post with no body would leave no
+# body file at all and Markdown.pl would be handed a missing
+# argument. printf "" creates the file when nothing was
+# written and appends nothing when something was, since awk
+# holds the redirect open -- so it cannot truncate what came
+# before it.
+#
+define SPLIT_STAGED
+!seen && $$0 ~ /^-----------------------------------/ {
+    seen = 1;
+    next;
+}
+{
+    if (seen){
+        print $$0 > body;
+    }else{
+        print $$0 > head;
+    }
+}
+END {
+    printf "" > head;
+    printf "" > body;
+}
+endef
+
+#
 # Passed to awk through the environment, so nothing in
 # a template or a post title has to survive shell
 # quoting on the way in.
@@ -562,6 +606,7 @@ export RENDER_POST
 export RENDER_ITEM
 export WRAP_IN_BASE
 export WRAP_IN_CHANNEL
+export SPLIT_STAGED
 
 
 #
@@ -763,30 +808,48 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # rendered page with an empty body. Do not relax these
 # back to ; -- tests/run.sh's failing-stub test guards it.
 #
-# The rm at the *head* of the chain is not redundant with
-# the one at the tail, and is there because of the &&: a
-# failed run now stops before its cleanup and leaves split
-# chunks behind. The reassembly collects chunks by glob
-# ($*.a[b-z]*), so a post that later splits into fewer
-# chunks than the failed run did would sweep the stale
-# ones back in and republish deleted text. Clearing the
-# scratch namespace first makes each run start clean.
+# There is no pipe anywhere in the chain, and there should
+# not be one: && reports a failing step but never a failing
+# stage of a pipe, so `a | b` hides a's failure behind b's
+# status. That is exactly how a delimiter-less post used to
+# fail silently, back when the body was reassembled with
+# `cat chunks | tail -n +2`.
 #
-# Note this catches a failing step, not a failing stage of
-# a pipeline: `cat ... | tail` still reports tail's status,
-# so a cat that finds no chunks to read stays quiet.
+# Every scratch name is an exact filename, never a glob. It
+# used to be `split -p` plus $*.a[b-z]*, which was wrong
+# twice: the glob stopped at .az, so a body with more than
+# 25 delimiter lines was silently truncated, and $*.a[a-z]*
+# reached onto a same-date sibling's outputs -- stem
+# ...home_x matching ...home_x.ab.staged -- and deleted them
+# mid-build.
+#
+# The rm at the *head* of the chain is hygiene now rather
+# than correctness, which is a demotion. Under the old glob
+# it was load-bearing: a failed run left chunks behind and
+# the reassembly globbed up whatever it found, so a post
+# that later split into fewer chunks swept the stale ones
+# back in. Exact filenames cannot do that. All three are
+# truncated before they are read -- awk's `print >`
+# truncates on first write, the END block's printf truncates
+# even when nothing else is written, and the shell's `>`
+# truncates .mdbody before Markdown.pl starts -- so no stale
+# byte survives into $@. Verified by neutering this rm: the
+# failing-stub test and the parallel test both still pass.
+# It stays because a persistently failing install should not
+# accumulate scratch, and because that truncation argument
+# holds only as long as nothing in the chain is reordered.
 #
 $(WORK_DIR)%.staged: posts/%.txt
 	@mkdir -p $(WORK_DIR)
 
 	@if [ -x Markdown.pl ]; \
 		then \
-		rm -f $(WORK_DIR)$*.a[a-z]* $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
-		split -p----------------------------------- $< $(WORK_DIR)$*. && \
-		cat $(WORK_DIR)$*.a[b-z]* | tail -n +2 > $(WORK_DIR)$*.body && \
+		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
+		awk -v head=$(WORK_DIR)$*.head -v body=$(WORK_DIR)$*.body \
+			"$$SPLIT_STAGED" $< && \
 		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
-		cat $(WORK_DIR)$*.aa .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
-		rm -f $(WORK_DIR)$*.a[a-z]* $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
+		cat $(WORK_DIR)$*.head .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
+		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
 	fi;
 
 	@if [ ! -x Markdown.pl ]; \
