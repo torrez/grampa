@@ -99,7 +99,7 @@ copied through as-is (HTML), unless `Markdown.pl` is present.
 
 ```
 posts/2026-08-06-first-post.txt
-  └─ awk split + (optional) Markdown.pl on the body only → work/2026-08-06-first-post.staged
+  └─ split + (optional) Markdown.pl on the body only → work/2026-08-06-first-post.staged
         ├─ awk + templates/post.txt        → work/2026-08-06-first-post.tmp   (a post fragment)
         │     ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
         │     └─ cat 10 newest              → work/index.tmp
