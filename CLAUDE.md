@@ -32,16 +32,27 @@ just as `make` does. The two are equivalent in every reachable state.
 the file isn't found.
 
 `getline` on a file it cannot read returns `-1`, which is truthy, so an unguarded
-`while (getline < "…")` loop spins forever rather than erroring: it hangs, it does not
-produce pages with empty bodies. `RENDER_ITEM` and `WRAP_IN_CHANNEL` guard the read with
-`> 0`; `RENDER_POST` and `WRAP_IN_BASE` do not yet.
+`while (getline < "…")` loop spins forever rather than erroring. All four awk programs now
+guard the read with `> 0` **and** report the `-1` case and `exit 1`:
 
-The reachable path to that hang is a template that is **present but unreadable** — one
-`chmod 000`, or a careless `cp`/`rsync` that drops the mode. Make sees the prerequisite
-satisfied, awk runs, and the build spins (`WRAP_IN_BASE` also appends the stale `$0` each
-iteration, so it eats memory while it spins). Running from the wrong directory does *not*
-reach it: the template prerequisite is a relative path too, so make errors on the missing
-file before awk is ever invoked. Both are verified.
+```
+grampa: cannot read templates/base.txt
+make: *** [build/2026/08/06/hello.html] Error 1
+```
+
+The `exit 1` is the load-bearing half. A guard alone would turn the hang into a clean
+`exit 0` and a fully rendered page with an empty body — the same silently-deployable wrong
+output the `.staged` recipe's `&&` chain exists to prevent. Exiting non-zero lets
+`.DELETE_ON_ERROR` take the half-written file away instead.
+
+The reachable path here is a template that is **present but unreadable** — one `chmod 000`,
+or a careless `cp`/`rsync` that drops the mode. Make sees the prerequisite satisfied and awk
+runs. A *missing* template never reaches awk, and neither does running from the wrong
+directory, since the template prerequisite is a relative path too. Note "never reaches awk"
+is not the same as "always errors": a missing `templates/base.txt` or `templates/rss.txt`
+does error, but a missing `templates/post.txt` or `rss-item.txt` can leave a stale fragment
+being reused with exit 0 — see the deleted-template bullet in `docs/backlog.md`. All
+verified, and guarded by the four `test_unreadable_*_template_fails_the_build` tests.
 
 ## Layout
 

@@ -341,20 +341,47 @@ endef
 # Renders one post into a fragment via
 # templates/post.txt.
 #
+# The template read is guarded with > 0, and the -1 case
+# is reported and exits 1. getline returns -1 on a file it
+# cannot open, and -1 is truthy, so an unguarded loop spins
+# forever instead of erroring -- this one also appends the
+# stale $$0 every pass, so it eats memory while it spins.
+#
+# A missing template never reaches this: it is a
+# prerequisite of every rule that runs this program, so awk
+# is not invoked at all. (Not the same as "make errors" --
+# for the two templates named only in pattern rules, make
+# 3.81 can quietly reuse a stale fragment instead. See the
+# deleted-template bullet in docs/backlog.md.) A template
+# that is present but *unreadable* -- chmod 000, or a
+# cp/rsync that dropped the mode -- does reach it, because
+# the prerequisite is satisfied.
+#
+# Exiting 1 rather than printing an empty fragment matters:
+# it lets .DELETE_ON_ERROR take the half-written file away.
+# A guard that merely stopped the loop would turn the hang
+# into a clean exit 0 and a fully rendered, empty page --
+# the same silently-deployable wrong output the .staged
+# recipe's && chain exists to prevent.
+#
 define RENDER_POST
 BEGIN {
     post_output = "";
 }
 $(PARSE_FRONT_MATTER)
 END {
-    while (getline < "templates/post.txt"){
-        new_line = fill($$0, "title", title);
+    while ((rc = (getline line < "templates/post.txt")) > 0){
+        new_line = fill(line, "title", title);
         new_line = fill(new_line, "body", body);
         new_line = fill(new_line, "pub_date", pub_date);
         new_line = fill(new_line, "permalink", permalink);
         new_line = fill(new_line, "category_url", category_url);
         new_line = fill(new_line, "category", category);
         post_output = post_output new_line "\n";
+    }
+    if (rc < 0){
+        print "grampa: cannot read templates/post.txt" > "/dev/stderr";
+        exit 1;
     }
     print post_output;
 }
@@ -370,12 +397,8 @@ endef
 # wrong abstraction to reach for from one example, so
 # rendering stays a separate program.
 #
-# The template read is guarded with > 0 because getline
-# on a missing file returns -1, which is truthy, so an
-# unguarded loop spins forever. Nothing in the normal
-# build reaches that -- the template is a prerequisite,
-# so make stops first -- but the guard costs nothing and
-# the unguarded form is a trap worth not copying.
+# The template read is guarded and the -1 case exits 1,
+# for the reasons spelled out above RENDER_POST.
 #
 define RENDER_ITEM
 BEGIN {
@@ -384,13 +407,17 @@ BEGIN {
 $(PARSE_FRONT_MATTER)
 END {
     link = ENVIRON["SITE_URL"] item_path;
-    while ((getline line < "templates/rss-item.txt") > 0){
+    while ((rc = (getline line < "templates/rss-item.txt")) > 0){
         new_line = fill(line, "title", xml_escape(title));
         new_line = fill(new_line, "link", xml_escape(link));
         new_line = fill(new_line, "pub_date", pub_date);
         new_line = fill(new_line, "category", xml_escape(category));
         new_line = fill(new_line, "body", xml_escape(body));
         item_output = item_output new_line "\n";
+    }
+    if (rc < 0){
+        print "grampa: cannot read templates/rss-item.txt" > "/dev/stderr";
+        exit 1;
     }
     print item_output;
 }
@@ -404,6 +431,9 @@ endef
 # thing that differs is $$PAGE_TITLE, which each recipe
 # puts in the environment.
 #
+# The template read is guarded and the -1 case exits 1,
+# for the reasons spelled out above RENDER_POST.
+#
 define WRAP_IN_BASE
 BEGIN {
     html_output = "";
@@ -414,10 +444,14 @@ BEGIN {
     main_output = main_output $$0 "\n"
 }
 END {
-    while (getline < "templates/base.txt"){
-        new_line = fill($$0, "main", main_output);
+    while ((rc = (getline line < "templates/base.txt")) > 0){
+        new_line = fill(line, "main", main_output);
         new_line = fill(new_line, "page_title", ENVIRON["PAGE_TITLE"]);
         html_output = html_output new_line "\n";
+    }
+    if (rc < 0){
+        print "grampa: cannot read templates/base.txt" > "/dev/stderr";
+        exit 1;
     }
     print html_output;
 }
@@ -435,9 +469,8 @@ endef
 #
 # {{items}} is not escaped: those are already-escaped XML.
 #
-# The template read is guarded with > 0 for the same
-# reason as RENDER_ITEM's: getline returns -1 on a missing
-# file, which is truthy.
+# The template read is guarded and the -1 case exits 1,
+# for the reasons spelled out above RENDER_POST.
 #
 define WRAP_IN_CHANNEL
 BEGIN {
@@ -448,12 +481,16 @@ BEGIN {
     items_output = items_output $$0 "\n";
 }
 END {
-    while ((getline line < "templates/rss.txt") > 0){
+    while ((rc = (getline line < "templates/rss.txt")) > 0){
         new_line = fill(line, "title", xml_escape(ENVIRON["BLOG_NAME"]));
         new_line = fill(new_line, "description", xml_escape(ENVIRON["BLOG_NAME"]));
         new_line = fill(new_line, "link", xml_escape(ENVIRON["SITE_URL"]));
         new_line = fill(new_line, "items", items_output);
         xml_output = xml_output new_line "\n";
+    }
+    if (rc < 0){
+        print "grampa: cannot read templates/rss.txt" > "/dev/stderr";
+        exit 1;
     }
     print xml_output;
 }

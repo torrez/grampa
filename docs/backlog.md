@@ -127,7 +127,31 @@ breaks the self-heal.
 and the newly-in-window title present.
 **Cost:** ~15 lines and one `sleep`.
 
-### 3. `RENDER_POST` and `WRAP_IN_BASE` hang on an unreadable template — STILL OPEN
+### 3. `RENDER_POST` and `WRAP_IN_BASE` hang on an unreadable template — DONE
+
+Fixed, and the fix went further than this item asked. All four awk programs now guard the
+template read with `> 0` **and** report the `-1` case and `exit 1`.
+
+The prescribed fix — mirror `RENDER_ITEM`'s bare `> 0` guard — turns out to trade the hang
+for something worse. Writing the tests first showed it: `chmod 000 templates/rss-item.txt`
+and `chmod 000 templates/rss.txt` against the *already-guarded* programs both exited 0 and
+published an empty `rss.xml`. So the two "safe" programs had a silent-wrong-output hole of
+exactly the kind item 1 was about, and copying their guard would have given the other two
+the same hole. `exit 1` closes all four and lets `.DELETE_ON_ERROR` remove the partial file.
+
+Guarded by `test_unreadable_post_template_fails_the_build`,
+`test_unreadable_base_template_fails_the_build`,
+`test_unreadable_rss_item_template_fails_the_build`, and
+`test_unreadable_rss_template_fails_the_build`. Because an unguarded loop hangs rather than
+failing, they run through a new `build_expect_fail_within` helper — macOS has no
+`timeout(1)`, so it backgrounds make under `set -m` and kills the process group, since it is
+awk and not make that spins. Watched fail against the old code (two hung, two exited 0),
+then pass. Full suite: **159 passed, 0 failed**.
+
+The CLAUDE.md paragraph is rewritten again to describe the guard-plus-exit and why the
+`exit 1` is the load-bearing half.
+
+Original finding follows.
 
 `Makefile:350`, `Makefile:417`, and `CLAUDE.md:34-44` — **verified**
 
@@ -342,6 +366,18 @@ are current as of `b0971a2`. New bullets are marked NEW.
   bodies gain a leading blank line that the verbatim branch does not have. Cosmetic.
   Re-confirmed with `od -c`: 35 hyphens, `\n`, `\n`.
 
+- **NEW — a deleted `templates/post.txt` or `rss-item.txt` silently rebuilds from stale
+  fragments** — **verified** (found by the item 3 review, not yet fixed). Both are named
+  only in *pattern* rules, so under make 3.81's pattern search they are not "ought to exist"
+  files: delete one and the `%.tmp`/`%.rssitem` rule simply becomes inapplicable, the
+  existing `work/` fragment is taken as-is with no dependency check, and the build exits 0
+  serving the old body — reproduced by editing a post, deleting `templates/post.txt`, and
+  rebuilding. `templates/base.txt` and `templates/rss.txt` hard-error in the same state,
+  because they are also prerequisites of the explicit `build/index.html` and
+  `build/rss.xml` rules. Same silent-stale-output family as the deleted-post and
+  deleted-category gotchas. Note this does **not** weaken item 3's fix: awk still never runs
+  against a missing template.
+
 - **NEW — `.gitignore` leaves `posts/` and `config` unanchored** — `.gitignore:2-3`,
   **read**. `e4f912f` anchored `/templates/` precisely because an unanchored pattern matches
   at any depth; `posts/` and `config` still match anywhere, so a future `tools/config` or a
@@ -352,11 +388,12 @@ are current as of `b0971a2`. New bullets are marked NEW.
   (config parsing at `Makefile:116,140`, the `PAGE_TITLE` extraction at `Makefile:562`) and
   is now listed in the opening sentence.
 
-- **NEW — a third stale Makefile comment, same family as items 4 and 6** —
-  `Makefile:376-378`, **read**. The `RENDER_ITEM` comment says the unguarded-`getline` trap
-  is unreachable because "the template is a prerequisite, so make stops first". True for a
-  *missing* template; false for the present-but-unreadable one that item 3 reproduces and
-  CLAUDE.md now documents. Should ride along with the items 4 and 6 comment pass.
+- **NEW — a third stale Makefile comment, same family as items 4 and 6 — DONE**. The
+  `RENDER_ITEM` comment claimed the unguarded-`getline` trap was unreachable because "the
+  template is a prerequisite, so make stops first" — true for a *missing* template, false
+  for the present-but-unreadable one. Fixed with item 3: the full explanation now lives
+  above `RENDER_POST` and the other three programs point at it, so there is one place to
+  keep true instead of three.
 
 - **NEW — no test covers editing `templates/base.txt`** — `tests/run.sh`, **verified**
   (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
@@ -371,17 +408,19 @@ are current as of `b0971a2`. New bullets are marked NEW.
 
 1. ~~**Item 1 + item 5 together, as one commit.**~~ Done. The failing-stub test was written
    first and watched fail against the `;`-chained recipe, then passed against the `&&` one.
-2. **Item 3.** Two-minute fix, closes a verified reachable hang, and stops a trap that is
-   one copy-paste from spreading into the next renderer.
+2. ~~**Item 3.**~~ Done, along with the stale `RENDER_ITEM` comment from Minor. It was not
+   the two-minute fix it looked like: the prescribed cure was itself a bug, and finding that
+   out cost four tests and a `timeout(1)` substitute. Worth it — the trap it removes was one
+   copy-paste from the next renderer.
 3. ~~**Items 4, 6, and the CLAUDE.md prose fixes from Minor, as one documentation pass.**~~
    Done for CLAUDE.md. What remains of items 4 and 6 is two stale comment blocks in the
    Makefile itself, saying the same two things the doc no longer says: "breaks the build
    silently" above `build/category/%.html`, and the slash-for-hyphen fragment mapping above
    `%.html`. Both are prose-only, and both should go in one commit.
 
-Item 2 stays the most likely regression in the repo and item 7 stays the cheapest
-subtraction; neither made the three only because item 3 is a live hang and the documentation
-was drifting faster than the code.
+All three are now done. Next up, on the same reasoning that ranked them: item 2 stays the
+most likely regression in the repo, and item 7 stays the cheapest subtraction. What remains
+of items 4 and 6 — two stale Makefile comment blocks — is still a single prose-only commit.
 
 ---
 

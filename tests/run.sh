@@ -83,6 +83,50 @@ build_expect_fail() {
 	return 0
 }
 
+#
+# build_expect_fail_within <seconds> [make args]
+#
+# Same as build_expect_fail, but bounded by a wall clock.
+# An unguarded `while (getline < "tpl")` loop spins forever
+# rather than erroring, so a plain build_expect_fail against
+# an unreadable template would block the whole suite -- and
+# WRAP_IN_BASE's version eats memory while it spins. macOS
+# has no timeout(1), so this backgrounds make under job
+# control (set -m gives it its own process group) and kills
+# the entire group, since it is awk and not make that hangs.
+#
+build_expect_fail_within() {
+	local limit="$1"; shift
+	local out="$SBOX/.timed-build.out"
+	local pid waited=0 status
+
+	set -m
+	make "$@" < /dev/null > "$out" 2>&1 &
+	pid=$!
+	set +m
+
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$waited" -ge "$limit" ]; then
+			kill -9 -"$pid" 2>/dev/null
+			wait "$pid" 2>/dev/null
+			BUILD_OUT=$(cat "$out")
+			fail "make did not finish within ${limit}s -- it hung" "$BUILD_OUT"
+			return 1
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+
+	wait "$pid"
+	status=$?
+	BUILD_OUT=$(cat "$out")
+	if [ "$status" -eq 0 ]; then
+		fail "make succeeded but should have failed" "$BUILD_OUT"
+		return 1
+	fi
+	return 0
+}
+
 ok() {
 	PASSED=$((PASSED + 1))
 }
@@ -1056,6 +1100,97 @@ EOF
 	assert_file posts/2026-02-02-home_rmtest.txt
 }
 
+#
+# ---------------------------------------------------
+# Unreadable templates. A template that is present but
+# cannot be read -- one chmod 000, or a cp/rsync that
+# dropped the mode -- satisfies make's prerequisite, so
+# awk runs anyway. getline returns -1 on that file, which
+# is truthy, so an unguarded loop never terminates.
+#
+# All four programs must instead say which template they
+# could not read and exit non-zero, so .DELETE_ON_ERROR
+# takes the half-written page away rather than leaving an
+# empty one to be deployed.
+#
+# The 10s limits are slack for a failure that should be
+# instantaneous; they only ever elapse if the guard is
+# gone, and the helper kills the process group so a
+# regression costs ten seconds, not the suite.
+# ---------------------------------------------------
+#
+
+test_unreadable_post_template_fails_the_build() {
+	sandbox unreadable_post_template
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Real body content.</p>
+EOF
+	chmod 000 templates/post.txt
+	build_expect_fail_within 10
+	local built=$?
+	# Sandboxes are kept after the run, and a 000 file in
+	# one of them breaks any later cp -R or rsync of the
+	# checkout -- which is exactly what a reviewer does.
+	chmod 644 templates/post.txt
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot read templates/post.txt"
+	assert_no_file work/2026-08-06-home_hello.tmp
+	assert_no_file build/2026/08/06/hello.html
+}
+
+test_unreadable_base_template_fails_the_build() {
+	sandbox unreadable_base_template
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Real body content.</p>
+EOF
+	chmod 000 templates/base.txt
+	build_expect_fail_within 10
+	local built=$?
+	chmod 644 templates/base.txt
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot read templates/base.txt"
+	assert_no_file build/2026/08/06/hello.html
+	assert_no_file build/index.html
+}
+
+test_unreadable_rss_item_template_fails_the_build() {
+	sandbox unreadable_rss_item_template
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Real body content.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	chmod 000 templates/rss-item.txt
+	build_expect_fail_within 10
+	local built=$?
+	chmod 644 templates/rss-item.txt
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot read templates/rss-item.txt"
+	assert_no_file work/2026-08-06-home_hello.rssitem
+}
+
+test_unreadable_rss_template_fails_the_build() {
+	sandbox unreadable_rss_template
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Real body content.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	chmod 000 templates/rss.txt
+	build_expect_fail_within 10
+	local built=$?
+	chmod 644 templates/rss.txt
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot read templates/rss.txt"
+	assert_no_file build/rss.xml
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -1104,5 +1239,9 @@ test_migration_refuses_ambiguous_underscore_title
 test_migration_reports_error_when_rm_fails
 test_base_template_advertises_the_feed
 test_feed_category_uses_display_form
+test_unreadable_post_template_fails_the_build
+test_unreadable_base_template_fails_the_build
+test_unreadable_rss_item_template_fails_the_build
+test_unreadable_rss_template_fails_the_build
 
 pass_fail_summary
