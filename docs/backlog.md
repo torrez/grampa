@@ -399,7 +399,8 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   there. Reproduced against the stock `post.txt`, where the two are on different lines. Also
   broader than one case: a title containing `{{main}}` puts the whole rendered fragment in the
   page's `<title>`, the title/`{{body}}` leak fires in the feed too, and a `url=` containing
-  `{{title}}` puts the post title inside every `<link>` and `<guid>`. The single-pass fill
+  `{{title}}` puts the post title inside every *item's* `<link>` and `<guid>` — though not
+  the channel `<link>`, which is filled first and takes the blog name instead. The single-pass fill
   that closes all of them changes `fill()`'s signature and all four call sites, and drops the
   documented first-`{{key}}`-per-line behaviour. Not worth it against a closed body case, but
   the entry should say what it is deferring.
@@ -615,16 +616,19 @@ staleness to actually work as advice.
 1. **The two staging-branch glob items** — the `az` ceiling and the same-date sibling
    over-match. They want doing together, and they need the `cat … | tail` pipeline broken up
    rather than a one-liner, because `&&` catches a failing *step* and never a failing stage
-   of a pipe. This is the only remaining bullet that produces silently wrong output on a
-   strange post: a body with more than 25 delimiter lines truncates.
+   of a pipe. A body with more than 25 delimiter lines truncates. This and item 5 are the
+   only two remaining bullets that produce silently wrong output on a strange post, and it
+   is the only one of the two nobody has decided to live with.
 2. **The behaviour half of item 8** — the feed's post-deletion self-heal. Real design, shares
    its shape with the deleted-post and deleted-category gotchas, and `make clean && make` is
    already the documented answer for all three.
 3. **Out-of-range dates build successfully** — ~6 lines of range-checking in
    `check_post_name`, or leave as garbage-in-garbage-out.
 4. **`make deploy` does not depend on `build`** — arguably more honest as it is.
-5. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`.
-   Needs the single-pass fill, deliberately deferred.
+5. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`
+   or `{{main}}`, or a `url=` containing `{{title}}`; see the full entry above for all four
+   reproduced cases. Silently wrong output on a strange post, same as item 1, but this one is
+   a decision rather than an oversight: it needs the single-pass fill, deliberately deferred.
 6. **The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.
 7. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
    option is a line in the Commands section.

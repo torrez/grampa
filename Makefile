@@ -407,7 +407,9 @@ endef
 # {{main}} puts the entire rendered fragment in the page's
 # <title>; the title/{{body}} leak fires in the feed too,
 # via RENDER_ITEM; and a url= containing {{title}} puts the
-# post title inside every <link> and <guid>.
+# post title inside every *item's* <link> and <guid>. Not
+# the channel <link>: WRAP_IN_CHANNEL fills link first, so
+# that one takes the blog name instead.
 #
 # Closing these needs a single-pass fill that never rescans
 # a substituted value -- a real change to fill()'s signature

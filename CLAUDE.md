@@ -246,7 +246,8 @@ everything filled before it. This needs no template line carrying both markers â
 `{{body}}` are on different lines. Reproduced siblings, same class: a title containing
 `{{main}}` puts the whole rendered fragment in the page's `<title>`; the same title/`{{body}}`
 leak fires in the feed via `RENDER_ITEM`; and a `url=` containing `{{title}}` puts the post
-title inside every `<link>` and `<guid>`. Closing these needs a single-pass fill that never
+title inside every *item's* `<link>` and `<guid>` â€” but not the channel `<link>`, which
+`WRAP_IN_CHANNEL` fills first and which therefore takes the blog name instead. Closing these needs a single-pass fill that never
 rescans a substituted value, which would also drop the first-`{{key}}`-only behaviour above;
 deferred, since the body is the large author-controlled blob and is now closed. Guarded by
 the four `test_placeholders_*` tests.
