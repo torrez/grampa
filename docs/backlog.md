@@ -379,13 +379,29 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   `test_default_build_works_with_a_file_named_all` (passes with and without the fix; both
   the test's banner and the `.PHONY: all` comment in the Makefile say so).
 
-- **Template placeholders in post bodies get expanded** — `Makefile:351-356,418-419`,
-  **verified**. `fill()` rescans the composed line, so a body containing a literal
-  `{{permalink}}` or `{{page_title}}` renders as the real value. For a blog whose README
-  invites people to read the Makefile, a post *about grampa's template syntax* is not
-  hypothetical. Cheap mitigation: fill the value-bearing keys last (`body` last in
-  `RENDER_POST`, `page_title` before `main` in `WRAP_IN_BASE`), which closes the realistic
-  cases. A true single-pass fill is the full fix and probably not worth it yet.
+- **Template placeholders in post bodies get expanded — DONE**. Fixed by the prescribed
+  ordering, and the finding turned out to be half the size of the bug: it named
+  `RENDER_POST` and `WRAP_IN_BASE`, but `RENDER_ITEM` and `WRAP_IN_CHANNEL` have the same
+  defect. `RENDER_ITEM` filled `title` before `link`/`pub_date`/`category`, and
+  `WRAP_IN_CHANNEL` filled the blog name before `<link>` — so a `name=` holding `{{link}}`
+  took the site URL. `xml_escape` leaves braces alone, so escaping never hid either.
+  All four now fill derived values first, then `title`, then the big author-controlled blob
+  (`body`/`main`/`items`). Watched failing first: 11 assertions across all four programs.
+  Guarded by `test_placeholders_in_a_body_are_not_expanded`,
+  `test_placeholders_in_a_title_are_not_expanded`,
+  `test_placeholders_in_the_feed_are_not_expanded`, and
+  `test_placeholders_in_the_blog_name_are_not_expanded`.
+
+  **Still open, deliberately:** whatever is filled last is injectable into everything filled
+  before it, so a *title* containing a literal `{{body}}` still expands on a template line
+  carrying both. The single-pass fill that closes it changes `fill()`'s signature and all
+  four call sites, and drops the documented first-`{{key}}`-per-line behaviour. Not worth it
+  against a closed body case.
+
+  Original finding: `Makefile:351-356,418-419`, **verified**. `fill()` rescans the composed
+  line, so a body containing a literal `{{permalink}}` or `{{page_title}}` renders as the
+  real value. For a blog whose README invites people to read the Makefile, a post *about
+  grampa's template syntax* is not hypothetical.
 
 - **`PAGE_TITLE`'s `sed` reads `title:` from anywhere in the file — DONE**. The delimiter
   stop is in, matching the pattern `tools/migrate-categories.sh` already used for
@@ -411,10 +427,14 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   skips the config check, and a short paragraph under it says why `make build` and `make`
   are equivalent in every reachable state: `config` is a prerequisite of every page rule.
 
-- **README nits** — `README.md`, **verified**. Line 70's Markdown link is inside-out:
-  `(this zip file)[https://…]`. Line 5 has "resonably". And the README never says
-  `Markdown.pl` must be *executable* — a non-executable copy silently falls back to
-  verbatim HTML, because the Makefile tests `[ -x ]`. CLAUDE.md gets this right.
+- **README nits — DONE**. All three fixed: "resonably", the inside-out
+  `(this zip file)[https://…]` link, and the omission that mattered — the README never said
+  `Markdown.pl` must be *executable*, though the Makefile tests `[ -x ]` and a
+  non-executable copy falls back to verbatim HTML with no warning. Review turned up a
+  fourth, adjacent trap and it is folded into the same paragraph: `chmod +x` alone appears
+  to do nothing, because `.staged` files depend only on the post, so an already-staged post
+  is not restaged when `Markdown.pl` turns up. The README now says to
+  `make clean && make` after fixing the bit.
 
 - **`make deploy` does not depend on `build`** — `Makefile:708-710`, **read**. So
   `make clean && make deploy` ships an empty directory. `deploy: all` would make it safe at
@@ -449,12 +469,19 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   the stem carries the date. Dotted slugs are degenerate anyway (`/2026/01/01/x.ab.html`).
   Same family as the `az` glob item below; whoever fixes that should fix this.
 
-- **Markdown-branch test gaps that remain** — `tests/run.sh`, **verified** by manual runs
-  rather than by the suite. No test runs the Markdown branch under `-j`
-  (`test_parallel_build_is_clean` installs no stub); no test asserts a Markdown-staged body
-  reaches `rss.xml` (all three stub sandboxes leave `url=` unset); and the
-  "`Markdown.pl` present but not executable → verbatim branch" path is untested. All three
-  were checked by hand when the branch was fixed and all pass. Cheap to add.
+- **Markdown-branch test gaps that remain — DONE**. All three added, each watched failing
+  against the specific regression it guards rather than against nothing:
+  `test_markdown_branch_is_parallel_safe` (collapsing the branch's per-post scratch
+  namespace to a shared one fails 5 of 6 posts under `-j8`; one wins the race),
+  `test_markdown_body_reaches_the_feed` (repointing `%.rssitem` at `posts/%.txt` instead of
+  the `.staged` file fails exactly the transformed-body assertion), and
+  `test_non_executable_markdown_falls_back_to_verbatim` (relaxing `[ -x ]` to `[ -f ]`
+  fails). That last is the behaviour README.md now tells people to check first.
+
+  Original finding: **verified** by manual runs rather than by the suite. No test ran the
+  Markdown branch under `-j` (`test_parallel_build_is_clean` installs no stub); no test
+  asserted a Markdown-staged body reaches `rss.xml` (all three stub sandboxes left `url=`
+  unset); and the "present but not executable → verbatim" path was untested.
 
 - **`.source/splitter.txt` ends with a blank line** — **verified harmless**. Markdown-staged
   bodies gain a leading blank line that the verbatim branch does not have. Cosmetic.
@@ -520,12 +547,20 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   a non-problem. Cheapest honest option: a line in the Commands section saying `setup` is a
   one-time step and not to combine it with a build goal under `-j`.
 
-- **NEW — no test covers editing `templates/base.txt`** — `tests/run.sh`, **verified**
-  (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
+- **NEW — no test covers editing `templates/base.txt` — DONE**.
+  `test_editing_base_template_rebuilds_every_page`, watched failing three times, once per
+  rule: dropping the `base.txt` prerequisite from `%.html`, `category/%.html`, or
+  `index.html` each fails exactly one of the test's three assertions and leaves the other
+  two passing, which is what makes asserting all three in one test worth doing — the
+  realistic mistake is fixing one rule and forgetting its siblings. Review independently
+  reproduced all three and additionally established that the `sleep 1` is load-bearing
+  rather than superstition: on APFS, make 3.81 truncates mtimes to whole seconds, so a
+  sub-second-newer prerequisite rebuilds nothing (3 tries out of 3).
+
+  Original finding: **verified** (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
   `test_editing_post_template_rebuilds_fragments` guards the bare-dependency-line trap for
-  `post.txt`; the identical trap exists for `base.txt` in three rules (`%.html`,
-  `category/%.html`, `index.html`) and nothing guards it. Fix: ~10 lines mirroring the
-  existing test.
+  `post.txt`; the identical trap existed for `base.txt` in three rules and nothing guarded
+  it.
 
 ---
 
@@ -559,15 +594,34 @@ Unlike item 8 and the deleted-post gotcha — which are about untracked *outputs
 know it should remove — the deleted template was a nameable *input*, which is why it was
 cheap and they are not.
 
-**What is left is the rest of the Minor list.** Nothing left there goes wrong on an ordinary
-post — but two bullets are still silent on a strange one: a body containing a literal
-`{{permalink}}` expands it, and a body with more than 25 delimiter lines truncates. The
-cheapest were `.PHONY: all clean`, anchoring `.gitignore`, and `POST_NAMES` to `:=`, **all
-three now done** in one commit. What is left: the README nits; the two test gaps
-(`templates/base.txt` edits, the Markdown branch under `-j` and into `rss.xml`), ~10 lines
-each; out-of-range dates; `make deploy` not depending on `build`; the placeholder-expansion
-mitigation; the trailing blank line in `splitter.txt`; and the two glob items in the staging
-branch, which want doing together and need the pipeline broken up rather than a one-liner.
+**What is left is the rest of the Minor list.** The cheapest were `.PHONY: all clean`,
+anchoring `.gitignore`, and `POST_NAMES` to `:=`, **all three done** in one commit.
+
+A later pass then took four more: the README nits, both test gaps (`templates/base.txt`
+edits, and the three Markdown-branch gaps), and the placeholder-expansion mitigation. Two of
+those four grew on contact with the code, which is the recurring lesson of this list —
+`fill()`'s ordering bug was in all four awk programs rather than the two the finding named,
+and the README's missing "must be executable" note needed a second sentence about `.staged`
+staleness to actually work as advice.
+
+**What is left, in rough order of how much a reader would care:**
+
+1. **The two staging-branch glob items** — the `az` ceiling and the same-date sibling
+   over-match. They want doing together, and they need the `cat … | tail` pipeline broken up
+   rather than a one-liner, because `&&` catches a failing *step* and never a failing stage
+   of a pipe. This is the only remaining bullet that produces silently wrong output on a
+   strange post: a body with more than 25 delimiter lines truncates.
+2. **The behaviour half of item 8** — the feed's post-deletion self-heal. Real design, shares
+   its shape with the deleted-post and deleted-category gotchas, and `make clean && make` is
+   already the documented answer for all three.
+3. **Out-of-range dates build successfully** — ~6 lines of range-checking in
+   `check_post_name`, or leave as garbage-in-garbage-out.
+4. **`make deploy` does not depend on `build`** — arguably more honest as it is.
+5. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`.
+   Needs the single-pass fill, deliberately deferred.
+6. **The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.
+7. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
+   option is a line in the Commands section.
 
 ---
 
