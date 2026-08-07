@@ -24,8 +24,11 @@ sure nothing stale survives — e.g. after deleting a post, whose old HTML is no
 anything and will otherwise linger in `build/`.
 
 `make` must be run from the repo root. The awk scripts read templates via
-`getline < "templates/base.txt"` — a relative path — so any other working directory
-silently produces pages with empty bodies rather than an error.
+`getline < "templates/base.txt"` — a relative path — so any other working directory means
+the file isn't found. `getline` on a missing file returns `-1`, which is truthy, so an
+unguarded `while (getline < "…")` loop spins forever rather than erroring: it hangs, it
+does not produce pages with empty bodies. `RENDER_ITEM` and `WRAP_IN_CHANNEL` guard the
+read with `> 0`; `RENDER_POST` and `WRAP_IN_BASE` do not yet.
 
 ## Layout
 
@@ -39,7 +42,7 @@ is gitignored and created by `make setup`:
 | `posts/` | no | Source posts, one `.txt` per post |
 | `templates/` | no | Working templates (edit these, not `.source/`) |
 | `build/` | no | Publishable output, and nothing else — deploy this verbatim |
-| `work/` | no | Intermediates (`.tmp` fragments, Markdown scratch) |
+| `work/` | no | Intermediates (`.staged`, `.tmp`, and `.rssitem` fragments) |
 | `config`, `deploy.sh` | no | Per-install, copied from `.source/*.example` |
 
 `make setup` copies with `yes n | cp -i`, so it never clobbers existing files. It is safe
@@ -49,11 +52,18 @@ to re-run.
 
 ```
 name=My Weblog
+url=https://example.com
 ```
 
 `name=` sets `{{page_title}}`: the index gets `My Weblog`, a post page gets
-`Post Title - My Weblog`. Blank lines and `#` comments are ignored, the last `name=` wins,
-and surrounding whitespace is trimmed. It is the only key anything reads.
+`Post Title - My Weblog`. Blank lines and `#` comments are ignored, the last `name=` (or
+`url=`) wins, and surrounding whitespace is trimmed. An absent or empty `name=` falls back
+to `Grampa`.
+
+`url=` is the site's absolute base URL. Setting it is what turns `FEED_PAGES` non-empty and
+gets `build/rss.xml` built; leaving it unset or empty means no feed and no error. A trailing
+slash is stripped so `url=` with or without one produces identical links. These are the only
+two keys anything reads.
 
 ## Post format
 
@@ -89,15 +99,25 @@ copied through as-is (HTML), unless `Markdown.pl` is present.
 
 ```
 posts/2026-08-06-first-post.txt
-  └─ (optional) Markdown.pl on the body only
-  └─ awk + templates/post.txt        → work/2026-08-06-first-post.tmp   (a post fragment)
-        ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
-        └─ cat 10 newest              → work/index.tmp
-              └─ awk + templates/base.txt → build/index.html
+  └─ awk split + (optional) Markdown.pl on the body only → work/2026-08-06-first-post.staged
+        ├─ awk + templates/post.txt        → work/2026-08-06-first-post.tmp   (a post fragment)
+        │     ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
+        │     └─ cat 10 newest              → work/index.tmp
+        │           └─ awk + templates/base.txt → build/index.html
+        └─ awk + templates/rss-item.txt    → work/2026-08-06-first-post.rssitem  (only when url= is set)
+              └─ cat 10 newest              → work/rss.tmp
+                    └─ awk + templates/rss.txt → build/rss.xml
 ```
 
+`.staged` is the shared staging step: it splits the front matter off the body, runs the body
+through `Markdown.pl` if present, and glues them back together. Both `.tmp` and `.rssitem`
+are built from the same `.staged` file, so `Markdown.pl` runs once per post no matter how
+many consumers read the result.
+
 `.tmp` files are rendered post fragments and are the unit of reuse: the per-post page and
-the index are both just a `base.txt` wrapper around one or more `.tmp` files. They live in
+the index are both just a `base.txt` wrapper around one or more `.tmp` files. `.rssitem`
+files are the feed's equivalent — one `<item>` per post, wrapped in `rss.txt` the same way
+`.tmp` fragments are wrapped in `base.txt`. Both kinds live in
 `work/`, and are kept between builds via `.SECONDARY` — without that, make would treat
 them as pattern-rule intermediates and delete them, forcing a full rebuild every time.
 
@@ -133,9 +153,18 @@ prerequisite list is trivially satisfiable — so if `%.html` appeared first, it
 title. Verified empirically in both orders. Reordering these two rules breaks the build
 silently, so keep `build/category/%.html` first.
 
+`build/rss.xml` is a fourth consumer, gated on `SITE_URL`: `FEED_PAGES` is
+`$(BUILD_DIR)rss.xml` when `url=` is set in config and empty otherwise, so with no `url=`
+the feed — fragments included — simply is not built, and `build`'s recipe prints a skip
+note. `RECENT_ITEMS` takes the same newest-ten window of `.rssitem` files that
+`RECENT_FILES` takes of `.tmp` files for the index, concatenated into `work/rss.tmp` and
+wrapped in `templates/rss.txt`.
+
 - `templates/post.txt` — `{{title}}` `{{body}}` `{{pub_date}}` `{{permalink}}` `{{category}}`
   `{{category_url}}`
 - `templates/base.txt` — `{{main}}` `{{page_title}}`
+- `templates/rss.txt` — `{{title}}` `{{link}}` `{{description}}` `{{items}}`
+- `templates/rss-item.txt` — `{{title}}` `{{link}}` `{{pub_date}}` `{{category}}` `{{body}}`
 
 Substitution goes through the awk `fill()` helper, **not** `sub()`. `sub()` treats `&` in
 the replacement as "the matched text", so a post titled `Tom & Jerry` rendered as
@@ -145,28 +174,45 @@ one line expands once.
 
 ### awk programs
 
-The two awk programs live in `define` blocks (`RENDER_POST`, `WRAP_IN_BASE`) that are
-`export`ed and invoked as `awk "$$RENDER_POST"`. They share `fill()` by interpolating
-`$(FILL_FN)`. Passing the program through the environment rather than inlining it means
-awk source doesn't have to survive shell quoting, and it avoids the `\`-continuation-per-line
-style the rest of a Makefile forces. Note that awk's `$0` is still `$$0` inside a `define`.
+Four awk programs live in `define` blocks (`RENDER_POST`, `RENDER_ITEM`, `WRAP_IN_BASE`,
+`WRAP_IN_CHANNEL`) that are `export`ed and invoked as `awk "$$RENDER_POST"`. They share
+`fill()` by interpolating `$(FILL_FN)`. Passing the program through the environment rather
+than inlining it means awk source doesn't have to survive shell quoting, and it avoids the
+`\`-continuation-per-line style the rest of a Makefile forces. Note that awk's `$0` is still
+`$$0` inside a `define`.
+
+`RENDER_ITEM` is `RENDER_POST`'s counterpart for `templates/rss-item.txt`, and
+`WRAP_IN_CHANNEL` is `WRAP_IN_BASE`'s for `templates/rss.txt`. Both pairs share the same
+front-matter parse (`PARSE_FRONT_MATTER`, interpolated into both `RENDER_POST` and
+`RENDER_ITEM`), but rendering and escaping stay separate programs rather than one generic
+renderer with an escape flag: HTML pages must not escape a post's body and the feed must, and
+a general templating engine is deliberately deferred until there is more than this one
+duplication to design it from. `xml_escape()` (`$(XML_ESCAPE_FN)`) does the escaping and is
+interpolated into `RENDER_ITEM` and `WRAP_IN_CHANNEL` only — `fill()` itself never escapes.
 
 The blog name reaches awk the same way: `BLOG_NAME` is `export`ed by make and each recipe
 composes `PAGE_TITLE` in the environment, which `WRAP_IN_BASE` reads via
 `ENVIRON["PAGE_TITLE"]`. Nothing is interpolated into a shell string, so a blog name or post
-title containing `"`, `'`, `$`, or `&` can't break the build.
+title containing `"`, `'`, `$`, or `&` can't break the build. `SITE_URL` is exported the same
+way, and `WRAP_IN_CHANNEL` and `RENDER_ITEM` read it via `ENVIRON["SITE_URL"]` to build the
+feed's `<link>` elements.
 
 ### Make helper functions
 
 The top of the Makefile defines string helpers because make has no real string library:
-`reverse`, `space`, `date_from_filename`, `underscore_split`, `date_and_category`,
-`title_slug`, `post_slug`, `dc_words`, `category_slug`, `category_display`,
-`category_url`, `check_post_name`, `path_from_filename`, `page_for`, `files_for_page`,
-`check_page_collisions`, `tmp_for_page`, `post_for_page`, `html_post_files`,
-`tmp_files_in_category`. They all operate on post
+`reverse`, `space`, `date_from_filename`, `rfc822_from_filename`, `underscore_split`,
+`date_and_category`, `title_slug`, `post_slug`, `dc_words`, `category_slug`,
+`category_display`, `category_url`, `check_post_name`, `path_from_filename`, `page_for`,
+`files_for_page`, `check_page_collisions`, `tmp_for_page`, `post_for_page`,
+`html_post_files`, `tmp_files_in_category`. They all operate on post
 filenames by `subst`-ing hyphens (and, since categories moved into the name, underscores)
 into spaces and using `wordlist`. Filenames are the only metadata store for dates,
 categories, and URLs — there is no index or database.
+
+`rfc822_from_filename` is `date_from_filename`'s counterpart for the feed's `<pubDate>`,
+which RFC 822 requires in a specific format (`date`'s `%a, %d %b %Y %H:%M:%S %z`, e.g.
+`Thu, 06 Aug 2026 00:00:00 -0700`). See the Gotchas below for the two things that make it
+more than a format-string swap.
 
 ## Gotchas
 
@@ -176,11 +222,23 @@ categories, and URLs — there is no index or database.
   still worth doing for the URLs' sake — an unpadded post becomes `/2026/7/4/slug.html`.
 - **BSD-only.** `date_from_filename` uses `date -v` (BSD/macOS). It fails on GNU
   coreutils, so builds are macOS-only as written.
-- **`config` is read lazily, not at parse time.** `CONFIG_NAME` uses `=`, not `:=`, because
-  on a first-ever run the `config` target hasn't copied the file into place yet when the
-  Makefile is parsed. `config` is also a prerequisite of both HTML rules, so changing the
-  name rebuilds every page. `name=` is the only key anything reads; the last one wins, and
-  an absent or empty value falls back to `Grampa`.
+- **`config` is read lazily, not at parse time.** `CONFIG_NAME` and `CONFIG_URL` both use
+  `=`, not `:=`, because on a first-ever run the `config` target hasn't copied the file into
+  place yet when the Makefile is parsed. `config` is also a prerequisite of the HTML rules
+  and of `%.rssitem`, so changing `name=` or `url=` rebuilds every page or every feed item.
+  `name=` and `url=` are the only keys anything reads; the last of each wins, and an absent
+  or empty `name=` falls back to `Grampa`.
+- **A `url=` that only exists by the time `config`'s recipe runs is one build too late for
+  the feed.** `FEED_PAGES` gates `build/rss.xml` and is expanded when `build`'s prerequisite
+  list is read — during the initial parse, before any recipe (including `config`) has run.
+  So on a first-ever `make` where `config` doesn't exist yet and gets created with `url=`
+  already set as part of that same invocation, `FEED_PAGES` was already fixed at empty and
+  no feed gets built. The skip note doesn't print either: it is a recipe-time shell test
+  (`if [ -z "$$SITE_URL" ]`) that runs after `config` exists, so by then `SITE_URL` is
+  non-empty and the "no url=" condition looks false. One silent run with neither a feed nor
+  a message; the next `make` re-parses the Makefile with `config` already in place and picks
+  it up. This is the same lazy-parse-time-vs-recipe-time split as the bullet above, just
+  landing on a prerequisite list instead of a recipe body.
 - **Categories come from filenames, not front matter.** `CATEGORY_SLUGS` is
   `$(sort $(foreach …))` over `POST_NAMES`, so discovering them needs no shell and no
   reading of post contents. Renaming a category means renaming files — see
@@ -188,11 +246,26 @@ categories, and URLs — there is no index or database.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
   post. `make clean` fixes it.
 - **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
-  `make clean && make` after removing a post.
+  `make clean && make` after removing a post. The same is true of the feed: a deleted post's
+  `<item>` stays in `build/rss.xml` until the next `make clean && make`.
+- **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
+  two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
+  happily ship the stale feed. `make clean` fixes it.
 - `Markdown.pl` is optional and gitignored — get it from
   <https://daringfireball.net/projects/markdown/> and make it executable in the repo
-  root. Without it, the post is staged into `work/` verbatim and bodies stay HTML.
-- `build/atom.xml` and `templates/atom.txt`/`index.txt` are unimplemented stubs.
+  root. Without it, the post is staged into `work/` verbatim and bodies stay HTML. Adding or
+  removing `Markdown.pl` does not invalidate `.staged`, whose only prerequisite is the post
+  itself — the same behaviour the old `.tmp` rule had before staging was split out, just more
+  visible now that `.staged` is a named, inspectable file instead of a step inside `.tmp`.
+- **`rfc822_from_filename` runs under `LC_ALL=C`.** RFC 822 day and month names are literal
+  English tokens (`Thu`, `Aug`), and `$(shell …)` inherits the user's locale; without pinning
+  it, a non-English locale emits something like `jeu., 06 aout 2026`, which is silently
+  invalid RSS.
+- **`rfc822_from_filename` pins the time to midnight with `-v0H -v0M -v0S`.** `date -v` with
+  only `y`/`m`/`d` keeps the current wall-clock time, so without pinning, every build would
+  stamp a different `<pubDate>` on the same post and `rss.xml` would look changed on every
+  deploy even when no post did.
+- `templates/index.txt` is an unimplemented stub.
 
 ## Review cycle
 

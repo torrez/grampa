@@ -865,6 +865,43 @@ EOF
 }
 
 #
+# base.txt must advertise the feed on every page kind --
+# the index and a post page -- not just the one recipe that
+# happens to build rss.xml itself.
+#
+test_base_template_advertises_the_feed() {
+	sandbox feed_autodiscovery
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_grep build/index.html 'type="application/rss+xml"'
+	assert_grep build/index.html 'href="/rss.xml"'
+	assert_grep build/2026/08/06/hello.html 'type="application/rss+xml"'
+}
+
+#
+# The feed's <category> uses the display form -- hyphens
+# become spaces -- same as the HTML pages. Nothing pinned
+# that down for a multi-word category before this.
+#
+test_feed_category_uses_display_form() {
+	sandbox feed_category_display
+	add_post 2026-07-04-project-ideas_raspberry-pi-backup.txt <<'EOF'
+title: Raspberry Pi Backup
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<category>project ideas</category>"
+	assert_not_grep build/rss.xml "<category>project-ideas</category>"
+}
+
+#
 # A source file that cannot be removed (read-only,
 # permission-restricted, chflags uchg -- all realistic)
 # must not be reported as a success while the migrated
@@ -939,5 +976,7 @@ test_migration_converts_old_posts
 test_migration_skips_already_migrated_by_missing_category
 test_migration_refuses_ambiguous_underscore_title
 test_migration_reports_error_when_rm_fails
+test_base_template_advertises_the_feed
+test_feed_category_uses_display_form
 
 pass_fail_summary

@@ -8,7 +8,25 @@ The answer is: I think? Yeah.
 
 ## installation
 
-Check out this repo and run `make setup`. The `config` file doesn’t actually do anything yet. But if you have files in the `posts/` directory you’re good to go. See below for post file format. It’s super fragile and won’t work unless it’s exactly as specified. Just run `make` and get excited!
+Check out this repo and run `make setup`. See `## config` below for what the `config` file does. If you have files in the `posts/` directory you’re good to go. See below for post file format. It’s super fragile and won’t work unless it’s exactly as specified. Just run `make` and get excited!
+
+## config
+
+Two keys, both optional:
+
+	name=My Weblog
+	url=https://example.com
+
+`name=` goes in the title tags — the front page gets `My Weblog`, a post page gets
+`Post Title - My Weblog`. Unset, it falls back to `Grampa`.
+
+`url=` is the absolute address of your site. Setting it turns on an RSS feed at
+`/rss.xml`; leaving it out means no feed gets built, and no error either. It has to be
+absolute because a feed reader has no page to resolve a relative link against. A trailing
+slash is fine, it gets stripped.
+
+Blank lines and lines starting with `#` are ignored, and if you set a key twice the last
+one wins.
 
 ## post format
 
@@ -51,9 +69,26 @@ The contents of the post _must_ be in this format:
 
 If you put `Markdown.pl` from (this zip file)[https://daringfireball.net/projects/markdown/] in the root directory then every body will be run through it.
 
+## rss
+
+Set `url=` in your config and you get an RSS 2.0 feed at `/rss.xml` — the ten newest posts,
+full bodies, same window as the front page.
+
+Every page advertises it, so browsers and readers can find it on their own. If you set up
+grampa before the feed existed, your `templates/base.txt` won’t have that line, since
+`make setup` never overwrites a template you already have. Add it inside `<head>`:
+
+	<link rel="alternate" type="application/rss+xml" title="RSS" href="/rss.xml">
+
+**If you’re upgrading, re-run `make setup`.** It copies the two new feed templates into
+`templates/` and won’t touch anything you already have. Without them the build has nothing
+to render the feed from.
+
+The link tag is there whether or not you’ve set `url=`, so a site with no feed advertises
+one that 404s. Set `url=`, or delete the line.
+
 ## things i still need to do
 
-1. Atom feed
 1. Better deployment examples
 1. Location for all static files
 
