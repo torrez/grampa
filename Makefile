@@ -299,15 +299,22 @@ digits_to_plus = $(subst 0,+,$(subst 1,+,$(subst 2,+,$(subst 3,+,$(subst 4,+,$(s
 
 #
 # A year of one to five digits. The upper bound is not
-# decoration: date -v accepts absurdly long years up to
-# about eleven digits and then starts rejecting them, so
-# "all digits" alone would clear 999999999999-01-02, never
-# send it to date, and publish /999999999999/01/02/x.html
-# with an empty posted-on line -- exactly the silently wrong
-# output this check exists to stop, reintroduced by the
-# optimisation meant to make it cheap. Five digits keeps
-# 99999 building without a fork; anything longer becomes a
-# suspect and gets date's opinion, which is right either way.
+# decoration: date -v accepts enormous years and then stops,
+# so "all digits" alone would clear 999999999999-01-02,
+# never send it to date, and publish
+# /999999999999/01/02/x.html with an empty posted-on line --
+# exactly the silently wrong output this check exists to
+# stop, reintroduced by the optimisation meant to make it
+# cheap.
+#
+# Where date stops is a ceiling on the year's VALUE, not on
+# its digit count: 100000000000 is accepted and
+# 999999999999 is not, both twelve digits, the boundary
+# being the 64-bit time_t year limit around 2.92e11. Which
+# is the reason not to try to be clever here. Five digits
+# keeps 99999 building without a fork; everything longer
+# becomes a suspect and gets date's opinion, which is right
+# either way and needs no knowledge of where the cliff is.
 #
 YEAR_SHAPES := + ++ +++ ++++ +++++
 

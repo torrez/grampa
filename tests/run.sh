@@ -1877,13 +1877,18 @@ EOF
 }
 
 #
-# date -v accepts absurdly long years up to about eleven
-# digits and rejects them past that, so a prefilter that
-# checks "all digits" without checking length clears this
-# name, never sends it to date, and publishes
-# /999999999999/01/02/x.html with an empty posted-on line.
-# Found at the plan review against exactly that prefilter.
-# This is the guard on YEAR_SHAPES upper bound.
+# date -v accepts enormous years and then stops, so a
+# prefilter that checks "all digits" without bounding the
+# length clears this name, never sends it to date, and
+# publishes /999999999999/01/02/x.html with an empty
+# posted-on line. Found at the plan review against exactly
+# that prefilter. This is the guard on YEAR_SHAPES upper
+# bound.
+#
+# Note the cliff is a bound on the year's VALUE, not its
+# digit count -- 100000000000 is accepted and 999999999999
+# is not, both twelve digits -- so this asserts on a name
+# date really does reject rather than on a digit count.
 #
 test_absurdly_long_year_is_rejected() {
 	sandbox absurdly_long_year_is_rejected
@@ -1950,6 +1955,32 @@ EOF
 	assert_grep 'build/2026/01/31/jan.html' 'JAN THIRTYONE BODY'
 	assert_grep 'build/2026/04/30/apr.html' 'APR THIRTY BODY'
 	assert_grep 'build/2028/02/29/leap.html' 'LEAP DAY BODY'
+}
+
+#
+# The Makefile comment above the date check says it must
+# stay below CHECKED_POST_NAMES, because its $(shell)
+# interpolates filenames unquoted and a name carrying $( or
+# a backtick executes during the parse. Nothing enforced
+# that. Found by the Task 2 review: with the two checks
+# swapped, all eleven other character and date tests still
+# passed, because each of them uses a name that is bad in
+# exactly one way and so never observes which check fires.
+#
+# This name is bad in both ways at once. Correct order says
+# "illegal character"; swapped order says "no such calendar
+# date". No live payload needed to pin it.
+#
+test_character_error_precedes_the_date_error() {
+	sandbox character_error_precedes_the_date_error
+	add_post '2026-02-30-ho!me_x.txt' <<'EOF'
+title: Both Wrong
+-----------------------------------
+<p>BOTH WRONG BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'illegal character'
+	assert_out_not_grep 'no such calendar date'
 }
 
 #
@@ -2080,5 +2111,6 @@ test_non_leap_february_29_is_rejected
 test_absurdly_long_year_is_rejected
 test_unpadded_date_still_builds
 test_month_end_dates_still_build
+test_character_error_precedes_the_date_error
 
 pass_fail_summary
