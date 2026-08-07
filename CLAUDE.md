@@ -3,7 +3,7 @@
 ## What this is
 
 Grampa is a static blog generator written entirely as a GNU Makefile driving standard
-Unix tools (`awk`, `sed`, `split`, `cat`, `date`, `tail`). There is no language runtime, no
+Unix tools (`awk`, `sed`, `cat`, `date`, `tail`). There is no language runtime, no
 package manager, and no dependencies to install. The Makefile *is* the program — if a
 change can't be expressed in make + awk + coreutils, it doesn't belong here.
 
@@ -141,7 +141,7 @@ copied through as-is (HTML), unless `Markdown.pl` is present.
 
 ```
 posts/2026-08-06-home_first-post.txt
-  └─ split + (optional) Markdown.pl on the body only → work/2026-08-06-home_first-post.staged
+  └─ awk split + (optional) Markdown.pl on the body only → work/2026-08-06-home_first-post.staged
         ├─ awk + templates/post.txt        → work/2026-08-06-home_first-post.tmp   (a post fragment)
         │     ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
         │     └─ cat 10 newest             → work/index.tmp
@@ -254,12 +254,12 @@ the four `test_placeholders_*` tests.
 
 ### awk programs
 
-Four awk programs live in `define` blocks (`RENDER_POST`, `RENDER_ITEM`, `WRAP_IN_BASE`,
-`WRAP_IN_CHANNEL`) that are `export`ed and invoked as `awk "$$RENDER_POST"`. They share
-`fill()` by interpolating `$(FILL_FN)`. Passing the program through the environment rather
-than inlining it means awk source doesn't have to survive shell quoting, and it avoids the
-`\`-continuation-per-line style the rest of a Makefile forces. Note that awk's `$0` is still
-`$$0` inside a `define`.
+Five awk programs live in `define` blocks (`RENDER_POST`, `RENDER_ITEM`, `WRAP_IN_BASE`,
+`WRAP_IN_CHANNEL`, `SPLIT_STAGED`) that are `export`ed and invoked as `awk "$$RENDER_POST"`.
+The first four share `fill()` by interpolating `$(FILL_FN)`. Passing the program through the
+environment rather than inlining it means awk source doesn't have to survive shell quoting,
+and it avoids the `\`-continuation-per-line style the rest of a Makefile forces. Note that
+awk's `$0` is still `$$0` inside a `define`.
 
 `RENDER_ITEM` is `RENDER_POST`'s counterpart for `templates/rss-item.txt`, and
 `WRAP_IN_CHANNEL` is `WRAP_IN_BASE`'s for `templates/rss.txt`. `RENDER_POST` and
@@ -271,6 +271,17 @@ with an escape flag: HTML pages must not escape a post's body or title and the f
 a general templating engine is deliberately deferred until there is more than this one
 duplication to design it from. `xml_escape()` (`$(XML_ESCAPE_FN)`) does the escaping and is
 interpolated into `RENDER_ITEM` and `WRAP_IN_CHANNEL` only — `fill()` itself never escapes.
+
+`SPLIT_STAGED` is the odd one out twice over: it is the only program that writes files rather
+than stdout, taking `-v head=` and `-v body=` and routing each line of a post to one or the
+other, and the only one that neither fills a template nor is passed one. It recognises the
+same delimiter as `PARSE_FRONT_MATTER` and shares no code with it — that one accumulates a
+title and a body into variables for a renderer, this one keeps no state but `seen` — and
+factoring the two together would couple the staging step to the renderers to save one regex.
+Only the *first* delimiter splits; later ones are body text. Its `END` block is load-bearing
+rather than tidy: awk creates a redirect's file on first write, so without it a post with no
+body would leave no body file for `Markdown.pl` to be handed. It replaced `split -p` and a
+pair of globs, which is the subject of the two closed glob items in `docs/backlog.md`.
 
 The blog name reaches awk the same way: `BLOG_NAME` is `export`ed by make and each recipe
 composes `PAGE_TITLE` in the environment, which `WRAP_IN_BASE` reads via

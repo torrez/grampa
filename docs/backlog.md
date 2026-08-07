@@ -77,7 +77,8 @@ then closed by clearing the scratch namespace at the head of the chain too. Guar
 
 Note the fix catches a failing *step*, not a failing stage of a pipeline — `cat … | tail`
 still reports `tail`'s status, so the unmatched-glob half of the last Minor item below is
-still open.
+still open. **No longer true as of the awk staging split**: there is no pipe left in the
+chain, and the two glob items below are closed.
 
 `Makefile:596-603` — **verified**
 
@@ -456,6 +457,49 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   suite is unchanged at 179 passing. The lazy-`config` rationale does not apply, and
   `2>/dev/null` already covers a missing `posts/`.
 
+- **The `split` cleanup glob stops at `az` — DONE**, together with the same-date sibling item
+  below and the masked-`cat` half of this one. `split` and both globs are gone: `SPLIT_STAGED`
+  makes one awk pass over the post and writes `work/<stem>.head` and `work/<stem>.body` by
+  exact name. No chunks means no ceiling, exact names mean no overreach, and no pipe means the
+  `&&` chain finally covers every stage of itself — the three defects were one mechanism's
+  three consequences, which is why they closed together rather than one at a time.
+
+  Guarded by `test_many_delimiter_lines_stage_completely` (30 delimiters, five past the old
+  ceiling), `test_same_date_sibling_slug_does_not_collide`,
+  `test_post_without_delimiter_stages_cleanly`, and
+  `test_delimiter_on_first_line_leaves_no_stray_delimiter`. All four were watched failing
+  first, each with its own message rather than merely as a count.
+
+  The fourth could not fail at all until the suite was fixed: `assert_not_grep` ran
+  `grep -qF "$2"`, and a 35-hyphen pattern is read by grep as an unrecognized long option —
+  exit 2, which the helper's else-branch counted as a pass. It passed against the broken
+  build. All four grep helpers now pass `--`. An assertion that can only pass is worse than
+  no assertion, and this one was written *on purpose* to catch a hyphen.
+
+  Four behaviour changes, only the first of which was sought. (1) A delimiter matched
+  mid-line no longer splits a post: `split -p` matched anywhere in the line, `SPLIT_STAGED`
+  anchors at `^` the way `PARSE_FRONT_MATTER` always has, so staging and rendering now agree.
+  (2) A post whose delimiter is on line 1 loses a stray 35-hyphen line from its rendered body.
+  (3) An empty post file stops failing loudly and ships an empty page at exit 0 — a
+  loud-to-silent conversion, accepted only because the verbatim `cp` branch already did
+  exactly that, so the two branches now agree instead of disagreeing; making an empty post
+  fatal belongs to both branches at once and is not this change. (4) A post with no trailing
+  newline gains one byte in `.staged`; the page is byte-identical. Everything else is
+  byte-identical, `diff -r` over `work/` and `build/`.
+
+  One upgrade wrinkle: an install whose `work/` holds `.aa`/`.ab` chunks from a pre-change
+  *failed* run keeps them indefinitely. The new `rm -f` does not name them and nothing globs
+  them any more. They are inert; `make clean` clears them.
+
+  The head `rm -f` survives as hygiene rather than correctness, and the Makefile comment now
+  says so. Every scratch file is truncated before it is read — awk's `print >` on first write,
+  the `END` block's `printf` even when nothing else is written, and the shell's `>` before
+  `Markdown.pl` execs — so no stale byte can reach `$@`. Verified by neutering the `rm`:
+  the whole suite still passes. An earlier draft of that comment claimed the `rm` prevented a
+  stale `.mdbody` reaching the output, which review disproved before it shipped.
+
+  Original finding follows.
+
 - **The `split` cleanup glob stops at `az`** — `Makefile:621-626`, **read**. The masking is
   at least documented now, in the rule's own comment at `Makefile:612-614`. `$*.a[b-z]*` misses
   chunks past `az`, so a body containing more than 25 delimiter lines would silently
@@ -465,6 +509,29 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   status, so a `cat` that finds nothing to read is still masked and the build exits 0. Item
   1's `&&` catches a failing *step*, never a failing stage of a pipe. Closing this one needs
   the pipeline broken up (or `pipefail`, which is not POSIX `sh`).
+
+- **The staging branch's scratch glob can eat a same-date sibling's fragments — DONE**, with
+  the item above and by the same mechanism: `rm -f` now names three exact files, and
+  `work/x.head` and `work/x.ab.head` are distinct names rather than two matches of one
+  pattern. Guarded by `test_same_date_sibling_slug_does_not_collide`, which must assert on the
+  **first** build — a second `make` exits 0, because the surviving post's files are up to date
+  and its `rm` never runs again, so a test that built twice could not fail. Original finding
+  follows.
+
+- **NEW — a slug containing shell glob characters silently stages a same-date sibling's
+  content** — **verified**, and **pre-existing**: found while reviewing the awk staging split,
+  reproduced identically against the commit before it. `posts/2026-01-02-home_a[b]c.txt`
+  beside `posts/2026-01-02-home_abc.txt` builds at exit 0, and `/2026/01/02/a[b]c.html` ships
+  the *sibling's* title and body. The cause is not the staging step's own names — those are
+  exact now — but the unquoted `$<` in the recipe, which the shell glob-expands onto the
+  neighbour before awk ever sees it. `%.tmp` and `%.rssitem` interpolate stems unquoted the
+  same way, so quoting this one rule would half-fix it and read as if it were closed.
+
+  Same family as the apostrophe-in-slug hazard the staging spec settled as out of scope, with
+  one difference that earns it a bullet: the apostrophe fails **loudly**, with a shell syntax
+  error, and this one is silently wrong output. Degenerate input either way — a slug with
+  brackets in it produces `/2026/01/02/a[b]c.html` — but "degenerate" is an argument for
+  rejecting the filename in `check_post_name`, not for publishing the wrong post.
 
 - **The staging branch's scratch glob can eat a same-date sibling's fragments** —
   `Makefile`, the `%.staged` rule, **verified**. `rm -f $(WORK_DIR)$*.a[a-z]*` over-matches
@@ -613,12 +680,18 @@ staleness to actually work as advice.
 
 **What is left, in rough order of how much a reader would care:**
 
-1. **The two staging-branch glob items** — the `az` ceiling and the same-date sibling
-   over-match. They want doing together, and they need the `cat … | tail` pipeline broken up
-   rather than a one-liner, because `&&` catches a failing *step* and never a failing stage
-   of a pipe. A body with more than 25 delimiter lines truncates. This and item 5 are the
-   only two remaining bullets that produce silently wrong output on a strange post, and it
-   is the only one of the two nobody has decided to live with.
+1. ~~**The two staging-branch glob items** — the `az` ceiling and the same-date sibling
+   over-match.~~ Done, in one commit, and they did want doing together. The prediction that
+   they needed the pipeline broken up was right about the diagnosis and wrong about the size:
+   replacing `split` with an awk pass removed the pipeline rather than restructuring it, and
+   took the delimiter-less post's masked `cat` failure with it. What it grew instead was a
+   test-suite defect — the assertion written to catch a 35-hyphen line could not fail, because
+   grep read the pattern as an option — which is this list's recurring lesson showing up in
+   the tests for once rather than in the code.
+
+   That leaves item 5 as the only remaining bullet producing silently wrong output on a
+   strange post, plus the newly found glob-character slug above, which is worse than item 5 in
+   kind and rarer in practice.
 2. **The behaviour half of item 8** — the feed's post-deletion self-heal. Real design, shares
    its shape with the deleted-post and deleted-category gotchas, and `make clean && make` is
    already the documented answer for all three.

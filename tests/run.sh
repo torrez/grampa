@@ -400,13 +400,23 @@ EOF
 }
 
 #
-# A failed staging run leaves its split chunks in work/.
-# The next build re-splits into the same namespace, but
-# the reassembly collects chunks by glob -- so a post that
-# now splits into fewer chunks than it did before would
-# sweep the stale ones back in and republish text the
-# author had deleted. Recovering from a Markdown failure
-# must not resurrect content.
+# Recovering from a Markdown failure must not resurrect
+# content: a failed staging run leaves scratch files in
+# work/, and the next build must not fold any of them into
+# the output.
+#
+# This test is now weaker than it was, and the honest
+# version of its history is worth keeping. It was written
+# against `split` and a glob: a failed run left chunks
+# behind, the reassembly globbed up whatever it found, and a
+# post that later split into fewer chunks than the failed
+# run swept the stale ones back in and republished deleted
+# text. Exact filenames cannot do that -- every scratch file
+# is truncated before it is read -- so this passes even with
+# the head rm -f removed, which was checked. What it covers
+# now is the end-to-end property rather than the mechanism,
+# and that is still worth a test: whatever the staging step
+# is made of, deleted text must not come back.
 #
 test_failed_markdown_leaves_no_stale_chunks() {
 	sandbox markdown_stale_chunks
@@ -414,7 +424,9 @@ test_failed_markdown_leaves_no_stale_chunks() {
 #!/bin/sh
 exit 1
 EOF
-	# Inner delimiter lines make split produce three chunks.
+	# The second delimiter gives the post a section the
+	# author can then delete, which is what the rebuild
+	# below must not bring back.
 	add_post 2026-01-01-home_t.txt <<'EOF'
 title: T
 -----------------------------------
@@ -448,7 +460,7 @@ EOF
 # Makefile, and the part that writes scratch files -- has
 # never been exercised in parallel by this suite. Every
 # intermediate the branch creates is named after the post
-# ($(WORK_DIR)$*.aa, .body, .mdbody) precisely so two posts
+# ($(WORK_DIR)$*.head, .body, .mdbody) precisely so two posts
 # cannot clobber each other; nothing checked that. Six
 # posts is enough for -j8 to overlap them.
 #
