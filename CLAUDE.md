@@ -3,7 +3,7 @@
 ## What this is
 
 Grampa is a static blog generator written entirely as a GNU Makefile driving standard
-Unix tools (`awk`, `split`, `cat`, `date`, `tail`). There is no language runtime, no
+Unix tools (`awk`, `sed`, `split`, `cat`, `date`, `tail`). There is no language runtime, no
 package manager, and no dependencies to install. The Makefile *is* the program — if a
 change can't be expressed in make + awk + coreutils, it doesn't belong here.
 
@@ -13,7 +13,7 @@ change can't be expressed in make + awk + coreutils, it doesn't belong here.
 make setup     # one-time: create build/ work/ posts/ templates/, copy templates + config + deploy.sh
 make           # incremental build into build/  (= `make config build`)
 make clean     # wipe build/ and work/
-make build     # build, skipping the config check
+make build     # the build half of the default target (see below — it no longer skips anything)
 make deploy    # runs ./deploy.sh build/
 make test      # run tests/run.sh in throwaway sandboxes
 ```
@@ -23,22 +23,42 @@ downstream of a touched template. `make -j` is safe. Use `make clean` when you w
 sure nothing stale survives — e.g. after deleting a post, whose old HTML is not tracked by
 anything and will otherwise linger in `build/`.
 
+`make build` is what `make` runs after `config`; it is not a way to skip the config check.
+`config` is a prerequisite of every page rule, so `make build` recreates a missing `config`
+just as `make` does. The two are equivalent in every reachable state.
+
 `make` must be run from the repo root. The awk scripts read templates via
 `getline < "templates/base.txt"` — a relative path — so any other working directory means
-the file isn't found. `getline` on a missing file returns `-1`, which is truthy, so an
-unguarded `while (getline < "…")` loop spins forever rather than erroring: it hangs, it
-does not produce pages with empty bodies. `RENDER_ITEM` and `WRAP_IN_CHANNEL` guard the
-read with `> 0`; `RENDER_POST` and `WRAP_IN_BASE` do not yet.
+the file isn't found.
+
+`getline` on a file it cannot read returns `-1`, which is truthy, so an unguarded
+`while (getline < "…")` loop spins forever rather than erroring: it hangs, it does not
+produce pages with empty bodies. `RENDER_ITEM` and `WRAP_IN_CHANNEL` guard the read with
+`> 0`; `RENDER_POST` and `WRAP_IN_BASE` do not yet.
+
+The reachable path to that hang is a template that is **present but unreadable** — one
+`chmod 000`, or a careless `cp`/`rsync` that drops the mode. Make sees the prerequisite
+satisfied, awk runs, and the build spins (`WRAP_IN_BASE` also appends the stale `$0` each
+iteration, so it eats memory while it spins). Running from the wrong directory does *not*
+reach it: the template prerequisite is a relative path too, so make errors on the missing
+file before awk is ever invoked. Both are verified.
 
 ## Layout
 
-Only `Makefile`, `README.md`, and `.source/` are tracked. Everything the build touches
-is gitignored and created by `make setup`:
+The program and its documentation are tracked; everything the build touches is gitignored
+and created by `make setup`. `git ls-files` is the authority — as of this writing it is the
+Makefile, `.source/`, `README.md`, `CLAUDE.md`, `.gitignore`, `tests/`, `tools/`, and
+`docs/`:
 
 | Path | Tracked | Role |
 | --- | --- | --- |
+| `Makefile` | yes | The program |
 | `.source/` | yes | Pristine templates copied into place by `make setup` |
 | `.source/splitter.txt` | yes | The `-----------------------------------` front-matter delimiter |
+| `README.md`, `CLAUDE.md` | yes | Docs for humans and for Claude |
+| `tests/run.sh` | yes | The suite, run by `make test` in throwaway sandboxes |
+| `tools/` | yes | One-off maintenance scripts (`migrate-categories.sh`) |
+| `docs/` | yes | Specs, plans, and `backlog.md` — the standing review findings |
 | `posts/` | no | Source posts, one `.txt` per post |
 | `templates/` | no | Working templates (edit these, not `.source/`) |
 | `build/` | no | Publishable output, and nothing else — deploy this verbatim |
@@ -98,14 +118,14 @@ copied through as-is (HTML), unless `Markdown.pl` is present.
 ## Build pipeline
 
 ```
-posts/2026-08-06-first-post.txt
-  └─ split + (optional) Markdown.pl on the body only → work/2026-08-06-first-post.staged
-        ├─ awk + templates/post.txt        → work/2026-08-06-first-post.tmp   (a post fragment)
+posts/2026-08-06-home_first-post.txt
+  └─ split + (optional) Markdown.pl on the body only → work/2026-08-06-home_first-post.staged
+        ├─ awk + templates/post.txt        → work/2026-08-06-home_first-post.tmp   (a post fragment)
         │     ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
-        │     └─ cat 10 newest              → work/index.tmp
+        │     └─ cat 10 newest             → work/index.tmp
         │           └─ awk + templates/base.txt → build/index.html
-        └─ awk + templates/rss-item.txt    → work/2026-08-06-first-post.rssitem  (only when url= is set)
-              └─ cat 10 newest              → work/rss.tmp
+        └─ awk + templates/rss-item.txt    → work/2026-08-06-home_first-post.rssitem  (only when url= is set)
+              └─ cat 10 newest             → work/rss.tmp
                     └─ awk + templates/rss.txt → build/rss.xml
 ```
 
@@ -125,10 +145,12 @@ explicit target `work/rss.tmp`, and make only reaps files it never sees mentione
 them in `.SECONDARY` anyway would be actively harmful — see the comment above `.SECONDARY`
 in the Makefile.
 
-The `%.html` rule maps a page back to its fragment with `.SECONDEXPANSION`: the stem of
-`build/2026/08/06/first-post.html` is `2026/08/06/first-post`, and substituting slashes for
-hyphens names `work/2026-08-06-first-post.tmp`. That is what makes per-post incremental
-builds possible.
+The `%.html` rule names each page's own fragment as a prerequisite via `.SECONDEXPANSION`:
+the stem of `build/2026/08/06/first-post.html` is `2026/08/06/first-post`, and
+`$$(call tmp_for_page,$$*)` resolves that to `work/2026-08-06-home_first-post.tmp`. One page
+depends on one fragment, which is what makes per-post incremental builds possible. Why that
+resolution is a search rather than a substitution is covered below, after the category
+pages.
 
 Category pages are a third consumer of the same fragments:
 
@@ -144,7 +166,9 @@ intermediate `.tmp` the way the index does. Its prerequisites are exact, because
 `CATEGORY_SLUGS` is derived from filenames at parse time.
 
 Because the category is in the filename but not the URL, a page cannot be mapped back to its
-fragment by turning slashes into hyphens. `tmp_for_page` searches `TMP_FILES` instead, which
+fragment by turning slashes into hyphens — the stem `2026/08/06/first-post` has no way to
+know the fragment is `2026-08-06-home_first-post.tmp`. That substitution *was* the mechanism
+before categories moved into filenames. `tmp_for_page` searches `TMP_FILES` instead, which
 is O(posts) per target and so O(posts²) per build — fine at blog scale, fixable with
 `$(eval)`-generated explicit rules if it ever drags.
 
@@ -153,9 +177,19 @@ when a target's prerequisites are satisfiable under more than one pattern rule, 
 the first such rule in makefile order, not the shortest stem. `tmp_for_page` returns empty
 for a category stem (there is no single fragment a category page maps to), and an empty
 prerequisite list is trivially satisfiable — so if `%.html` appeared first, it would claim
-`build/category/home.html` and emit a nested `base.txt`-wrapped document with the wrong
-title. Verified empirically in both orders. Reordering these two rules breaks the build
-silently, so keep `build/category/%.html` first.
+`build/category/home.html`. Verified empirically in both orders.
+
+That claim used to produce a nested `base.txt`-wrapped document with the wrong title and no
+error. It no longer does: the unknown-page guard added in `d96a855` fires first, and the
+wrong order now fails loudly —
+
+```
+build/category/home.html: no post in posts/ builds this page
+make: *** [build/category/home.html] Error 1
+```
+
+The ordering constraint is still real — category pages will not build in the wrong order —
+but the failure is caught, not silent. Keep `build/category/%.html` first.
 
 `build/rss.xml` is a fourth consumer, gated on `SITE_URL`: `FEED_PAGES` is
 `$(BUILD_DIR)rss.xml` when `url=` is set in config and empty otherwise, so with no `url=`
@@ -299,6 +333,10 @@ framing will comment on prose and miss the build breaking. Tell it which decisio
 already settled with the user so it doesn't relitigate them, and tell it to prove claims by
 running commands in a sandbox — copying `Makefile` and `.source/` into a scratch directory
 the way `tests/run.sh` does — rather than asserting from inspection.
+
+To run the suite itself from a scratch copy, copy `tools/` too: five tests shell out to
+`./tools/migrate-categories.sh`, and without it the suite reports 18 failures that are
+nothing to do with the change under review.
 
 Ask for findings split into blocking / recommended / optional, plus a list of what it
 actively verified. The verified list is worth as much as the findings: it stops the same

@@ -1,15 +1,62 @@
 # Backlog
 
-Findings from a full-repo review on 2026-08-06, run after the RSS feed landed
-(`2c0c57d`). Nothing here is a regression from that branch unless noted — most of it
-predates both features.
+Findings from full-repo reviews. Two sweeps so far, both on 2026-08-06:
+
+- **First sweep**, after the RSS feed landed (`2c0c57d`).
+- **Second sweep**, after the Markdown failure fix (`b0971a2`). Every item from the first
+  sweep was re-checked. New items are numbered from 6.
+
+Statuses below are current as of **this commit**, not as of the sweep: the sweep's CLAUDE.md
+findings were fixed in the same commit that records them, so several items read "CLAUDE.md
+FIXED, Makefile comment STILL OPEN". Line anchors into `CLAUDE.md` are post-fix; anchors into
+`Makefile` are as of `b0971a2`, which left it untouched.
+
+Nothing here is a regression from a recent branch unless noted — most of it predates both
+the feed and the category features.
 
 Every item is marked with how it was established:
 
 - **verified** — reproduced by running the build in a sandbox
 - **read** — established by reading the code, not executed
 
-Nothing found endangers `posts/`. There were no critical findings.
+Nothing found endangers `posts/`. There have been no critical or blocking findings in
+either sweep.
+
+---
+
+## Is the spirit of the tool intact?
+
+**Yes.** Judged over the category pages, the RSS feed, the staging split, and the Markdown
+failure fix, the Makefile has grown by symmetry rather than by abstraction. Every new piece
+is a visible twin of an existing one: `RENDER_ITEM`/`RENDER_POST`,
+`WRAP_IN_CHANNEL`/`WRAP_IN_BASE`, `work/rss.tmp`/`work/index.tmp`,
+`RECENT_ITEMS`/`RECENT_FILES`, `rfc822_from_filename`/`date_from_filename`. Someone who
+could read the index pipeline before the feed landed can read the feed pipeline by analogy
+in one pass. The single factoring that did happen — `PARSE_FRONT_MATTER`, shared by the two
+renderers — removes real duplication without becoming an engine, and the refusal to merge
+rendering and escaping into one flagged generic program is written down as a deliberate
+deferral rather than left for the next contributor to "improve". Complexity has tracked
+capability roughly one-to-one. Nothing has drifted toward a framework.
+
+The operational claims hold under execution, not just on paper: `build/` holds only `.html`
+and `rss.xml`; `work/` holds only `.tmp`/`.staged`/`.rssitem` even under `-j8` with a
+Markdown stub and the feed on; a no-op rebuild is quiet; editing `url=` rebuilds only feed
+items; editing one category's post does not rebuild another category's page. The
+incremental story is true and the tracked/untracked split is clean in the tree.
+
+**The drift was in `CLAUDE.md`, not in the code.** At the time of the sweep it was 312 lines
+— nearly half the length of the program it describes — and was carrying four stale or
+contradictory claims (items 4, 6, and two Minor bullets). A document whose stated identity is
+"checkable against the code" was accumulating debt faster than the code was. That pass has
+since been made: the CLAUDE.md halves of those items are marked fixed below, in the same
+commit that records this sweep. What remains of items 4 and 6 is the same two claims still
+sitting in the Makefile's own comments.
+
+**Subtractions worth making:** delete `.source/templates/index.txt` (item 7). Nothing in the Makefile itself was
+found removable — every rule, helper, and comment block is load-bearing. `tests/run.sh` is
+longer than the program at 1108 lines, but it is plain bash with no framework and it buys
+the 149 assertions that make claims like these checkable; that is the tool's spirit, not a
+violation of it.
 
 ---
 
@@ -57,9 +104,13 @@ never have one (see item 5).
 failing step fails the recipe and `.DELETE_ON_ERROR` removes the partial file.
 **Cost:** a few characters per line. No happy-path behaviour change.
 
-### 2. Nothing guards the feed's post-deletion self-heal
+### 2. Nothing guards the feed's post-deletion self-heal — STILL OPEN
 
 `tests/run.sh` — **verified** (the behaviour works; the gap is that no test covers it)
+
+Re-verified in the second sweep: 12 posts, build (10 items, Post 02 absent), `rm` the
+newest, `sleep 1`, rebuild → 10 items, Post 02 pulled in, Post 12 gone. And
+`grep -c 'rm posts/' tests/run.sh` → 0 — the suite still never deletes a post.
 
 `RSSITEM_FILES` is deliberately kept out of `.SECONDARY` (`Makefile:44-59`) so that
 deleting a post rebuilds the newly-in-window `.rssitem`, re-cats `rss.tmp`, and lets the
@@ -76,9 +127,18 @@ breaks the self-heal.
 and the newly-in-window title present.
 **Cost:** ~15 lines and one `sleep`.
 
-### 3. `RENDER_POST` and `WRAP_IN_BASE` hang on an unreadable template
+### 3. `RENDER_POST` and `WRAP_IN_BASE` hang on an unreadable template — STILL OPEN
 
-`Makefile` (both `define` blocks) and `CLAUDE.md:26-31` — **verified**
+`Makefile:350`, `Makefile:417`, and `CLAUDE.md:34-44` — **verified**
+
+Re-verified in the second sweep: `chmod 000 templates/base.txt; make` was still running
+after 5 seconds and had to be killed. `RENDER_ITEM` and `WRAP_IN_CHANNEL` remain guarded;
+these two do not.
+
+The documentation half is now fixed: CLAUDE.md describes the unreadable-template path as
+the reachable one and says explicitly that the wrong-working-directory path cannot reach the
+hang, because make errors on the relative template prerequisite first. **The four-line awk
+fix itself is still open.**
 
 `getline` on a file it cannot read returns `-1`, which is truthy, so an unguarded
 `while (getline < "…")` loop never terminates. `RENDER_ITEM` and `WRAP_IN_CHANNEL` guard
@@ -106,9 +166,18 @@ rewriting that CLAUDE.md paragraph to describe the real path.
 **Cost:** minimal, but it touches two working programs on the critical path for every page,
 so it wants the full suite run behind it.
 
-### 4. Two documents claim the rule-order breakage is silent. It is not — an earlier fix made it loud
+### 4. Two documents claim the rule-order breakage is silent. It is not — an earlier fix made it loud — CLAUDE.md FIXED, Makefile comment STILL OPEN
 
-`Makefile:516-524` and `CLAUDE.md:151-158` — **verified**
+`Makefile:506-524` — **verified**, still open. `CLAUDE.md` — fixed.
+
+Re-verified in the second sweep after `b0971a2`: swapping the two rules in a sandbox gives
+`build/category/home.html: no post in posts/ builds this page` and `make: *** Error 1`.
+Loud.
+
+The CLAUDE.md half is now corrected — it says the ordering is still required but the
+breakage is caught by the unknown-page guard, and quotes the real error. The comment block
+above `$(BUILD_DIR)category/%.html` in the Makefile still says "No error, just a wrong page"
+and "breaks the build silently". Same one-paragraph fix, not yet made.
 
 Both warn at length that defining `build/category/%.html` below the `%.html` rule "breaks
 the build silently" and emits a wrong page with no error. Moving the rule and building
@@ -151,9 +220,47 @@ only passes once item 1 is fixed, so the two verify each other.
 **Cost:** ~30 lines in `run.sh`. No new dependency, and a bash stub is in the same spirit as
 the rest of the tool.
 
+### 6. The slash-for-hyphen fragment mapping is documented in two places and is dead in both — CLAUDE.md FIXED, Makefile comment STILL OPEN
+
+`CLAUDE.md` — fixed. The comment block above `$(BUILD_DIR)%.html` in the Makefile
+(~line 534) — **read**, still open.
+
+CLAUDE.md said the `%.html` stem's slashes are substituted to hyphens to name the `.tmp`
+file, then twenty lines later correctly said that is impossible and `tmp_for_page` searches
+instead. The substitution died when categories moved into filenames —
+`work/2026-08-06-home_first-post.tmp` cannot be named from the stem
+`2026/08/06/first-post` — and the rule uses `$$(call tmp_for_page,$$*)`.
+
+Fixed in CLAUDE.md: the paragraph now describes `tmp_for_page` and forward-references the
+explanation below the category section, which in turn now says what the mechanism used to
+be. The pipeline diagrams also used `posts/2026-08-06-first-post.txt` — a filename with no
+`_` and no category, which today's `check_post_name` rejects at parse time with an
+`$(error)`, so the documented example input could not build. Now `…-home_first-post.txt`.
+
+**Still open:** the Makefile's own comment above the `%.html` rule repeats the dead claim —
+"turning the slashes back into hyphens names the one .tmp file this page is built from".
+**Fix:** one sentence, in the same pass as item 4's Makefile half. **Cost:** prose only.
+
+### 7. Delete `.source/templates/index.txt` — NEW
+
+`.source/templates/index.txt` and `CLAUDE.md:312` — **verified** (0 bytes; `make setup`
+copies it into `templates/` in every install; nothing in the Makefile or the suite
+references it)
+
+It is the one tracked file in the repo with no function — a stub for a feature the index
+does not need, since `index.html` is fragments wrapped in `base.txt`. The cheapest available
+subtraction.
+
+**Fix:** `git rm .source/templates/index.txt`, drop the CLAUDE.md line. Existing installs
+keep their already-copied stub harmlessly.
+**Cost:** one commit, two lines of doc.
+
 ---
 
 ## Minor
+
+Every bullet below was re-checked in the second sweep and **all remain open**. Line anchors
+are current as of `b0971a2`. New bullets are marked NEW.
 
 - **`all` and `clean` are not `.PHONY`** — `Makefile:482,488`, **verified**. Only `build`,
   `setup`, `deploy`, and `test` are declared. `touch clean && make clean` prints
@@ -180,22 +287,20 @@ the rest of the tool.
   month and day at parse time, consistent with the checks already there (~6 lines of make),
   or this can stay garbage-in-garbage-out.
 
-- **CLAUDE.md's tracked-files claim is false** — `CLAUDE.md:35`, **verified**. It says only
-  `Makefile`, `README.md`, and `.source/` are tracked. `git ls-files` also shows
-  `CLAUDE.md`, `.gitignore`, `tests/`, `tools/`, and `docs/`. The layout table has no rows
-  for them either.
+- **CLAUDE.md's tracked-files claim is false — DONE**. The Layout section now names
+  `git ls-files` as the authority, and the table has rows for `Makefile`,
+  `README.md`/`CLAUDE.md`, `tests/`, `tools/`, and `docs/`.
 
-- **`make build` no longer skips anything** — `CLAUDE.md:16`, **verified**. `config` is a
-  prerequisite of every page rule, so `make build` recreates a deleted `config` anyway.
-  `make build` is equivalent to `make` in every reachable state; the comment describing it
-  as "skipping the config check" is stale.
+- **`make build` no longer skips anything — DONE**. The command list no longer claims it
+  skips the config check, and a short paragraph under it says why `make build` and `make`
+  are equivalent in every reachable state: `config` is a prerequisite of every page rule.
 
 - **README nits** — `README.md`, **verified**. Line 70's Markdown link is inside-out:
   `(this zip file)[https://…]`. Line 5 has "resonably". And the README never says
   `Markdown.pl` must be *executable* — a non-executable copy silently falls back to
   verbatim HTML, because the Makefile tests `[ -x ]`. CLAUDE.md gets this right.
 
-- **`make deploy` does not depend on `build`** — `Makefile:684-686`, **read**. So
+- **`make deploy` does not depend on `build`** — `Makefile:708-710`, **read**. So
   `make clean && make deploy` ships an empty directory. `deploy: all` would make it safe at
   the cost of an incremental no-op build. Arguably the current form is more honest about
   doing exactly what it says.
@@ -206,7 +311,8 @@ the rest of the tool.
   missing `posts/` — and removes a mid-build inconsistency window. Pure polish at blog
   scale.
 
-- **The `split` cleanup glob stops at `az`** — `Makefile:599`, **read**. `$*.a[b-z]*` misses
+- **The `split` cleanup glob stops at `az`** — `Makefile:621-626`, **read**. The masking is
+  at least documented now, in the rule's own comment at `Makefile:612-614`. `$*.a[b-z]*` misses
   chunks past `az`, so a body containing more than 25 delimiter lines would silently
   truncate. Also, a post with no delimiter at all leaves the glob unmatched and `cat` errors
   into the pipeline. This item originally predicted that fixing item 1 would make the second
@@ -234,6 +340,30 @@ the rest of the tool.
 
 - **`.source/splitter.txt` ends with a blank line** — **verified harmless**. Markdown-staged
   bodies gain a leading blank line that the verbatim branch does not have. Cosmetic.
+  Re-confirmed with `od -c`: 35 hyphens, `\n`, `\n`.
+
+- **NEW — `.gitignore` leaves `posts/` and `config` unanchored** — `.gitignore:2-3`,
+  **read**. `e4f912f` anchored `/templates/` precisely because an unanchored pattern matches
+  at any depth; `posts/` and `config` still match anywhere, so a future `tools/config` or a
+  nested `posts/` under `docs/` would silently vanish from git. Fix: `/posts/`, `/config`,
+  and while there `/build/`, `/work/`, `/deploy.sh`, `/Markdown.pl`. Cost: a few characters.
+
+- **NEW — CLAUDE.md's tool list omits `sed` — DONE**. `sed` is load-bearing in three places
+  (config parsing at `Makefile:116,140`, the `PAGE_TITLE` extraction at `Makefile:562`) and
+  is now listed in the opening sentence.
+
+- **NEW — a third stale Makefile comment, same family as items 4 and 6** —
+  `Makefile:376-378`, **read**. The `RENDER_ITEM` comment says the unguarded-`getline` trap
+  is unreachable because "the template is a prerequisite, so make stops first". True for a
+  *missing* template; false for the present-but-unreadable one that item 3 reproduces and
+  CLAUDE.md now documents. Should ride along with the items 4 and 6 comment pass.
+
+- **NEW — no test covers editing `templates/base.txt`** — `tests/run.sh`, **verified**
+  (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
+  `test_editing_post_template_rebuilds_fragments` guards the bare-dependency-line trap for
+  `post.txt`; the identical trap exists for `base.txt` in three rules (`%.html`,
+  `category/%.html`, `index.html`) and nothing guards it. Fix: ~10 lines mirroring the
+  existing test.
 
 ---
 
@@ -243,6 +373,44 @@ the rest of the tool.
    first and watched fail against the `;`-chained recipe, then passed against the `&&` one.
 2. **Item 3.** Two-minute fix, closes a verified reachable hang, and stops a trap that is
    one copy-paste from spreading into the next renderer.
-3. **Item 4, with the CLAUDE.md prose fixes from Minor.** Prose only, but documentation
-   truth is this repo's stated identity, and "breaks silently" is exactly the kind of claim
-   it has been burned by before.
+3. ~~**Items 4, 6, and the CLAUDE.md prose fixes from Minor, as one documentation pass.**~~
+   Done for CLAUDE.md. What remains of items 4 and 6 is two stale comment blocks in the
+   Makefile itself, saying the same two things the doc no longer says: "breaks the build
+   silently" above `build/category/%.html`, and the slash-for-hyphen fragment mapping above
+   `%.html`. Both are prose-only, and both should go in one commit.
+
+Item 2 stays the most likely regression in the repo and item 7 stays the cheapest
+subtraction; neither made the three only because item 3 is a live hang and the documentation
+was drifting faster than the code.
+
+---
+
+## What has been verified by running it
+
+Both sweeps ran in throwaway sandboxes built the way `tests/run.sh` builds them — `Makefile`
+and `.source/` copied into a scratch directory, `make setup`, posts written by hand. The
+real repo was never built in.
+
+Second sweep, all **verified** by execution:
+
+1. Full suite from a copied tree: **149 passed, 0 failed**.
+2. `chmod 000 templates/base.txt` hangs the build — still spinning at 5s, killed (item 3).
+3. `touch clean && make clean` is a no-op; `build/` and `work/` survive (Minor `.PHONY`).
+4. Swapping the two `%.html` rules fails **loudly** via the unknown-page guard (item 4).
+5. Feed self-heal: 12 posts → delete the newest → rebuild → 10 items, next-oldest pulled in
+   (item 2's behaviour; the gap is coverage only).
+6. `{{permalink}}` in a post body expands to the real permalink (Minor).
+7. A body-only `title:` line becomes the `<title>` while `<h4>` renders empty (Minor).
+8. `2026-13-40-…` builds with exit 0, `usage: date` noise, and empty date fields (Minor).
+9. `make -j8` with a Markdown stub and `url=` set: clean exit, transformed body in both the
+   HTML and `rss.xml`, no stray intermediates; a non-executable `Markdown.pl` falls back to
+   verbatim (the Markdown test-gap bullet's behaviours).
+10. `rm config; make build` recreates `config` and exits 0 (the stale `make build` bullet).
+11. `.source/templates/index.txt` is 0 bytes and unreferenced; `splitter.txt` ends in a
+    blank line (`od -c`).
+12. `git ls-files` against `CLAUDE.md:35`; `grep` confirms no test deletes a post or touches
+    `templates/base.txt`.
+
+Taken from reading or the first sweep, **not** re-executed in the second: the same-date
+sibling-glob over-match, the first-ever-`make`-with-`url=` gotcha, `deploy`'s missing
+prerequisite, and `POST_NAMES`' re-expansion cost.
