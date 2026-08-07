@@ -1693,6 +1693,98 @@ EOF
 
 #
 # ---------------------------------------------------
+# A post filename is the only metadata store, so a
+# degenerate one has nowhere to fail safely. These
+# cover the character half; the date half is below.
+# ---------------------------------------------------
+#
+
+#
+# The bug this whole change exists for. posts/..._a[b]c.txt
+# beside posts/..._abc.txt builds at exit 0 today and ships
+# the SIBLING's body under the bracket name, because $< is
+# unquoted in the %.staged recipe and the shell glob-expands
+# it onto the neighbour before awk ever sees the file.
+#
+# The load-bearing assertion is the assert_no_file on the
+# bracket page: a build that merely fails for some other
+# reason would satisfy build_expect_fail on its own.
+#
+test_glob_character_slug_is_rejected() {
+	sandbox glob_character_slug_is_rejected
+	add_post '2026-01-02-home_abc.txt' <<'EOF'
+title: Sibling ABC
+-----------------------------------
+<p>SIBLING BODY</p>
+EOF
+	add_post '2026-01-02-home_a[b]c.txt' <<'EOF'
+title: Bracket
+-----------------------------------
+<p>BRACKET BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-01-02-home_a[b]c.txt'
+	assert_no_file 'build/2026/01/02/a[b]c.html'
+	assert_no_file 'build/2026/01/02/abc.html'
+}
+
+#
+# Four representative metacharacters, each alone in its own
+# sandbox. THREE OF THE FOUR ALREADY FAIL TODAY -- ' exits 2
+# with "usage: cp", $ with "no post in posts/ builds this
+# page", and ; with "No rule to make target" -- so an
+# assertion on exit status alone would pass against the
+# buggy code and guard nothing. Assert the new message.
+# Only a*c alone builds at exit 0 today.
+#
+test_shell_metacharacter_slug_is_rejected() {
+	local i=0
+	for slug in "a'c" 'a*c' 'a$c' 'a;c'; do
+		i=$((i + 1))
+		sandbox "shell_metacharacter_slug_is_rejected_$i"
+		add_post "2026-01-02-home_${slug}.txt" <<'EOF'
+title: Meta
+-----------------------------------
+<p>META BODY</p>
+EOF
+		build_expect_fail || continue
+		assert_out_grep "posts/2026-01-02-home_${slug}.txt"
+		assert_out_grep 'illegal character'
+	done
+}
+
+#
+# CANNOT FAIL BEFORE THE CHANGE. This is the guard on
+# BAD_CHARS itself: cafe-with-an-accent, an uppercase slug,
+# and a dotted slug all build correctly today and must keep
+# doing so. It is the test most likely to catch a later
+# over-eager edit to the character list.
+#
+test_unusual_but_safe_slug_still_builds() {
+	sandbox unusual_but_safe_slug_still_builds
+	add_post '2026-01-02-home_café.txt' <<'EOF'
+title: Accented
+-----------------------------------
+<p>ACCENT BODY</p>
+EOF
+	add_post '2026-01-03-home_Hello.txt' <<'EOF'
+title: Capitalised
+-----------------------------------
+<p>CAPITAL BODY</p>
+EOF
+	add_post '2026-01-04-home_Hello.World.txt' <<'EOF'
+title: Dotted
+-----------------------------------
+<p>DOTTED BODY</p>
+EOF
+	build || return
+	assert_grep 'build/2026/01/02/café.html' 'ACCENT BODY'
+	assert_grep 'build/2026/01/03/Hello.html' 'CAPITAL BODY'
+	assert_grep 'build/2026/01/04/Hello.World.html' 'DOTTED BODY'
+}
+
+#
+# ---------------------------------------------------
 # all and clean must be phony. Both are named after
 # nothing on disk, but make does not know that: create a
 # file with either name -- a stray shell redirect, a
@@ -1808,5 +1900,8 @@ test_deleted_rss_item_template_fails_the_build
 test_body_title_line_is_not_the_page_title
 test_clean_works_with_a_file_named_clean
 test_default_build_works_with_a_file_named_all
+test_glob_character_slug_is_rejected
+test_shell_metacharacter_slug_is_rejected
+test_unusual_but_safe_slug_still_builds
 
 pass_fail_summary

@@ -213,12 +213,48 @@ category_display = $(subst -,$(space),$(1))
 category_url = /category/$(call category_slug,$(1)).html
 
 #
+# Every ASCII punctuation character except the three a post
+# filename actually needs: - separates the date fields and
+# the category words, _ separates the date/category half
+# from the title slug, and . carries the .txt extension.
+#
+# The set is closed by enumeration rather than by judging
+# which characters look dangerous. That is the whole point:
+# the glob-character bug this closes existed because [ and ]
+# were not on anybody's list of scary characters. Letters,
+# digits, and every non-ASCII byte are allowed, which is what
+# keeps posts/2026-01-02-home_café.txt building.
+#
+# \# and $$ are make escapes, not part of the set. Space and
+# tab cannot be elements of a make list at all -- a filename
+# containing a space splits POST_NAMES into two words and
+# dies on the "no category in filename" clause below, naming
+# a fragment of the filename rather than the whole thing.
+# Loud, if not pretty; verified.
+#
+BAD_CHARS := ! " \# $$ % & ' ( ) * + , / : ; < = > ? @ [ \ ] ^ ` { | } ~
+
+#
+# The forbidden characters present in a filename, or empty.
+# findstring returns its needle when found, so the foreach
+# collects one word per offending character.
+#
+bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
+
+#
 # A malformed filename is a parse-time error, so the
 # build stops before any recipe runs. Assigning with
 # := forces the check to happen now; the result is
 # discarded.
 #
+# Characters are checked first, before any clause tries to
+# make sense of the filename's shape. Two things downstream
+# depend on that having happened: the date check below
+# interpolates filenames into a shell, and its year test
+# maps digits onto + and would be fooled by a literal one.
+#
 check_post_name = \
+	$(if $(call bad_chars_in,$(1)),$(error posts/$(1): illegal character in filename: $(call bad_chars_in,$(1)); a post filename may contain letters, digits, and only these punctuation marks: - _ .))\
 	$(if $(word 3,$(call underscore_split,$(1))),$(error posts/$(1): more than one _ in filename; expected y-m-d-category_title.txt))\
 	$(if $(word 2,$(call underscore_split,$(1))),,$(error posts/$(1): no category in filename; expected y-m-d-category_title.txt))\
 	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))
