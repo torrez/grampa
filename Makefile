@@ -41,16 +41,22 @@ RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 # incremental builds; .staged is kept for the same
 # reason, and because more than one consumer reads it.
 #
-# Unlike .staged, the .rssitem entry is insurance rather
-# than load-bearing: RECENT_ITEMS names these files as
-# explicit prerequisites of the explicit target
-# work/rss.tmp, and make only reaps files it never sees
-# mentioned. Removing it from .SECONDARY changes nothing
-# observable today -- verified. It is kept so that a later
-# change to how rss.tmp collects its inputs can't silently
-# reintroduce a full feed rebuild.
+# .rssitem files are deliberately NOT listed here. They
+# don't need .SECONDARY -- RECENT_ITEMS names them as
+# explicit prerequisites of the explicit target work/rss.tmp,
+# and make only reaps files it never sees mentioned -- and
+# listing them would be actively harmful: with 12 posts,
+# deleting the newest should drop it from the window and
+# pull the next-oldest post in as the new tenth item, which
+# requires building that newly-in-window .rssitem and
+# re-cat'ing rss.tmp. Marking .rssitem as .SECONDARY makes
+# make tolerate that file being *missing* as long as the
+# target is up to date against its prerequisites'
+# prerequisites, which suppresses exactly that rebuild -- the
+# feed goes stale instead of self-healing. Verified
+# empirically both ways; see the design doc.
 #
-.SECONDARY: $(TMP_FILES) $(STAGED_FILES) $(RSSITEM_FILES)
+.SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 
 #
 # Reverses a list
@@ -488,7 +494,7 @@ clean:
 #
 .PHONY: build
 build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES)
-	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml."; fi
+	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml. A previously built build/rss.xml, if any, is left in place."; fi
 	@echo "Build completed."
 
 #

@@ -196,16 +196,22 @@ $(BUILD_DIR)rss.xml: $(WORK_DIR)rss.tmp templates/rss.txt config
 `cat` keeps its `/dev/null` operand for the same reason `work/index.tmp`'s does: with no
 files to read it would sit on stdin.
 
-**`.rssitem` files join `.SECONDARY` as insurance, not out of necessity.** `.staged` genuinely
-needs it — remove it and make reaps the staged files as pattern-rule intermediates, verified.
-`.rssitem` does not: `RECENT_ITEMS` names them as explicit prerequisites of the explicit
-target `work/rss.tmp`, and make only reaps files it never sees mentioned. Removing them from
-`.SECONDARY` changes nothing observable today, also verified. They are listed anyway so that
-a later change to how `rss.tmp` collects its inputs cannot silently reintroduce a full feed
-rebuild. The declaration becomes:
+**Correction (post-ship review):** an earlier draft of this section put `.rssitem` files in
+`.SECONDARY` too, reasoning they were harmless "insurance" and that removing them "changed
+nothing observable today -- verified." That verification was wrong, and the reviewer who
+wrote it is the one who caught it. `.rssitem` files don't need `.SECONDARY` — `RECENT_ITEMS`
+names them as explicit prerequisites of the explicit target `work/rss.tmp`, and make only
+reaps files it never sees mentioned — but listing them there is actively harmful: with more
+than ten posts, deleting the newest should make the next-oldest post newly in-window,
+requiring its `.rssitem` to be built and `rss.tmp` re-cat'd. Marking `.rssitem` as
+`.SECONDARY` makes make tolerate that file being missing as long as `rss.tmp` is up to date
+against its prerequisites' prerequisites, which suppresses exactly that rebuild — the feed
+goes stale instead of self-healing. Verified empirically both ways (12 posts, delete the
+newest). `.staged` genuinely does need `.SECONDARY` — remove it and make reaps the staged
+files as pattern-rule intermediates, verified. The declaration is:
 
 ```make
-.SECONDARY: $(TMP_FILES) $(STAGED_FILES) $(RSSITEM_FILES)
+.SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 ```
 
 **`config` is a prerequisite of `%.rssitem`.** Items bake the absolute URL in, so changing

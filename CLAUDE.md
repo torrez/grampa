@@ -117,9 +117,13 @@ many consumers read the result.
 `.tmp` files are rendered post fragments and are the unit of reuse: the per-post page and
 the index are both just a `base.txt` wrapper around one or more `.tmp` files. `.rssitem`
 files are the feed's equivalent — one `<item>` per post, wrapped in `rss.txt` the same way
-`.tmp` fragments are wrapped in `base.txt`. Both kinds live in
-`work/`, and are kept between builds via `.SECONDARY` — without that, make would treat
-them as pattern-rule intermediates and delete them, forcing a full rebuild every time.
+`.tmp` fragments are wrapped in `base.txt`. Both kinds live in `work/`. `.tmp` and `.staged`
+are kept between builds via `.SECONDARY` — without that, make would treat them as
+pattern-rule intermediates and delete them, forcing a full rebuild every time. `.rssitem`
+files need no such entry: `RECENT_ITEMS` names them as explicit prerequisites of the
+explicit target `work/rss.tmp`, and make only reaps files it never sees mentioned. Listing
+them in `.SECONDARY` anyway would be actively harmful — see the comment above `.SECONDARY`
+in the Makefile.
 
 The `%.html` rule maps a page back to its fragment with `.SECONDEXPANSION`: the stem of
 `build/2026/08/06/first-post.html` is `2026/08/06/first-post`, and substituting slashes for
@@ -248,8 +252,12 @@ more than a format-string swap.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
   post. `make clean` fixes it.
 - **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
-  `make clean && make` after removing a post. The same is true of the feed: a deleted post's
-  `<item>` stays in `build/rss.xml` until the next `make clean && make`.
+  `make clean && make` after removing a post. The feed is only sometimes as forgiving: with
+  more than ten posts, deleting one of the ten currently in the feed's window makes the
+  next-oldest post newly in-window, so its `.rssitem` gets built and `rss.tmp` is re-cat'd —
+  the feed self-heals on a plain `make`. With ten or fewer posts, every post was already in
+  the window, so deleting one changes nothing that `.rssitem` or `rss.tmp` depend on and the
+  stale `<item>` persists in `build/rss.xml` until `make clean && make`.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
