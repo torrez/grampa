@@ -196,10 +196,13 @@ $(BUILD_DIR)rss.xml: $(WORK_DIR)rss.tmp templates/rss.txt config
 `cat` keeps its `/dev/null` operand for the same reason `work/index.tmp`'s does: with no
 files to read it would sit on stdin.
 
-**`.rssitem` files must join `.SECONDARY`.** They are produced by a pattern rule and
-consumed only as prerequisites of `work/rss.tmp`, so make would classify them as
-intermediates and delete them on the way out — forcing a full feed rebuild every time, the
-exact problem `.SECONDARY` already solves for `.tmp`. The declaration becomes:
+**`.rssitem` files join `.SECONDARY` as insurance, not out of necessity.** `.staged` genuinely
+needs it — remove it and make reaps the staged files as pattern-rule intermediates, verified.
+`.rssitem` does not: `RECENT_ITEMS` names them as explicit prerequisites of the explicit
+target `work/rss.tmp`, and make only reaps files it never sees mentioned. Removing them from
+`.SECONDARY` changes nothing observable today, also verified. They are listed anyway so that
+a later change to how `rss.tmp` collects its inputs cannot silently reintroduce a full feed
+rebuild. The declaration becomes:
 
 ```make
 .SECONDARY: $(TMP_FILES) $(STAGED_FILES) $(RSSITEM_FILES)
@@ -289,10 +292,12 @@ $ awk 'BEGIN{ n=0; while ((r = (getline line < "nope.txt"))) { n++; if (n>3) { p
 LOOPS FOREVER, getline returns -1
 ```
 
-This matters because the two new templates arrive only via `make setup`. A new install gets
-them; an **existing** install has a populated `templates/` and no reason to re-run setup, so
-it would spin on a missing `templates/rss.txt` the moment it set `url=`. The guard turns
-that into an empty feed instead of a hang, and the rollout note below turns it into neither.
+In the normal build nothing reaches that state: both templates are prerequisites of their
+rules, so an existing install that sets `url=` without re-running `make setup` gets a clean
+`No rule to make target 'work/….rssitem'` and stops. Verified. The guard matters for the
+paths make does not cover — a hand-run `awk`, a future rule that reads a template it does not
+declare — and because the unguarded form is a trap worth not propagating. The rollout note
+below is the actual fix for existing installs.
 
 Note this also contradicts CLAUDE.md, which says running from the wrong working directory
 "silently produces pages with empty bodies rather than an error." It hangs. Correcting that
