@@ -271,6 +271,30 @@ function fill(line, key, value,    marker, at) {
 endef
 
 #
+# The front-matter parse shared by RENDER_POST and
+# RENDER_ITEM. Both read the same post format -- a title
+# line, the delimiter, then a body -- and this is the one
+# place that format is defined. Only the rendering and
+# escaping differ between the two, which is why those stay
+# separate programs while this is interpolated into both,
+# the same way $(FILL_FN) is.
+#
+define PARSE_FRONT_MATTER
+{
+    if (!seen){
+        if ($$0 ~ /^-----------------------------------/){
+            seen = 1;
+        }else if ($$0 ~ /^title:/){
+            title = $$0;
+            sub(/^title:[ \t]*/, "", title);
+        }
+    }else{
+        body = (body == "" ? $$0 : body "\n" $$0);
+    }
+}
+endef
+
+#
 # XML-escapes a value on its way into the feed. HTML pages
 # must not escape bodies and the feed must, so this is
 # deliberately not wired into fill().
@@ -302,18 +326,7 @@ define RENDER_POST
 BEGIN {
     post_output = "";
 }
-{
-    if (!seen){
-        if ($$0 ~ /^-----------------------------------/){
-            seen = 1;
-        }else if ($$0 ~ /^title:/){
-            title = $$0;
-            sub(/^title:[ \t]*/, "", title);
-        }
-    }else{
-        body = (body == "" ? $$0 : body "\n" $$0);
-    }
-}
+$(PARSE_FRONT_MATTER)
 END {
     while (getline < "templates/post.txt"){
         new_line = fill($$0, "title", title);
@@ -331,11 +344,12 @@ endef
 
 #
 # Renders one post into an RSS <item> via
-# templates/rss-item.txt. The front matter parse is
-# RENDER_POST's, deliberately duplicated rather than
-# shared: the escaping policy differs between the two, and
-# a general renderer with an escape flag is the wrong
-# abstraction to reach for from one example.
+# templates/rss-item.txt. Shares its front-matter parse
+# with RENDER_POST via PARSE_FRONT_MATTER -- the parse is
+# the same, but the escaping policy differs between the
+# two, and a general renderer with an escape flag is the
+# wrong abstraction to reach for from one example, so
+# rendering stays a separate program.
 #
 # The template read is guarded with > 0 because getline
 # on a missing file returns -1, which is truthy, so an
@@ -348,18 +362,7 @@ define RENDER_ITEM
 BEGIN {
     item_output = "";
 }
-{
-    if (!seen){
-        if ($$0 ~ /^-----------------------------------/){
-            seen = 1;
-        }else if ($$0 ~ /^title:/){
-            title = $$0;
-            sub(/^title:[ \t]*/, "", title);
-        }
-    }else{
-        body = (body == "" ? $$0 : body "\n" $$0);
-    }
-}
+$(PARSE_FRONT_MATTER)
 END {
     link = ENVIRON["SITE_URL"] item_path;
     while ((getline line < "templates/rss-item.txt") > 0){
