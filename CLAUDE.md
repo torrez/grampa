@@ -182,10 +182,12 @@ than inlining it means awk source doesn't have to survive shell quoting, and it 
 `$$0` inside a `define`.
 
 `RENDER_ITEM` is `RENDER_POST`'s counterpart for `templates/rss-item.txt`, and
-`WRAP_IN_CHANNEL` is `WRAP_IN_BASE`'s for `templates/rss.txt`. Both pairs share the same
-front-matter parse (`PARSE_FRONT_MATTER`, interpolated into both `RENDER_POST` and
-`RENDER_ITEM`), but rendering and escaping stay separate programs rather than one generic
-renderer with an escape flag: HTML pages must not escape a post's body and the feed must, and
+`WRAP_IN_CHANNEL` is `WRAP_IN_BASE`'s for `templates/rss.txt`. `RENDER_POST` and
+`RENDER_ITEM` share the same front-matter parse (`PARSE_FRONT_MATTER`, interpolated into
+both), since both read the same post format; `WRAP_IN_BASE` and `WRAP_IN_CHANNEL` have no
+such shared piece to factor out, since wrapping a fragment in a template has nothing left to
+parse. In neither pair does rendering/wrapping and escaping merge into one generic program
+with an escape flag: HTML pages must not escape a post's body or title and the feed must, and
 a general templating engine is deliberately deferred until there is more than this one
 duplication to design it from. `xml_escape()` (`$(XML_ESCAPE_FN)`) does the escaping and is
 interpolated into `RENDER_ITEM` and `WRAP_IN_CHANNEL` only — `fill()` itself never escapes.
