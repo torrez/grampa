@@ -792,7 +792,7 @@ staleness to actually work as advice.
    That left item 5 and the newly found glob-character slug as the only remaining bullets
    producing silently wrong output on a strange post. **The glob-character slug has since been
    closed**, along with the out-of-range dates and an empty title slug found beside them, by
-   rejecting degenerate filenames at parse time — so item 5, the residual half of the
+   rejecting degenerate filenames at parse time — so item 6, the residual half of the
    placeholder fix, is now the only one left, and it is a deliberate deferral rather than an
    oversight.
 2. **The behaviour half of item 8** — the feed's post-deletion self-heal. Real design, shares
@@ -816,7 +816,6 @@ staleness to actually work as advice.
    or moving the test into the date check's shell stage. Deliberately left: a control byte in a
    filename takes effort to produce, and it is not the class of mistake — a mistyped date —
    that motivated these checks.
-
 5. **`make deploy` does not depend on `build`** — arguably more honest as it is.
 6. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`
    or `{{main}}`, or a `url=` containing `{{title}}`; see the full entry above for all four

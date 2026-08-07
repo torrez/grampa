@@ -142,11 +142,23 @@ to `date`, which is the right answer either way. This is the invariant to protec
 touching stage one: **it must never clear something `date` would reject.** Guarded by
 `test_absurdly_long_year_is_rejected`.
 
-The check is one `$(filter)` against an enumerated list of shapes, where each digit is mapped
-to a `+`: `2026` becomes `++++` and matches, `20xx` becomes `++xx` and does not. Mapping to a
-letter instead would make `20xx` into `xxxx` and wrongly clear it. `+` is safe as the marker
-precisely because `BAD_CHARS` rejects it, so no filename reaching this point can contain one —
-a second thing the character check's position above this one buys.
+The year is checked twice, and the whole-branch review is why. The first clause is one
+`$(filter)` against an enumerated list of shapes, with each digit mapped to a `+`: `2026`
+becomes `++++` and matches, `20xx` becomes `++xx` and does not. That gives non-empty and
+bounded-length in one expression.
+
+On its own it has a subtle dependency: it is only sound because no filename can contain the
+marker character, which is true only because `BAD_CHARS` rejects `+`. The review mutated the
+marker to a letter — the edit the comment warns against — and **all 34 tests passed** while
+`2q26-01-02-home_x.txt` built at exit 0 with empty date fields. The mutation is reachable only
+through a filename containing the new marker, and every letter is legal, so no fixed test name
+pins it: the reviewer's suggested test (`20xx-01-02`) catches *deletion* of the year clause,
+which is a different mutant, but not this one. Verified both ways.
+
+So the second clause checks the digits directly, `strip_digits`-style, making the marker's
+identity irrelevant to correctness rather than load-bearing. Ten substitutions to turn a
+subtle coupling into no coupling. `20xx-01-02-home_x.txt` is in the suite anyway, since it is
+the only name that isolates the year clause at all — `20xx-ab-cd` is caught by the month.
 
 **Stage two is the authority.** Suspects — days 29, 30, 31, and every malformed field — go to
 `date` itself. `date_from_filename` and `rfc822_from_filename` build their arguments with the

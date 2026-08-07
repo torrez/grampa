@@ -298,6 +298,30 @@ CHECKED_POST_NAMES := $(foreach f,$(POST_NAMES),$(call check_post_name,$(f)))
 digits_to_plus = $(subst 0,+,$(subst 1,+,$(subst 2,+,$(subst 3,+,$(subst 4,+,$(subst 5,+,$(subst 6,+,$(subst 7,+,$(subst 8,+,$(subst 9,+,$(1)))))))))))
 
 #
+# Strips every digit out. Empty means the field was all
+# digits -- and an empty field also strips to empty, so
+# callers must establish non-emptiness separately, which
+# YEAR_SHAPES does.
+#
+# This overlaps digits_to_plus on purpose, and the overlap
+# is the point. Alone, the shape match trusts that the
+# marker character cannot occur in a filename, which is true
+# only because BAD_CHARS rejects +. Swap the marker for a
+# letter -- an edit the comment above warns against and a
+# reviewer's mutation actually made -- and a year like 2q26
+# maps to qqqq, matches a four-character shape, and is
+# cleared without date ever seeing it. That mutation
+# survived all 34 tests, because it can only be reached by a
+# filename containing the new marker, and any letter is
+# legal, so no fixed test name pins it.
+#
+# Checking the digits directly makes the marker's identity
+# irrelevant to correctness rather than load-bearing, which
+# is worth ten substitutions.
+#
+strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1)))))))))))
+
+#
 # A year of one to five digits. The upper bound is not
 # decoration: date -v accepts enormous years and then stops,
 # so "all digits" alone would clear 999999999999-01-02,
@@ -337,9 +361,11 @@ DATE_OK_DAYS := 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 2
 # bound here exists because of that invariant, not to
 # describe what a sensible date looks like.
 #
-# The year clause does three jobs at once: non-empty, all
-# digits, and short enough. An empty year maps to an empty
-# string, which matches no shape.
+# The year takes two clauses rather than one: the shape
+# match gives non-empty and short enough, the strip gives
+# all-digits without depending on which character the shape
+# match uses as its marker. See strip_digits above for why
+# that separation earns its keep.
 #
 # The $(strip) is load-bearing: $(if) treats a whitespace-
 # only expansion as true, and the \-continuations below
@@ -347,14 +373,18 @@ DATE_OK_DAYS := 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 2
 #
 date_is_sound = $(strip \
 	$(if $(filter $(call digits_to_plus,$(word 1,$(call date_words,$(1)))),$(YEAR_SHAPES)),\
+	$(if $(call strip_digits,$(word 1,$(call date_words,$(1)))),,\
 	$(if $(filter $(word 2,$(call date_words,$(1))),$(DATE_OK_MONTHS)),\
-	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x))))
+	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x)))))
 
 #
 # The names stage one could not clear, asked of date itself.
 # One shell invocation however many posts there are, running
 # one date call per suspect -- which in practice is only
-# posts dated the 29th to the 31st.
+# posts dated the 29th to the 31st. The outer $(if) skips
+# even that one shell when nothing is suspect, which is the
+# common case and makes "a blog dated the 1st to the 28th
+# spawns nothing" true rather than nearly true.
 #
 # date already rejects a bad date and exits 1. Nothing in
 # the build hears it: date_from_filename is a $(shell) call,
@@ -385,7 +415,7 @@ date_is_sound = $(strip \
 # nothing reads this $(shell)'s exit status.
 #
 SUSPECT_POST_DATES := $(foreach n,$(POST_NAMES),$(if $(call date_is_sound,$(n)),,$(n)))
-BAD_POST_DATES := $(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_args,$(n)) -v0H -v0M -v0S >/dev/null 2>&1 || echo $(n);) true)
+BAD_POST_DATES := $(if $(SUSPECT_POST_DATES),$(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_args,$(n)) -v0H -v0M -v0S >/dev/null 2>&1 || echo $(n);) true))
 CHECKED_POST_DATES := $(if $(BAD_POST_DATES),$(error no such calendar date in: $(addprefix posts/,$(BAD_POST_DATES)); a post filename must begin with a real y-m-d date))
 
 #

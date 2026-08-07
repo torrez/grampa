@@ -1828,6 +1828,14 @@ EOF
 	assert_no_file 'build/2026/13/40/bad.html'
 }
 
+#
+# Two names, and the second is the one that matters. In
+# 20xx-ab-cd every field is malformed, so the month clause
+# rejects it and the year clause is never isolated -- delete
+# the year clause entirely and this name is still caught.
+# 20xx-01-02 has a valid month and day, so only the year
+# clause can reject it. Found by the whole-branch review.
+#
 test_non_numeric_date_is_rejected() {
 	sandbox non_numeric_date_is_rejected
 	add_post '20xx-ab-cd-home_x.txt' <<'EOF'
@@ -1838,6 +1846,16 @@ EOF
 	build_expect_fail || return
 	assert_out_grep 'posts/20xx-ab-cd-home_x.txt'
 	assert_no_file 'build/20xx/ab/cd/x.html'
+
+	sandbox non_numeric_year_only
+	add_post '20xx-01-02-home_x.txt' <<'EOF'
+title: Bad Year Only
+-----------------------------------
+<p>BAD YEAR BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/20xx-01-02-home_x.txt'
+	assert_no_file 'build/20xx/01/02/x.html'
 }
 
 #
@@ -1905,9 +1923,10 @@ EOF
 #
 # CANNOT FAIL BEFORE THE CHANGE. Unpadded dates are
 # documented as supported and are the likeliest thing an
-# over-strict date check would break. The five-digit year
-# is here because YEAR_SHAPES stops at five: it must still
-# be cleared by stage one rather than merely survive.
+# over-strict date check would break. The five-digit year is
+# here because YEAR_SHAPES stops at five, so it is the
+# boundary case -- though note the assertion cannot see
+# WHICH stage let it through, only that it built.
 #
 test_unpadded_date_still_builds() {
 	sandbox unpadded_date_still_builds
