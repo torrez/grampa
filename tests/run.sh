@@ -434,6 +434,102 @@ EOF
 }
 
 #
+# test_parallel_build_is_clean runs -j8 but installs no
+# stub, so the staging branch -- the fiddliest code in the
+# Makefile, and the part that writes scratch files -- has
+# never been exercised in parallel by this suite. Every
+# intermediate the branch creates is named after the post
+# ($(WORK_DIR)$*.aa, .body, .mdbody) precisely so two posts
+# cannot clobber each other; nothing checked that. Six
+# posts is enough for -j8 to overlap them.
+#
+test_markdown_branch_is_parallel_safe() {
+	sandbox markdown_parallel
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
+EOF
+	local i
+	for i in 1 2 3 4 5 6; do
+		add_post "2026-0$i-01-n_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body *$i* here.</p>
+EOF
+	done
+	build -j8 || return
+	# Every post's own body, transformed, in its own page --
+	# a shared scratch namespace would cross them over.
+	for i in 1 2 3 4 5 6; do
+		assert_grep "build/2026/0$i/01/post-$i.html" "<em>$i</em>"
+	done
+	assert_eq "no stray intermediates" "" \
+		"$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+#
+# .staged exists so Markdown.pl runs once per post no
+# matter how many consumers read the result. The three
+# stub sandboxes all leave url= unset, so the second
+# consumer -- %.rssitem -> rss.tmp -> rss.xml -- has never
+# been shown to get the transformed body at all. Point the
+# .rssitem rule at posts/%.txt instead of the .staged file
+# and every assertion here still passes except this one.
+#
+test_markdown_body_reaches_the_feed() {
+	sandbox markdown_feed
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
+EOF
+	add_post 2026-08-06-home_marked-up.txt <<'EOF'
+title: A *starred* title
+-----------------------------------
+<p>Body with *emphasis* in it.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_file build/rss.xml
+	# The feed escapes bodies, so the transformed markup
+	# arrives entity-encoded rather than as raw tags.
+	assert_grep build/rss.xml "&lt;em&gt;emphasis&lt;/em&gt;"
+	# The title is front matter, so Markdown must not have
+	# touched it -- same rule as on the HTML side.
+	assert_grep build/rss.xml "<title>A *starred* title</title>"
+}
+
+#
+# The Makefile tests [ -x Markdown.pl ], not [ -f ], so a
+# copy that was never chmod +x is skipped and the body
+# stays verbatim HTML. That is a silent fallback with no
+# warning, which makes it worth pinning: README.md now
+# tells people to check the execute bit precisely because
+# nothing else will tell them. Relax the test to [ -f ] and
+# this fails.
+#
+test_non_executable_markdown_falls_back_to_verbatim() {
+	sandbox markdown_not_executable
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
+EOF
+	chmod 644 Markdown.pl
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Body with *emphasis* in it.</p>
+EOF
+	build || return
+	# Verbatim: the asterisks survive and no <em> appears.
+	assert_grep build/2026/08/06/hello.html "<p>Body with *emphasis* in it.</p>"
+	assert_not_grep build/2026/08/06/hello.html "<em>"
+	# The verbatim branch is a plain cp, so it leaves none
+	# of the Markdown branch's scratch files behind.
+	assert_eq "no stray intermediates" "" \
+		"$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+#
 # Guards the pattern-rule trap: writing %.tmp's new
 # prerequisites as a bare dependency line looks right and
 # silently drops templates/post.txt, so editing the
@@ -1424,6 +1520,9 @@ test_staged_files_persist
 test_markdown_transforms_the_body_not_the_front_matter
 test_failing_markdown_fails_the_build
 test_failed_markdown_leaves_no_stale_chunks
+test_markdown_branch_is_parallel_safe
+test_markdown_body_reaches_the_feed
+test_non_executable_markdown_falls_back_to_verbatim
 test_editing_post_template_rebuilds_fragments
 test_editing_base_template_rebuilds_every_page
 test_rssitem_has_absolute_link_and_rfc822_date
