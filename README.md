@@ -2,7 +2,7 @@
 
 Grampa is an idea that’s been kicking around in my head for a few years:
 
-Can you build a resonably okay blogging tool out of common shell commands?
+Can you build a reasonably okay blogging tool out of common shell commands?
 
 The answer is: I think? Yeah.
 
@@ -67,7 +67,13 @@ The contents of the post _must_ be in this format:
 	Body of your post.
 	</p>
 
-If you put `Markdown.pl` from (this zip file)[https://daringfireball.net/projects/markdown/] in the root directory then every body will be run through it.
+If you put `Markdown.pl` from [this zip file](https://daringfireball.net/projects/markdown/) in the root directory then every body will be run through it.
+
+It has to be **executable** — `chmod +x Markdown.pl`. The build tests for an executable
+file, so a copy that isn’t one is skipped silently and your bodies stay verbatim HTML. If
+your Markdown isn’t being turned into HTML, check that first — and after you fix it, run
+`make clean && make`. Posts that have already been staged aren’t rebuilt just because
+`Markdown.pl` turned up or changed, so `chmod +x` on its own looks like it did nothing.
 
 ## rss
 
