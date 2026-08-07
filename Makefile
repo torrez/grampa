@@ -71,12 +71,25 @@ space = $(empty) $(empty)
 RECENT_FILES = $(wordlist 1, 10, $(call reverse, $(TMP_FILES)))
 
 #
+# The items the feed carries: the same newest-ten window
+# the index uses.
+#
+RECENT_ITEMS = $(wordlist 1, 10, $(call reverse, $(RSSITEM_FILES)))
+
+#
 # Every category that has at least one post. sort
 # dedupes and orders in one call, so this needs no
 # shell at all -- categories are in the filenames.
 #
 CATEGORY_SLUGS = $(sort $(foreach f,$(POST_NAMES),$(call category_slug,$(f))))
 CATEGORY_PAGES = $(addprefix $(BUILD_DIR)category/,$(addsuffix .html,$(CATEGORY_SLUGS)))
+
+#
+# The feed, but only when config supplies a url=. With no
+# absolute base there is nothing valid to emit, so the
+# whole feed -- fragments included -- is simply not built.
+#
+FEED_PAGES = $(if $(SITE_URL),$(BUILD_DIR)rss.xml)
 
 #
 # The fragments belonging to one category, newest
@@ -406,6 +419,43 @@ $(FILL_FN)
 endef
 
 #
+# Wraps the concatenated items in templates/rss.txt. The
+# structural twin of WRAP_IN_BASE, kept separate because
+# base.txt must not escape its page title and rss.txt must
+# -- sharing one program would mean an escape flag inside
+# a general renderer, which is the abstraction this design
+# defers until there is more than one example to draw it
+# from.
+#
+# {{items}} is not escaped: those are already-escaped XML.
+#
+# The template read is guarded with > 0 for the same
+# reason as RENDER_ITEM's: getline returns -1 on a missing
+# file, which is truthy.
+#
+define WRAP_IN_CHANNEL
+BEGIN {
+    xml_output = "";
+    items_output = "";
+}
+{
+    items_output = items_output $$0 "\n";
+}
+END {
+    while ((getline line < "templates/rss.txt") > 0){
+        new_line = fill(line, "title", xml_escape(ENVIRON["BLOG_NAME"]));
+        new_line = fill(new_line, "description", xml_escape(ENVIRON["BLOG_NAME"]));
+        new_line = fill(new_line, "link", xml_escape(ENVIRON["SITE_URL"]));
+        new_line = fill(new_line, "items", items_output);
+        xml_output = xml_output new_line "\n";
+    }
+    print xml_output;
+}
+$(FILL_FN)
+$(XML_ESCAPE_FN)
+endef
+
+#
 # Passed to awk through the environment, so nothing in
 # a template or a post title has to survive shell
 # quoting on the way in.
@@ -413,6 +463,7 @@ endef
 export RENDER_POST
 export RENDER_ITEM
 export WRAP_IN_BASE
+export WRAP_IN_CHANNEL
 
 
 #
@@ -436,7 +487,8 @@ clean:
 # The only phony rule that builds all the index files
 #
 .PHONY: build
-build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES)
+build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES)
+	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml."; fi
 	@echo "Build completed."
 
 #
@@ -585,10 +637,22 @@ $(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
 	@echo "Done";
 
 #
-# TBD
+# The feed's items, concatenated. cat needs /dev/null in
+# case there are no posts yet, or it would sit and read
+# stdin -- the same reason index.tmp's does.
 #
-$(BUILD_DIR)atom.xml:
-	@echo "Making atom.xml"
+$(WORK_DIR)rss.tmp: $(RECENT_ITEMS)
+	@mkdir -p $(WORK_DIR)
+	@cat /dev/null $(RECENT_ITEMS) > $@
+
+#
+# Building rss.xml requires work/rss.tmp, exactly as
+# index.html requires work/index.tmp.
+#
+$(BUILD_DIR)rss.xml: $(WORK_DIR)rss.tmp templates/rss.txt config
+	@echo "Building rss.xml"
+	@mkdir -p $(dir $@)
+	@awk "$$WRAP_IN_CHANNEL" $< > $@;
 
 #
 # Building the index.html file requires

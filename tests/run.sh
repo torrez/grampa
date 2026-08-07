@@ -349,6 +349,143 @@ EOF
 	assert_not_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "&amp;lt;"
 }
 
+#
+# A feed is opt-in. Without url= the build must succeed
+# and produce nothing, not error and not emit a feed with
+# relative links.
+#
+test_no_url_means_no_feed() {
+	sandbox no_url
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_no_file build/rss.xml
+	assert_no_file work/2026-08-06-home_hello.rssitem
+	assert_file build/index.html
+	assert_out_grep "skipping rss.xml"
+}
+
+test_feed_is_built_when_url_is_set() {
+	sandbox feed_built
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_file build/rss.xml
+	assert_grep build/rss.xml '<rss version="2.0">'
+	assert_grep build/rss.xml "<title>My Weblog</title>"
+	assert_grep build/rss.xml "<link>https://example.com</link>"
+	assert_grep build/rss.xml "<link>https://example.com/2026/08/06/hello.html</link>"
+	assert_eq "items in feed" "1" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+}
+
+#
+# The XML counterpart of test_ampersands_are_not_mangled,
+# which asserts the opposite for HTML. Both on the same
+# input, in the same file, is what pins escaping down as a
+# per-consumer policy.
+#
+test_feed_escapes_titles_and_bodies() {
+	sandbox feed_escape
+	add_post 2026-08-06-cartoons_tom-and-jerry.txt <<'EOF'
+title: Tom & Jerry
+-----------------------------------
+<p>Visit /search?a=1&b=2 for more.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<title>Tom &amp; Jerry</title>"
+	assert_grep build/rss.xml "&lt;p&gt;"
+	assert_grep build/rss.xml "a=1&amp;b=2"
+	assert_not_grep build/rss.xml "<p>"
+	assert_grep build/2026/08/06/tom-and-jerry.html "/search?a=1&b=2"
+}
+
+test_feed_is_capped_at_ten_newest() {
+	sandbox feed_ten
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+		add_post "2026-01-$(printf '%02d' $i)-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_eq "items in feed" "10" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+	assert_grep build/rss.xml "<title>Post 12</title>"
+	assert_not_grep build/rss.xml "<title>Post 1</title>"
+	assert_eq "newest item first" "Post 12" "$(grep '<title>' build/rss.xml | sed -n '2p' | sed 's/.*<title>//; s|</title>.*||')"
+}
+
+#
+# The feed path re-derives everything that made
+# test_zero_posts_does_not_hang necessary: cat with no
+# operands would read stdin, and an unguarded getline on a
+# missing template would spin.
+#
+test_feed_with_zero_posts() {
+	sandbox feed_empty
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_file build/rss.xml
+	assert_grep build/rss.xml '<rss version="2.0">'
+	assert_not_grep build/rss.xml "<item>"
+}
+
+#
+# Guards the -v0H -v0M -v0S pinning and the decision to
+# omit lastBuildDate. A feed that churns on every build
+# looks perfectly correct in isolation.
+#
+test_feed_is_byte_stable_across_rebuilds() {
+	sandbox feed_stable
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	cp build/rss.xml first-rss.xml
+	make clean >/dev/null 2>&1
+	build || return
+	if cmp -s first-rss.xml build/rss.xml; then ok; else fail "feed changed across rebuilds" "$(diff first-rss.xml build/rss.xml)"; fi
+}
+
+#
+# config is a prerequisite of %.rssitem for exactly this
+# reason. Drop it and every other test still passes while
+# real installs get stale hostnames forever.
+#
+test_changing_url_rebuilds_the_feed() {
+	sandbox feed_url_change
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://old.example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<link>https://old.example.com/2026/08/06/hello.html</link>"
+	# Whole-second mtime resolution again -- a one-post
+	# sandbox builds in well under a second, so without
+	# this the rewritten config is "not newer" than the
+	# .rssitem files and nothing rebuilds.
+	sleep 1
+	printf 'name=My Weblog\nurl=https://new.example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<link>https://new.example.com/2026/08/06/hello.html</link>"
+	assert_not_grep build/rss.xml "old.example.com"
+}
+
 test_url_omits_the_category() {
 	sandbox url_omits_category
 	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
@@ -767,6 +904,13 @@ test_editing_post_template_rebuilds_fragments
 test_rssitem_has_absolute_link_and_rfc822_date
 test_rssitem_link_survives_trailing_slash_in_url
 test_rssitem_escapes_title_and_body
+test_no_url_means_no_feed
+test_feed_is_built_when_url_is_set
+test_feed_escapes_titles_and_bodies
+test_feed_is_capped_at_ten_newest
+test_feed_with_zero_posts
+test_feed_is_byte_stable_across_rebuilds
+test_changing_url_rebuilds_the_feed
 test_url_omits_the_category
 test_multi_hyphen_category_parses
 test_filename_without_underscore_fails
