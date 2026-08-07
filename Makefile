@@ -394,16 +394,28 @@ endef
 # URL in place of the example.
 #
 # What this does NOT close: whatever is filled last is
-# still injectable into everything filled before it, so a
-# *title* containing the literal {{body}} still expands, on
-# the one template line that carries both. Closing that
-# needs a single-pass fill that never rescans a substituted
-# value -- a real change to fill()'s signature and to all
-# four call sites, and it would also drop the documented
-# "first {{key}} on a line only" behaviour. Deferred: the
-# body is the large author-controlled blob and the realistic
-# case, and it is now closed. Guarded by the four
-# test_placeholders_* tests.
+# still injectable into everything filled before it. The
+# leak needs no template line carrying both markers --
+# every fill() runs on every line, so the title fill puts
+# {{body}} into the <h4> line and the body fill consumes it
+# there. Verified against the stock post.txt, where
+# {{title}} and {{body}} are on different lines: a post
+# titled `On {{body}} markers` renders
+# <h4>On <p>the whole body</p> markers</h4>.
+#
+# Siblings, same class, all reproduced: a title containing
+# {{main}} puts the entire rendered fragment in the page's
+# <title>; the title/{{body}} leak fires in the feed too,
+# via RENDER_ITEM; and a url= containing {{title}} puts the
+# post title inside every <link> and <guid>.
+#
+# Closing these needs a single-pass fill that never rescans
+# a substituted value -- a real change to fill()'s signature
+# and to all four call sites, and it would also drop the
+# documented "first {{key}} on a line only" behaviour.
+# Deferred: the body is the large author-controlled blob and
+# the realistic case, and it is now closed. Guarded by the
+# four test_placeholders_* tests.
 #
 define RENDER_POST
 BEGIN {

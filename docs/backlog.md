@@ -393,10 +393,16 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   `test_placeholders_in_the_blog_name_are_not_expanded`.
 
   **Still open, deliberately:** whatever is filled last is injectable into everything filled
-  before it, so a *title* containing a literal `{{body}}` still expands on a template line
-  carrying both. The single-pass fill that closes it changes `fill()`'s signature and all
-  four call sites, and drops the documented first-`{{key}}`-per-line behaviour. Not worth it
-  against a closed body case.
+  before it. The review corrected the first write-up of this, which claimed the leak needed a
+  template line carrying both markers — it does not, since every `fill()` runs on every line,
+  so the `title` fill puts `{{body}}` into the `<h4>` line and the `body` fill consumes it
+  there. Reproduced against the stock `post.txt`, where the two are on different lines. Also
+  broader than one case: a title containing `{{main}}` puts the whole rendered fragment in the
+  page's `<title>`, the title/`{{body}}` leak fires in the feed too, and a `url=` containing
+  `{{title}}` puts the post title inside every `<link>` and `<guid>`. The single-pass fill
+  that closes all of them changes `fill()`'s signature and all four call sites, and drops the
+  documented first-`{{key}}`-per-line behaviour. Not worth it against a closed body case, but
+  the entry should say what it is deferring.
 
   Original finding: `Makefile:351-356,418-419`, **verified**. `fill()` rescans the composed
   line, so a body containing a literal `{{permalink}}` or `{{page_title}}` renders as the
