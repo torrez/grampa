@@ -279,8 +279,9 @@ same delimiter as `PARSE_FRONT_MATTER` and shares no code with it — that one a
 title and a body into variables for a renderer, this one keeps no state but `seen` — and
 factoring the two together would couple the staging step to the renderers to save one regex.
 Only the *first* delimiter splits; later ones are body text. Its `END` block is load-bearing
-rather than tidy: awk creates a redirect's file on first write, so without it a post with no
-body would leave no body file for `Markdown.pl` to be handed. It replaced `split -p` and a
+rather than tidy, and in both directions: awk creates a redirect's file on first write, so
+without it a post with no body leaves no body file for `Markdown.pl` to be handed, and a post
+whose delimiter is on line 1 leaves no head file for the reassembly `cat`. It replaced `split -p` and a
 pair of globs, which is the subject of the two closed glob items in `docs/backlog.md`.
 
 The blog name reaches awk the same way: `BLOG_NAME` is `export`ed by make and each recipe

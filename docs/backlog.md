@@ -485,7 +485,8 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   exactly that, so the two branches now agree instead of disagreeing; making an empty post
   fatal belongs to both branches at once and is not this change. (4) A post with no trailing
   newline gains one byte in `.staged`; the page is byte-identical. Everything else is
-  byte-identical, `diff -r` over `work/` and `build/`.
+  byte-identical, `diff -r` over `work/` and `build/` — with one exception outside the set of
+  well-formed posts, the glob-character slug recorded below, which the change makes worse.
 
   One upgrade wrinkle: an install whose `work/` holds `.aa`/`.ab` chunks from a pre-change
   *failed* run keeps them indefinitely. The new `rm -f` does not name them and nothing globs
@@ -519,13 +520,23 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   follows.
 
 - **NEW — a slug containing shell glob characters silently stages a same-date sibling's
-  content** — **verified**, and **pre-existing**: found while reviewing the awk staging split,
-  reproduced identically against the commit before it. `posts/2026-01-02-home_a[b]c.txt`
-  beside `posts/2026-01-02-home_abc.txt` builds at exit 0, and `/2026/01/02/a[b]c.html` ships
-  the *sibling's* title and body. The cause is not the staging step's own names — those are
-  exact now — but the unquoted `$<` in the recipe, which the shell glob-expands onto the
-  neighbour before awk ever sees it. `%.tmp` and `%.rssitem` interpolate stems unquoted the
-  same way, so quoting this one rule would half-fix it and read as if it were closed.
+  content** — **verified**, and **pre-existing**: found while reviewing the awk staging split.
+  `posts/2026-01-02-home_a[b]c.txt` beside `posts/2026-01-02-home_abc.txt` builds at exit 0,
+  and `/2026/01/02/a[b]c.html` ships the *sibling's* content. The cause is not the staging
+  step's own names — those are exact now — but the unquoted `$<` in the recipe, which the
+  shell glob-expands onto the neighbour before awk ever sees it. `%.tmp` and `%.rssitem`
+  interpolate stems unquoted the same way, so quoting this one rule would half-fix it and read
+  as if it were closed.
+
+  Pre-existing is exact for the verbatim branch and **not** exact for the Markdown branch,
+  which is worth stating plainly because the staging change made this case worse. Before it,
+  the Markdown branch published the sibling's title with an *empty* body: `split` read the
+  glob-expanded `$<`, but the reassembly glob `…a[b]c.a[b-z]*` read the `[b]` in the stem as a
+  character class, matched none of the bracket-named chunks actually on disk, and the failing
+  `cat` was masked by the pipe. Now that the leak reaches awk whole and the file names are
+  exact, the whole sibling post is published. The four behaviour changes recorded above say
+  everything else is byte-identical; this degenerate slug is the exception, and it moved in
+  the wrong direction.
 
   Same family as the apostrophe-in-slug hazard the staging spec settled as out of scope, with
   one difference that earns it a bullet: the apostrophe fails **loudly**, with a shell syntax

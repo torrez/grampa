@@ -571,10 +571,14 @@ endef
 # -- a post about grampa's own post format has them -- which
 # is what the !seen guard is for.
 #
-# The END block is load-bearing. awk creates a redirect's
-# file on first write, so a post with no body would leave no
-# body file at all and Markdown.pl would be handed a missing
-# argument. printf "" creates the file when nothing was
+# The END block is load-bearing, and in both directions.
+# awk creates a redirect's file on first write, so a post
+# with no body would leave no body file at all and
+# Markdown.pl would be handed a missing argument, while a
+# post whose delimiter is on line 1 would leave no head file
+# and the reassembly cat would fail on it. Both were
+# confirmed by deleting this block: exit 2 either way.
+# printf "" creates the file when nothing was
 # written and appends nothing when something was, since awk
 # holds the redirect open -- so it cannot truncate what came
 # before it.
