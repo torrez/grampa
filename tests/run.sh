@@ -291,6 +291,64 @@ EOF
 	assert_out_grep "Building work/2026-08-06-home_hello.tmp"
 }
 
+#
+# The item's link must be absolute -- readers have no
+# base to resolve against -- and must not contain the
+# category, which is in the filename but never a URL.
+#
+test_rssitem_has_absolute_link_and_rfc822_date() {
+	sandbox rssitem_link
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build work/2026-08-06-home_hello.rssitem || return
+	assert_grep work/2026-08-06-home_hello.rssitem "<link>https://example.com/2026/08/06/hello.html</link>"
+	assert_grep work/2026-08-06-home_hello.rssitem "<guid isPermaLink=\"true\">https://example.com/2026/08/06/hello.html</guid>"
+	assert_grep work/2026-08-06-home_hello.rssitem "<pubDate>Thu, 06 Aug 2026 00:00:00 "
+	assert_grep work/2026-08-06-home_hello.rssitem "<category>home</category>"
+	assert_not_grep work/2026-08-06-home_hello.rssitem "/home/"
+}
+
+#
+# A trailing slash on url= must not produce a double
+# slash in the item link.
+#
+test_rssitem_link_survives_trailing_slash_in_url() {
+	sandbox rssitem_slash
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com/\n' > config
+	build work/2026-08-06-home_hello.rssitem || return
+	assert_grep work/2026-08-06-home_hello.rssitem "<link>https://example.com/2026/08/06/hello.html</link>"
+	assert_not_grep work/2026-08-06-home_hello.rssitem "example.com//"
+}
+
+#
+# The mirror image of test_ampersands_are_not_mangled:
+# HTML passes bodies through raw, XML must escape them.
+#
+test_rssitem_escapes_title_and_body() {
+	sandbox rssitem_escape
+	add_post 2026-08-06-cartoons_tom-and-jerry.txt <<'EOF'
+title: Tom & Jerry
+-----------------------------------
+<p>Visit /search?a=1&b=2 for more.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build work/2026-08-06-cartoons_tom-and-jerry.rssitem || return
+	assert_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "<title>Tom &amp; Jerry</title>"
+	assert_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "&lt;p&gt;"
+	assert_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "a=1&amp;b=2"
+	assert_not_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "<p>"
+	assert_not_grep work/2026-08-06-cartoons_tom-and-jerry.rssitem "&amp;lt;"
+}
+
 test_url_omits_the_category() {
 	sandbox url_omits_category
 	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
@@ -706,6 +764,9 @@ test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
 test_staged_files_persist
 test_editing_post_template_rebuilds_fragments
+test_rssitem_has_absolute_link_and_rfc822_date
+test_rssitem_link_survives_trailing_slash_in_url
+test_rssitem_escapes_title_and_body
 test_url_omits_the_category
 test_multi_hyphen_category_parses
 test_filename_without_underscore_fails

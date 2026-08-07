@@ -1,0 +1,8 @@
+<item>
+	<title>{{title}}</title>
+	<link>{{link}}</link>
+	<guid isPermaLink="true">{{link}}</guid>
+	<pubDate>{{pub_date}}</pubDate>
+	<category>{{category}}</category>
+	<description>{{body}}</description>
+</item>

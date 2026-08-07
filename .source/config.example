@@ -2,3 +2,8 @@
 
 # Name of your weblog. Placed in title tags.
 name=My Weblog
+
+# Absolute URL of your weblog, no trailing slash needed.
+# Setting this turns on the RSS feed at /rss.xml. Leave it
+# commented out and no feed is built.
+#url=https://example.com

@@ -32,6 +32,7 @@ POST_NAMES = $(shell ls posts 2>/dev/null | grep '\.txt$$' | sort -t- -k1,1n -k2
 POST_FILES = $(addprefix posts/, $(POST_NAMES))
 TMP_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.tmp))
 STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
+RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 
 #
 # The .tmp and .staged files are made by pattern rules,
@@ -40,7 +41,16 @@ STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
 # incremental builds; .staged is kept for the same
 # reason, and because more than one consumer reads it.
 #
-.SECONDARY: $(TMP_FILES) $(STAGED_FILES)
+# Unlike .staged, the .rssitem entry is insurance rather
+# than load-bearing: RECENT_ITEMS names these files as
+# explicit prerequisites of the explicit target
+# work/rss.tmp, and make only reaps files it never sees
+# mentioned. Removing it from .SECONDARY changes nothing
+# observable today -- verified. It is kept so that a later
+# change to how rss.tmp collects its inputs can't silently
+# reintroduce a full feed rebuild.
+#
+.SECONDARY: $(TMP_FILES) $(STAGED_FILES) $(RSSITEM_FILES)
 
 #
 # Reverses a list
@@ -95,9 +105,49 @@ BLOG_NAME = $(if $(strip $(CONFIG_NAME)),$(CONFIG_NAME),Grampa)
 export BLOG_NAME
 
 #
+# The site's absolute URL, read from the same config file.
+# Read lazily for the same reason as CONFIG_NAME: the
+# config target may not have copied the file into place
+# yet when this Makefile is parsed.
+#
+# A feed needs absolute links -- a reader has no base to
+# resolve against -- so this is the one thing that decides
+# whether build/rss.xml exists at all. Unset means no feed
+# and no error.
+#
+# The trailing slash is stripped so that url= with or
+# without one produces the same links.
+#
+CONFIG_URL = $(shell sed -n 's/^url=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
+SITE_URL = $(patsubst %/,%,$(strip $(CONFIG_URL)))
+
+#
+# Exported rather than interpolated into recipes, for the
+# same reason BLOG_NAME is: a URL containing a quote or a
+# $$ can't then break the build.
+#
+export SITE_URL
+
+#
 # Creates a formatted date from a file name.
 #
 date_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) "+%B %d, %Y")
+
+#
+# The same date in RFC-822, which is what RSS pubDate
+# wants. Two things here are load-bearing:
+#
+# LC_ALL=C -- RFC 822 day and month names are literal
+# English tokens, and $(shell) inherits the user's locale.
+# Without it a French machine emits "jeu., 06 aout 2026",
+# which is silently invalid.
+#
+# -v0H -v0M -v0S -- date -v with only y/m/d keeps the
+# current clock time, so without pinning to midnight every
+# build would emit different pubDates and rss.xml would
+# look changed on every deploy.
+#
+rfc822_from_filename = $(shell LC_ALL=C date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
 
 #
 # Post filenames are y-m-d-<category>_<title>.txt.
@@ -221,6 +271,30 @@ function fill(line, key, value,    marker, at) {
 endef
 
 #
+# XML-escapes a value on its way into the feed. HTML pages
+# must not escape bodies and the feed must, so this is
+# deliberately not wired into fill().
+#
+# & has to go first, or < becomes &lt; and the next pass
+# turns it into &amp;lt;.
+#
+# The replacements are written "\\&amp;" and not "&amp;"
+# because gsub, like sub, expands a bare & in the
+# replacement to the matched text -- the same trap that
+# made fill() necessary. On the first line that would come
+# out right by accident; on the other two the matched text
+# is < or >, so a bare & yields "<lt;" and "<gt;".
+#
+define XML_ESCAPE_FN
+function xml_escape(s) {
+    gsub(/&/, "\\&amp;", s);
+    gsub(/</, "\\&lt;", s);
+    gsub(/>/, "\\&gt;", s);
+    return s;
+}
+endef
+
+#
 # Renders one post into a fragment via
 # templates/post.txt.
 #
@@ -256,6 +330,53 @@ $(FILL_FN)
 endef
 
 #
+# Renders one post into an RSS <item> via
+# templates/rss-item.txt. The front matter parse is
+# RENDER_POST's, deliberately duplicated rather than
+# shared: the escaping policy differs between the two, and
+# a general renderer with an escape flag is the wrong
+# abstraction to reach for from one example.
+#
+# The template read is guarded with > 0 because getline
+# on a missing file returns -1, which is truthy, so an
+# unguarded loop spins forever. Nothing in the normal
+# build reaches that -- the template is a prerequisite,
+# so make stops first -- but the guard costs nothing and
+# the unguarded form is a trap worth not copying.
+#
+define RENDER_ITEM
+BEGIN {
+    item_output = "";
+}
+{
+    if (!seen){
+        if ($$0 ~ /^-----------------------------------/){
+            seen = 1;
+        }else if ($$0 ~ /^title:/){
+            title = $$0;
+            sub(/^title:[ \t]*/, "", title);
+        }
+    }else{
+        body = (body == "" ? $$0 : body "\n" $$0);
+    }
+}
+END {
+    link = ENVIRON["SITE_URL"] item_path;
+    while ((getline line < "templates/rss-item.txt") > 0){
+        new_line = fill(line, "title", xml_escape(title));
+        new_line = fill(new_line, "link", xml_escape(link));
+        new_line = fill(new_line, "pub_date", pub_date);
+        new_line = fill(new_line, "category", xml_escape(category));
+        new_line = fill(new_line, "body", xml_escape(body));
+        item_output = item_output new_line "\n";
+    }
+    print item_output;
+}
+$(FILL_FN)
+$(XML_ESCAPE_FN)
+endef
+
+#
 # Wraps a rendered fragment in templates/base.txt.
 # Both the post pages and the index use this; the only
 # thing that differs is $$PAGE_TITLE, which each recipe
@@ -287,6 +408,7 @@ endef
 # quoting on the way in.
 #
 export RENDER_POST
+export RENDER_ITEM
 export WRAP_IN_BASE
 
 
@@ -438,6 +560,25 @@ $(WORK_DIR)%.tmp: $(WORK_DIR)%.staged templates/post.txt
 		-v category="$(call category_display,$(call category_slug,$@))" \
 		-v category_url="$(call category_url,$@)" \
 		"$$RENDER_POST" $< > $@;
+	@echo "Done";
+
+#
+# One RSS <item> per post, built from the same staged file
+# as the .tmp fragment.
+#
+# config is a prerequisite because the item bakes the
+# absolute URL in, so changing url= has to rebuild every
+# item -- the same reason config is a prerequisite of both
+# HTML rules.
+#
+$(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
+	@echo "Building $@"
+	@mkdir -p $(WORK_DIR)
+
+	@awk -v pub_date="$(call rfc822_from_filename, $@)" \
+		-v item_path="/$(call page_for,$@).html" \
+		-v category="$(call category_display,$(call category_slug,$@))" \
+		"$$RENDER_ITEM" $< > $@;
 	@echo "Done";
 
 #
