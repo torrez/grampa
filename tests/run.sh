@@ -1807,6 +1807,153 @@ EOF
 
 #
 # ---------------------------------------------------
+# The date half. date -v already rejects every bad date
+# below and exits 1; nothing hears it, because
+# date_from_filename is a $(shell) call, which keeps the
+# output and throws the status away, and make 3.81 has no
+# .SHELLSTATUS. So today these all publish a page with an
+# empty posted-on line and an empty <pubDate>.
+# ---------------------------------------------------
+#
+
+test_out_of_range_date_is_rejected() {
+	sandbox out_of_range_date_is_rejected
+	add_post '2026-13-40-home_bad.txt' <<'EOF'
+title: Bad Date
+-----------------------------------
+<p>BAD DATE BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-13-40-home_bad.txt'
+	assert_no_file 'build/2026/13/40/bad.html'
+}
+
+test_non_numeric_date_is_rejected() {
+	sandbox non_numeric_date_is_rejected
+	add_post '20xx-ab-cd-home_x.txt' <<'EOF'
+title: Not A Date
+-----------------------------------
+<p>NON NUMERIC BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/20xx-ab-cd-home_x.txt'
+	assert_no_file 'build/20xx/ab/cd/x.html'
+}
+
+#
+# Separate from the out-of-range test on purpose: this is
+# the case stage one alone would miss, since 30 is inside
+# any plausible day range. A future contributor who deletes
+# stage two as a fork-saving tidy-up should be told so by a
+# test rather than by the spec.
+#
+test_impossible_calendar_date_is_rejected() {
+	sandbox impossible_calendar_date_is_rejected
+	add_post '2026-02-30-home_feb.txt' <<'EOF'
+title: No Such Day
+-----------------------------------
+<p>FEB THIRTY BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-02-30-home_feb.txt'
+	assert_no_file 'build/2026/02/30/feb.html'
+}
+
+#
+# Leap-year exactness, which is the sharpest thing
+# distinguishing stage two from a day-range check. 2026 is
+# not a leap year.
+#
+test_non_leap_february_29_is_rejected() {
+	sandbox non_leap_february_29_is_rejected
+	add_post '2026-02-29-home_feb.txt' <<'EOF'
+title: Not A Leap Year
+-----------------------------------
+<p>FEB TWENTYNINE BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-02-29-home_feb.txt'
+	assert_no_file 'build/2026/02/29/feb.html'
+}
+
+#
+# date -v accepts absurdly long years up to about eleven
+# digits and rejects them past that, so a prefilter that
+# checks "all digits" without checking length clears this
+# name, never sends it to date, and publishes
+# /999999999999/01/02/x.html with an empty posted-on line.
+# Found at the plan review against exactly that prefilter.
+# This is the guard on YEAR_SHAPES upper bound.
+#
+test_absurdly_long_year_is_rejected() {
+	sandbox absurdly_long_year_is_rejected
+	add_post '999999999999-01-02-home_x.txt' <<'EOF'
+title: Long Year
+-----------------------------------
+<p>LONG YEAR BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/999999999999-01-02-home_x.txt'
+	assert_no_file 'build/999999999999/01/02/x.html'
+}
+
+#
+# CANNOT FAIL BEFORE THE CHANGE. Unpadded dates are
+# documented as supported and are the likeliest thing an
+# over-strict date check would break. The five-digit year
+# is here because YEAR_SHAPES stops at five: it must still
+# be cleared by stage one rather than merely survive.
+#
+test_unpadded_date_still_builds() {
+	sandbox unpadded_date_still_builds
+	add_post '2026-7-4-home_unpadded.txt' <<'EOF'
+title: Unpadded
+-----------------------------------
+<p>UNPADDED BODY</p>
+EOF
+	add_post '99999-1-1-home_faryear.txt' <<'EOF'
+title: Far Year
+-----------------------------------
+<p>FAR YEAR BODY</p>
+EOF
+	build || return
+	assert_grep 'build/2026/7/4/unpadded.html' 'UNPADDED BODY'
+	assert_grep 'build/99999/1/1/faryear.html' 'FAR YEAR BODY'
+}
+
+#
+# CANNOT FAIL BEFORE THE CHANGE. The guard on the prefilter
+# boundary: all three of these are days stage one declines
+# to clear, so this is the only test exercising stage two
+# ACCEPT path. Without it, a stage two that rejected
+# everything it was asked about would pass the whole suite.
+# 2028 is a leap year.
+#
+test_month_end_dates_still_build() {
+	sandbox month_end_dates_still_build
+	add_post '2026-01-31-home_jan.txt' <<'EOF'
+title: End Of January
+-----------------------------------
+<p>JAN THIRTYONE BODY</p>
+EOF
+	add_post '2026-04-30-home_apr.txt' <<'EOF'
+title: End Of April
+-----------------------------------
+<p>APR THIRTY BODY</p>
+EOF
+	add_post '2028-02-29-home_leap.txt' <<'EOF'
+title: Leap Day
+-----------------------------------
+<p>LEAP DAY BODY</p>
+EOF
+	build || return
+	assert_grep 'build/2026/01/31/jan.html' 'JAN THIRTYONE BODY'
+	assert_grep 'build/2026/04/30/apr.html' 'APR THIRTY BODY'
+	assert_grep 'build/2028/02/29/leap.html' 'LEAP DAY BODY'
+}
+
+#
+# ---------------------------------------------------
 # all and clean must be phony. Both are named after
 # nothing on disk, but make does not know that: create a
 # file with either name -- a stray shell redirect, a
@@ -1926,5 +2073,12 @@ test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
 test_empty_title_slug_is_rejected
+test_out_of_range_date_is_rejected
+test_non_numeric_date_is_rejected
+test_impossible_calendar_date_is_rejected
+test_non_leap_february_29_is_rejected
+test_absurdly_long_year_is_rejected
+test_unpadded_date_still_builds
+test_month_end_dates_still_build
 
 pass_fail_summary

@@ -165,9 +165,23 @@ SITE_URL = $(patsubst %/,%,$(strip $(CONFIG_URL)))
 export SITE_URL
 
 #
+# The three date fields of a post filename, as words, and
+# the date -v arguments they make. Three call sites share
+# these: the two date formatters below and the parse-time
+# date check further down. The check's whole correctness
+# rests on it running the same arguments the build will, so
+# this is factored rather than repeated -- a second,
+# independently written copy could drift, and a check that
+# answers a slightly different question than the build asks
+# is the same class of defect as no check.
+#
+date_words = $(wordlist 1, 3, $(subst -, , $(notdir $(1))))
+date_args = $(join $(addprefix -v, $(call date_words,$(1))), y m d)
+
+#
 # Creates a formatted date from a file name.
 #
-date_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) "+%B %d, %Y")
+date_from_filename = $(shell date $(call date_args,$(1)) "+%B %d, %Y")
 
 #
 # The same date in RFC-822, which is what RSS pubDate
@@ -183,7 +197,7 @@ date_from_filename = $(shell date $(join $(addprefix -v, $(wordlist 1, 3, $(subs
 # build would emit different pubDates and rss.xml would
 # look changed on every deploy.
 #
-rfc822_from_filename = $(shell LC_ALL=C date $(join $(addprefix -v, $(wordlist 1, 3, $(subst -, , $(notdir $(1))))), y m d) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
+rfc822_from_filename = $(shell LC_ALL=C date $(call date_args,$(1)) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
 
 #
 # Post filenames are y-m-d-<category>_<title>.txt.
@@ -268,6 +282,104 @@ check_post_name = \
 	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))\
 	$(if $(call post_slug,$(1)),,$(error posts/$(1): empty title slug in filename; expected y-m-d-category_title.txt))
 CHECKED_POST_NAMES := $(foreach f,$(POST_NAMES),$(call check_post_name,$(f)))
+
+#
+# Maps every digit to a +, leaving everything else alone.
+# A run of + is then both a proof that the field was all
+# digits and a tally of how many there were, which is what
+# YEAR_SHAPES below matches against.
+#
+# + and not a letter: a letter would make 20xx map to xxxx
+# and match a four-character shape, clearing a year that is
+# not a year at all. + cannot survive here because BAD_CHARS
+# rejects it, which is a second thing the character check
+# above is load-bearing for.
+#
+digits_to_plus = $(subst 0,+,$(subst 1,+,$(subst 2,+,$(subst 3,+,$(subst 4,+,$(subst 5,+,$(subst 6,+,$(subst 7,+,$(subst 8,+,$(subst 9,+,$(1)))))))))))
+
+#
+# A year of one to five digits. The upper bound is not
+# decoration: date -v accepts absurdly long years up to
+# about eleven digits and then starts rejecting them, so
+# "all digits" alone would clear 999999999999-01-02, never
+# send it to date, and publish /999999999999/01/02/x.html
+# with an empty posted-on line -- exactly the silently wrong
+# output this check exists to stop, reintroduced by the
+# optimisation meant to make it cheap. Five digits keeps
+# 99999 building without a fork; anything longer becomes a
+# suspect and gets date's opinion, which is right either way.
+#
+YEAR_SHAPES := + ++ +++ ++++ +++++
+
+#
+# Months 1-12 and days 1-28, padded and unpadded. 28 and not
+# 31 on purpose: 28 is the largest day valid in every month
+# of every year, so clearing it needs no calendar knowledge
+# at all. Days 29-31 are where month lengths and leap years
+# start to matter, and those go to date itself below.
+#
+DATE_OK_MONTHS := 1 2 3 4 5 6 7 8 9 10 11 12 01 02 03 04 05 06 07 08 09
+DATE_OK_DAYS := 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 01 02 03 04 05 06 07 08 09
+
+#
+# Non-empty when make can PROVE date will accept this
+# filename's date: a year of one to five digits, a month in
+# 1-12, a day in 1-28. It proves rather than judges -- it
+# must never clear anything date would reject, and anything
+# it cannot clear is a suspect rather than a reject. Every
+# bound here exists because of that invariant, not to
+# describe what a sensible date looks like.
+#
+# The year clause does three jobs at once: non-empty, all
+# digits, and short enough. An empty year maps to an empty
+# string, which matches no shape.
+#
+# The $(strip) is load-bearing: $(if) treats a whitespace-
+# only expansion as true, and the \-continuations below
+# would otherwise produce one.
+#
+date_is_sound = $(strip \
+	$(if $(filter $(call digits_to_plus,$(word 1,$(call date_words,$(1)))),$(YEAR_SHAPES)),\
+	$(if $(filter $(word 2,$(call date_words,$(1))),$(DATE_OK_MONTHS)),\
+	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x))))
+
+#
+# The names stage one could not clear, asked of date itself.
+# One shell invocation however many posts there are, running
+# one date call per suspect -- which in practice is only
+# posts dated the 29th to the 31st.
+#
+# date already rejects a bad date and exits 1. Nothing in
+# the build hears it: date_from_filename is a $(shell) call,
+# which keeps the output and throws the status away, and
+# make 3.81 has no .SHELLSTATUS. So this is not a second
+# implementation of date's judgement, it is the only way to
+# hear a verdict date already reaches -- at parse time,
+# where a non-zero exit can still become an $(error).
+#
+# THIS MUST STAY BELOW CHECKED_POST_NAMES. The $(shell)
+# interpolates filenames into a shell command line
+# unquoted, so a post named 20xx-01-02-home_x$(>PWN).txt
+# executes during the parse -- $(>PWN) is a command
+# substitution whose body is a redirection, so it creates
+# the file. Verified: with the character check above, the
+# $(error) fires first and nothing runs; with the two
+# swapped, the payload runs and is consumed by the shell,
+# so even the resulting error message looks clean. Both are
+# := , so this is a guarantee about textual order in this
+# file and nothing else.
+#
+# It takes a FAILING date to get there -- the payload rides
+# in on the `|| echo $(n)` branch -- which narrows the
+# hazard without closing it, since a bad date is exactly
+# what this check is looking for.
+#
+# The trailing `true` is for intent, not correctness --
+# nothing reads this $(shell)'s exit status.
+#
+SUSPECT_POST_DATES := $(foreach n,$(POST_NAMES),$(if $(call date_is_sound,$(n)),,$(n)))
+BAD_POST_DATES := $(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_args,$(n)) -v0H -v0M -v0S >/dev/null 2>&1 || echo $(n);) true)
+CHECKED_POST_DATES := $(if $(BAD_POST_DATES),$(error no such calendar date in: $(addprefix posts/,$(BAD_POST_DATES)); a post filename must begin with a real y-m-d date))
 
 #
 # Never leave a half-written target behind for the next
