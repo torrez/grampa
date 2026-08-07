@@ -5,7 +5,7 @@ build/
 work/
 tests/tmp/
 deploy.sh
-templates/
+/templates/
 Markdown.pl
 .claude/worktrees/
 .superpowers/
