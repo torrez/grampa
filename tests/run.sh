@@ -455,6 +455,13 @@ EOF
 	printf 'name=My Weblog\nurl=https://example.com\n' > config
 	build || return
 	cp build/rss.xml first-rss.xml
+	# Whole-second mtime resolution again -- a one-post
+	# sandbox builds in well under a second, so without
+	# this the two builds can land in the same wall-clock
+	# second and come out byte-identical even if a churning
+	# timestamp (a reintroduced lastBuildDate, say) would
+	# otherwise have caught it.
+	sleep 1
 	make clean >/dev/null 2>&1
 	build || return
 	if cmp -s first-rss.xml build/rss.xml; then ok; else fail "feed changed across rebuilds" "$(diff first-rss.xml build/rss.xml)"; fi
