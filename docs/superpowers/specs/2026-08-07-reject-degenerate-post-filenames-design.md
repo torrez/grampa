@@ -100,14 +100,18 @@ Two stages. Make proves the ordinary case valid without spawning anything; `date
 only about the names make cannot clear.
 
 ```make
+date_words = $(wordlist 1, 3, $(subst -, , $(notdir $(1))))
+date_args  = $(join $(addprefix -v, $(call date_words,$(1))), y m d)
+
+digits_to_plus = $(subst 0,+,$(subst 1,+,… $(subst 9,+,$(1)) …))
+YEAR_SHAPES    := + ++ +++ ++++ +++++
 DATE_OK_MONTHS := 1 2 3 4 5 6 7 8 9 10 11 12 01 02 03 04 05 06 07 08 09
 DATE_OK_DAYS   := 1 2 … 28 01 02 … 09
-date_words     = $(wordlist 1,3,$(subst -,$(space),$(notdir $(1))))
-date_is_sound  = $(if $(and \
-	$(strip $(word 1,$(call date_words,$(1)))),\
-	$(if $(call strip_digits,$(word 1,$(call date_words,$(1)))),,x),\
-	$(filter $(word 2,$(call date_words,$(1))),$(DATE_OK_MONTHS)),\
-	$(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS))),x)
+
+date_is_sound = $(strip \
+	$(if $(filter $(call digits_to_plus,$(word 1,$(call date_words,$(1)))),$(YEAR_SHAPES)),\
+	$(if $(filter $(word 2,$(call date_words,$(1))),$(DATE_OK_MONTHS)),\
+	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x))))
 
 SUSPECT_POST_DATES := $(foreach n,$(POST_NAMES),$(if $(call date_is_sound,$(n)),,$(n)))
 BAD_POST_DATES := $(shell $(foreach n,$(SUSPECT_POST_DATES),\
@@ -115,12 +119,34 @@ BAD_POST_DATES := $(shell $(foreach n,$(SUSPECT_POST_DATES),\
 CHECKED_POST_DATES := $(if $(BAD_POST_DATES),$(error …))
 ```
 
+Two mechanical notes on that block. It is nested `$(if)` rather than `$(and)` — `$(and)`
+exists in 3.81, but its arguments here would arrive carrying the whitespace that
+`\`-continuations leave behind, and `$(if)` treats a whitespace-only expansion as *true*.
+The outer `$(strip)` is the belt to that braces: without it `date_is_sound` can return a
+string of spaces, which every caller would read as "sound".
+
 **Stage one proves, it does not judge.** `date_is_sound` returns non-empty only for a name it
-can show `date` will accept: a non-empty all-digit year, a month in 1–12, and a day in 1–28.
-Verified across years 0, 1, 26, 99, 999, 2026, 9999, and 99999, padded and unpadded, that
-every such combination exits 0 — day ≤ 28 is valid in every month of every year, so no
+can show `date` will accept: a year of **one to five digits**, a month in 1–12, and a day in
+1–28. Verified across years 0, 1, 26, 99, 999, 2026, 9999, and 99999, padded and unpadded,
+that every such combination exits 0 — day ≤ 28 is valid in every month of every year, so no
 calendar knowledge is needed to clear it. Anything it cannot prove is a *suspect*, not a
 reject.
+
+**The year's upper bound is load-bearing, and an earlier draft did not have it.** The plan
+review found that `date -v` accepts absurdly long years up to about eleven digits and then
+starts rejecting them, so an "all digits, any length" year clears `999999999999-01-02`,
+never sends it to `date`, and publishes `/999999999999/01/02/x.html` with an empty posted-on
+line — the exact failure this change exists to close, reintroduced by the optimisation meant
+to make it cheap. Five digits keeps `99999` building without a fork and sends anything longer
+to `date`, which is the right answer either way. This is the invariant to protect when
+touching stage one: **it must never clear something `date` would reject.** Guarded by
+`test_absurdly_long_year_is_rejected`.
+
+The check is one `$(filter)` against an enumerated list of shapes, where each digit is mapped
+to a `+`: `2026` becomes `++++` and matches, `20xx` becomes `++xx` and does not. Mapping to a
+letter instead would make `20xx` into `xxxx` and wrongly clear it. `+` is safe as the marker
+precisely because `BAD_CHARS` rejects it, so no filename reaching this point can contain one —
+a second thing the character check's position above this one buys.
 
 **Stage two is the authority.** Suspects — days 29, 30, 31, and every malformed field — go to
 `date` itself. `date_from_filename` and `rfc822_from_filename` build their arguments with the
@@ -187,7 +213,13 @@ the `date` arguments and the `|| echo $(n)`. A filename containing a backtick, `
 therefore *executes* during the parse. This was demonstrated, not reasoned about: a post
 named `20xx-01-02-home_x$(>PWN).txt` created the marker file when the date check ran with no
 character check above it, and the payload was consumed by the shell, so the filename in the
-resulting error looked clean. The backtick spelling behaves the same way.
+resulting error looked clean. The backtick spelling `` `>PWN` `` behaves the same way.
+
+**Use that payload and not a friendlier-looking one.** The plan review caught a draft probe
+using `$(shell touch PWNED)`, which creates nothing even with the ordering deliberately
+reversed — the shell looks for a program named `shell` and fails — so the probe reported "no
+leak" regardless of order and could not have failed. Verified all three spellings:
+`$(>PWN)` and `` `>PWN` `` execute, `$(shell touch PWN)` does not.
 
 It needs a *failing* date to reach the shell — the payload rides in on the `|| echo $(n)`
 branch — so a well-dated filename with a metacharacter does not get there. That narrows the
@@ -255,9 +287,9 @@ read-only and produce `$(error)` or nothing.
 
 ## Tests
 
-Nine new tests in `tests/run.sh`, each watched failing against the current Makefile before
+Ten new tests in `tests/run.sh`, each watched failing against the current Makefile before
 the fix goes in, per the house rule that a test that has never failed guards nothing. **Three
-of the nine cannot fail before the change** — tests 3, 8, and 9 — and are marked as such;
+of the ten cannot fail before the change** — tests 3, 9, and 10 — and are marked as such;
 they guard the new checks' false-positive surface rather than the bug, which is a real job
 but a different one.
 
@@ -303,11 +335,17 @@ but a different one.
    exit 0. Pins leap-year exactness, which is the sharpest thing distinguishing stage two
    from a day-range check.
 
-8. **`test_unpadded_date_still_builds`** — `2026-7-4-home_unpadded.txt`. Asserts exit 0 and
-   `/2026/7/4/unpadded.html`. Cannot fail before the change. Unpadded dates are documented as
-   supported and are the likeliest thing an over-strict date check would break.
+8. **`test_absurdly_long_year_is_rejected`** — `999999999999-01-02-home_x.txt`. Fails today
+   at exit 0. Guards stage one's five-digit upper bound on the year; see the paragraph on it
+   under Approach 2.
 
-9. **`test_month_end_dates_still_build`** — `2026-01-31`, `2026-04-30`, and `2028-02-29` in
+9. **`test_unpadded_date_still_builds`** — `2026-7-4-home_unpadded.txt` and
+   `99999-1-1-home_faryear.txt`. Asserts exit 0 and both pages. Cannot fail before the
+   change. Unpadded dates are documented as supported and are the likeliest thing an
+   over-strict date check would break; the five-digit year is there because `YEAR_SHAPES`
+   stops at five and must still *clear* it rather than merely tolerate it.
+
+10. **`test_month_end_dates_still_build`** — `2026-01-31`, `2026-04-30`, and `2028-02-29` in
    one sandbox. Asserts exit 0 and all three pages. Cannot fail before the change. This is
    the guard on the **prefilter boundary**: all three are suspects that stage one declines to
    clear, so it is the only test exercising stage two's accept path. Without it, a stage two

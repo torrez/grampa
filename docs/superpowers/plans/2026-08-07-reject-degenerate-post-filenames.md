@@ -9,10 +9,10 @@ closing the glob-character-slug bug and the out-of-range-dates item in `docs/bac
 **Architecture:** Two independent parse-time checks in the same neighbourhood of the
 Makefile. The character check is a fourth clause in `check_post_name`, driven by a list of
 forbidden characters and a `foreach`/`findstring` fold — pure make, no process. The date
-check is two-stage: make proves the ordinary case sound (all-digit year, month 1–12, day
-1–28) and only forks to `date` for what it cannot clear. The character check must sit
-textually **above** the date check, because the date check interpolates filenames into a
-shell command line.
+check is two-stage: make proves the ordinary case sound (a year of one to five digits,
+month 1–12, day 1–28) and only forks to `date` for what it cannot clear. The character
+check must sit textually **above** the date check, because the date check interpolates
+filenames into a shell command line.
 
 **Tech Stack:** GNU make 3.81, BSD `date`, bash, coreutils. No runtime, no dependencies.
 
@@ -27,8 +27,8 @@ where getting the sequence wrong is a security bug rather than a style problem.
 - **BSD/macOS only.** `date -v` is already assumed repo-wide. Do not add GNU-isms.
 - **`#`-banner comment block above every new helper**, in the existing style.
 - **Every test must be watched failing before the fix goes in.** A test that has never
-  failed guards nothing. Six of the nine tests here can fail beforehand; three cannot, and
-  are marked. Do not skip the RED run for the six.
+  failed guards nothing. Seven of the ten tests here can fail beforehand; three cannot, and
+  are marked. Do not skip the RED run for the seven.
 - **The suite is `make test`** (runs `tests/run.sh` in throwaway sandboxes). Baseline is
   **223 passing, 0 failed** before this work starts, confirmed on 2026-08-07. Confirm that
   number first; if it does not match, stop and report rather than proceeding.
@@ -309,18 +309,18 @@ builds in a sandbox.
   (`Makefile:167-170`); `rfc822_from_filename` (`Makefile:186`) rewritten to use `date_args`;
   the two-stage check added immediately below `CHECKED_POST_NAMES` (`Makefile:225`) and above
   `.DELETE_ON_ERROR:` (`Makefile:231`)
-- Test: `tests/run.sh` — six new tests, plus six names in the runner list
+- Test: `tests/run.sh` — seven new tests, plus seven names in the runner list
 
 **Interfaces:**
 - Consumes: `check_post_name`'s character clause from Task 1, which **must** already be in
   place. The `$(shell)` here interpolates filenames unquoted; without Task 1 a filename
   containing `` ` `` or `$(` executes during the parse.
 - Produces: `date_words` (a filename → the three date fields as words), `date_args` (a
-  filename → `-v<y>y -v<m>m -v<d>d`), `strip_digits`, `DATE_OK_MONTHS`, `DATE_OK_DAYS`,
-  `date_is_sound` (a filename → `x` if make can prove `date` will accept it, else empty),
+  filename → `-v<y>y -v<m>m -v<d>d`), `digits_to_plus`, `YEAR_SHAPES`, `DATE_OK_MONTHS`,
+  `DATE_OK_DAYS`, `date_is_sound` (a filename → `x` if make can prove `date` will accept it, else empty),
   `SUSPECT_POST_DATES`, `BAD_POST_DATES`, `CHECKED_POST_DATES`.
 
-- [ ] **Step 1: Write the six failing tests**
+- [ ] **Step 1: Write the seven failing tests**
 
 Add to `tests/run.sh`, after the three from Task 1:
 
@@ -393,9 +393,32 @@ EOF
 }
 
 #
+# date -v accepts absurdly long years up to about eleven
+# digits and rejects them past that, so a prefilter that
+# checks "all digits" without checking length clears this
+# name, never sends it to date, and publishes
+# /999999999999/01/02/x.html with an empty posted-on line.
+# Found at the plan review against exactly that prefilter.
+# This is the guard on YEAR_SHAPES' upper bound.
+#
+test_absurdly_long_year_is_rejected() {
+	sandbox absurdly_long_year_is_rejected
+	add_post '999999999999-01-02-home_x.txt' <<'EOF'
+title: Long Year
+-----------------------------------
+<p>LONG YEAR BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/999999999999-01-02-home_x.txt'
+	assert_no_file 'build/999999999999/01/02/x.html'
+}
+
+#
 # CANNOT FAIL BEFORE THE CHANGE. Unpadded dates are
 # documented as supported and are the likeliest thing an
-# over-strict date check would break.
+# over-strict date check would break. The five-digit year
+# is here because YEAR_SHAPES stops at five: it must still
+# be cleared by stage one rather than merely survive.
 #
 test_unpadded_date_still_builds() {
 	sandbox unpadded_date_still_builds
@@ -404,8 +427,14 @@ title: Unpadded
 -----------------------------------
 <p>UNPADDED BODY</p>
 EOF
+	add_post '99999-1-1-home_faryear.txt' <<'EOF'
+title: Far Year
+-----------------------------------
+<p>FAR YEAR BODY</p>
+EOF
 	build || return
 	assert_grep 'build/2026/7/4/unpadded.html' 'UNPADDED BODY'
+	assert_grep 'build/99999/1/1/faryear.html' 'FAR YEAR BODY'
 }
 
 #
@@ -440,22 +469,23 @@ EOF
 }
 ```
 
-Add the six names to the runner list at the bottom of `tests/run.sh`:
+Add the seven names to the runner list at the bottom of `tests/run.sh`:
 
 ```
 test_out_of_range_date_is_rejected
 test_non_numeric_date_is_rejected
 test_impossible_calendar_date_is_rejected
 test_non_leap_february_29_is_rejected
+test_absurdly_long_year_is_rejected
 test_unpadded_date_still_builds
 test_month_end_dates_still_build
 ```
 
-- [ ] **Step 2: Run the six tests and watch four of them fail**
+- [ ] **Step 2: Run the seven tests and watch five of them fail**
 
-Run: `make test 2>&1 | grep -A4 'out_of_range_date\|non_numeric_date\|impossible_calendar\|non_leap_february\|unpadded_date\|month_end_dates'`
+Run: `make test 2>&1 | grep -A4 'out_of_range_date\|non_numeric_date\|impossible_calendar\|non_leap_february\|absurdly_long_year\|unpadded_date\|month_end_dates'`
 
-Expected: the first four **FAIL** with `make succeeded but should have failed`;
+Expected: the first five **FAIL** with `make succeeded but should have failed`;
 `test_unpadded_date_still_builds` and `test_month_end_dates_still_build` **PASS**.
 
 If either of the last two fails here, stop — the date check has not been written yet, so a
@@ -524,12 +554,32 @@ Immediately below `CHECKED_POST_NAMES := …` at `Makefile:225`:
 
 ```make
 #
-# Strips every digit out of a string. An all-digit string
-# leaves nothing behind; anything else leaves its non-digit
-# characters. Note an empty string also leaves nothing, so
-# callers must check for emptiness separately.
+# Maps every digit to a +, leaving everything else alone.
+# A run of + is then both a proof that the field was all
+# digits and a tally of how many there were, which is what
+# YEAR_SHAPES below matches against.
 #
-strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1)))))))))))
+# + and not a letter: a letter would make 20xx map to xxxx
+# and match a four-character shape, clearing a year that is
+# not a year at all. + cannot survive here because BAD_CHARS
+# rejects it, which is a second thing the character check
+# above is load-bearing for.
+#
+digits_to_plus = $(subst 0,+,$(subst 1,+,$(subst 2,+,$(subst 3,+,$(subst 4,+,$(subst 5,+,$(subst 6,+,$(subst 7,+,$(subst 8,+,$(subst 9,+,$(1)))))))))))
+
+#
+# A year of one to five digits. The upper bound is not
+# decoration: date -v accepts absurdly long years up to
+# about eleven digits and then starts rejecting them, so
+# "all digits" alone would clear 999999999999-01-02, never
+# send it to date, and publish /999999999999/01/02/x.html
+# with an empty posted-on line -- exactly the silently wrong
+# output this change exists to stop. Five digits keeps
+# 99999 building without a fork; anything longer becomes a
+# suspect and gets date's opinion, which is the right answer
+# either way.
+#
+YEAR_SHAPES := + ++ +++ ++++ +++++
 
 #
 # Months 1-12 and days 1-28, padded and unpadded. 28 and not
@@ -543,21 +593,26 @@ DATE_OK_DAYS := 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 2
 
 #
 # Non-empty when make can PROVE date will accept this
-# filename's date: a non-empty all-digit year, a month in
+# filename's date: a year of one to five digits, a month in
 # 1-12, a day in 1-28. It proves rather than judges -- it
 # must never clear anything date would reject, and anything
-# it cannot clear is a suspect rather than a reject.
+# it cannot clear is a suspect rather than a reject. Every
+# bound here exists because of that invariant and not to
+# describe what a sensible date looks like.
 #
 # The $(strip) is load-bearing: $(if) treats a whitespace-
 # only expansion as true, and the \-continuations below
 # would otherwise produce one.
 #
 date_is_sound = $(strip \
-	$(if $(word 1,$(call date_words,$(1))),\
-	$(if $(call strip_digits,$(word 1,$(call date_words,$(1)))),,\
+	$(if $(filter $(call digits_to_plus,$(word 1,$(call date_words,$(1)))),$(YEAR_SHAPES)),\
 	$(if $(filter $(word 2,$(call date_words,$(1))),$(DATE_OK_MONTHS)),\
-	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x)))))
+	$(if $(filter $(word 3,$(call date_words,$(1))),$(DATE_OK_DAYS)),x))))
 ```
+
+The year clause does three jobs at once — non-empty, all digits, and bounded length — which
+is why there is no separate emptiness check. An empty year maps to an empty string, which
+matches no shape in `YEAR_SHAPES`.
 
 - [ ] **Step 6: Verify stage one clears and suspects the right names, before wiring stage two**
 
@@ -565,7 +620,7 @@ date_is_sound = $(strip \
 make -f /dev/stdin probe <<'EOF' 2>&1
 include Makefile
 probe: ; @true
-NAMES := 2026-01-02-home_a.txt 2026-7-4-home_b.txt 26-7-4-home_c.txt 2026-01-31-home_d.txt 2026-02-30-home_e.txt 2026-13-40-home_f.txt 20xx-ab-cd-home_g.txt 2028-02-29-home_h.txt
+NAMES := 2026-01-02-home_a.txt 2026-7-4-home_b.txt 26-7-4-home_c.txt 99999-01-02-home_i.txt 2026-01-31-home_d.txt 2026-02-30-home_e.txt 2026-13-40-home_f.txt 20xx-ab-cd-home_g.txt 2028-02-29-home_h.txt 999999999999-01-02-home_j.txt
 $(foreach n,$(NAMES),$(info $(n) sound=[$(call date_is_sound,$(n))]))
 EOF
 ```
@@ -573,11 +628,15 @@ EOF
 The explicit `probe` goal is required for the same reason as in Task 1, Step 6: `include
 Makefile` would otherwise make `all` the default goal and build the real repo.
 
-Expected — `sound=[x]` for `2026-01-02`, `2026-7-4`, and `26-7-4`; `sound=[]` (suspect) for
-`2026-01-31`, `2026-02-30`, `2026-13-40`, `20xx-ab-cd`, and `2028-02-29`.
+Expected — `sound=[x]` for `2026-01-02`, `2026-7-4`, `26-7-4`, and `99999-01-02`;
+`sound=[]` (suspect) for `2026-01-31`, `2026-02-30`, `2026-13-40`, `20xx-ab-cd`,
+`2028-02-29`, and `999999999999-01-02`.
 
-**A `sound=[x]` on any of the last five is a correctness bug, not a performance one** — it
-means a bad date would never reach `date`. Stop and fix.
+**A `sound=[x]` on any of the last six is a correctness bug, not a performance one** — it
+means a bad date would never reach `date`. Stop and fix. The twelve-digit year is the case
+that matters most here: `date -v` accepts absurd years up to about eleven digits and rejects
+them beyond that, so an unbounded all-digit year clears something `date` would refuse. Found
+at the plan review, against a `date_is_sound` that checked digits but not length.
 
 - [ ] **Step 7: Add stage two — the batched `date` call**
 
@@ -600,13 +659,20 @@ Directly below `date_is_sound`:
 #
 # THIS MUST STAY BELOW CHECKED_POST_NAMES. The $(shell)
 # interpolates filenames into a shell command line
-# unquoted, so a post named …_x$(shell touch PWNED).txt
-# executes during the parse. Verified: with the character
-# check above, the $(error) fires first and nothing runs;
-# with the two swapped, the payload runs and is consumed,
+# unquoted, so a post named 20xx-01-02-home_x$(>PWN).txt
+# executes during the parse -- $(>PWN) is a command
+# substitution whose body is a redirection, so it creates
+# the file. Verified: with the character check above, the
+# $(error) fires first and nothing runs; with the two
+# swapped, the payload runs and is consumed by the shell,
 # so even the resulting error message looks clean. Both are
 # := , so this is a guarantee about textual order in this
 # file and nothing else.
+#
+# It takes a FAILING date to get there -- the payload rides
+# in on the `|| echo $(n)` branch -- which narrows the
+# hazard without closing it, since a bad date is exactly
+# what this check is looking for.
 #
 # The trailing `true` is for intent, not correctness --
 # nothing reads this $(shell)'s exit status.
@@ -622,17 +688,28 @@ CHECKED_POST_DATES := $(if $(BAD_POST_DATES),$(error no such calendar date in: $
 SB=$(mktemp -d)
 cp Makefile "$SB"/; cp -R .source tools "$SB"/
 cd "$SB" && make setup >/dev/null 2>&1
-: > 'posts/20xx-01-02-home_x$(shell touch PWNED).txt'
+: > 'posts/20xx-01-02-home_x$(>PWN).txt'
 make 2>&1 | head -2
-ls PWNED 2>/dev/null && echo "LEAKED -- ordering is wrong" || echo "no leak"
+ls PWN >/dev/null 2>&1 && echo "LEAKED -- ordering is wrong" || echo "no leak"
 cd - >/dev/null
 ```
 
 Expected: an `illegal character` error from Task 1's check, and `no leak`.
 
-- [ ] **Step 9: Run the six tests and watch them pass**
+**The payload must be `$(>PWN)`, not `$(shell touch PWN)`.** Verified at the plan review that
+`$(shell touch PWN)` creates nothing even with the ordering deliberately reversed — the shell
+looks for a program named `shell`, fails, and the probe reports `no leak` whatever the order,
+which makes it an assertion that cannot fail. `$(>PWN)` and the backtick form `` `>PWN` ``
+both really execute. Confirm the probe is meaningful by running it once with the two checks
+deliberately swapped and seeing `LEAKED`, then swapping them back.
 
-Run: `make test 2>&1 | grep -A4 'out_of_range_date\|non_numeric_date\|impossible_calendar\|non_leap_february\|unpadded_date\|month_end_dates'`
+The date fields are `20xx` so the name reaches the `|| echo $(n)` branch, which is the only
+path that puts the filename in front of the shell. A well-dated name with the same payload
+never gets there.
+
+- [ ] **Step 9: Run the seven tests and watch them pass**
+
+Run: `make test 2>&1 | grep -A4 'out_of_range_date\|non_numeric_date\|impossible_calendar\|non_leap_february\|absurdly_long_year\|unpadded_date\|month_end_dates'`
 Expected: no `FAIL:` lines.
 
 - [ ] **Step 10: Run the full suite**
