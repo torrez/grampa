@@ -530,6 +530,107 @@ EOF
 }
 
 #
+# fill() rescans the line it just composed, so whatever
+# gets substituted first is itself searched for the
+# placeholders substituted after it. A post body is the
+# largest thing the author controls, so a post *about*
+# grampa's own template syntax -- on a blog whose README
+# invites people to read the Makefile -- came out with its
+# examples replaced by real values.
+#
+# The fix is ordering, not a new engine: the author-supplied
+# text goes in last, so there is nothing left to rescan it
+# for. See the comment above RENDER_POST for what that does
+# and does not close.
+#
+test_placeholders_in_a_body_are_not_expanded() {
+	sandbox placeholder_body
+	add_post 2026-08-06-home_syntax.txt <<'EOF'
+title: Template syntax
+-----------------------------------
+<p>Use {{permalink}} for the URL, {{pub_date}} for the date,
+{{category}} and {{category_url}} for the category, and
+{{page_title}} in base.txt.</p>
+EOF
+	build || return
+	local page=build/2026/08/06/syntax.html
+	assert_grep "$page" "{{permalink}}"
+	assert_grep "$page" "{{pub_date}}"
+	assert_grep "$page" "{{category}}"
+	assert_grep "$page" "{{category_url}}"
+	assert_grep "$page" "{{page_title}}"
+	# The real values still land where the template asks for
+	# them -- this is an ordering change, not a disabling.
+	assert_grep "$page" 'href="/2026/08/06/syntax.html"'
+	assert_grep "$page" "posted on August 06, 2026"
+	assert_grep "$page" "<title>Template syntax - My Weblog</title>"
+	# The index wraps the same fragment through WRAP_IN_BASE.
+	assert_grep build/index.html "{{page_title}}"
+	# ...and the category page is the third consumer.
+	assert_grep build/category/home.html "{{page_title}}"
+}
+
+#
+# The title is author-supplied too, and is filled after the
+# date/permalink/category values for the same reason.
+#
+test_placeholders_in_a_title_are_not_expanded() {
+	sandbox placeholder_title
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: On {{permalink}} and {{category}}
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_grep build/2026/08/06/hello.html "<h4>On {{permalink}} and {{category}}</h4>"
+	assert_grep build/2026/08/06/hello.html "<title>On {{permalink}} and {{category}} - My Weblog</title>"
+}
+
+#
+# RENDER_ITEM has the same shape and the same problem: the
+# title was filled before link, pub_date and category, so a
+# title mentioning one of them picked up the real value.
+# xml_escape does not touch braces, so escaping never hid
+# this.
+#
+test_placeholders_in_the_feed_are_not_expanded() {
+	sandbox placeholder_feed
+	add_post 2026-08-06-home_syntax.txt <<'EOF'
+title: On {{link}} and {{pub_date}}
+-----------------------------------
+<p>Use {{link}} and {{category}} in rss-item.txt.</p>
+EOF
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<title>On {{link}} and {{pub_date}}</title>"
+	assert_grep build/rss.xml "{{link}}"
+	assert_grep build/rss.xml "{{category}}"
+	# The item's own link and date are still real.
+	assert_grep build/rss.xml "<link>https://example.com/2026/08/06/syntax.html</link>"
+	assert_grep build/rss.xml "<pubDate>Thu, 06 Aug 2026 00:00:00 "
+}
+
+#
+# WRAP_IN_CHANNEL fills the blog name into <title> and
+# <description> before it fills <link>, so a name= holding
+# {{link}} took the site URL. config is author-supplied the
+# same as a post is.
+#
+test_placeholders_in_the_blog_name_are_not_expanded() {
+	sandbox placeholder_blog_name
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	printf 'name=A blog about {{link}}\nurl=https://example.com\n' > config
+	build || return
+	assert_grep build/rss.xml "<title>A blog about {{link}}</title>"
+	assert_grep build/rss.xml "<description>A blog about {{link}}</description>"
+	assert_grep build/rss.xml "<link>https://example.com</link>"
+}
+
+#
 # Guards the pattern-rule trap: writing %.tmp's new
 # prerequisites as a bare dependency line looks right and
 # silently drops templates/post.txt, so editing the
@@ -1523,6 +1624,10 @@ test_failed_markdown_leaves_no_stale_chunks
 test_markdown_branch_is_parallel_safe
 test_markdown_body_reaches_the_feed
 test_non_executable_markdown_falls_back_to_verbatim
+test_placeholders_in_a_body_are_not_expanded
+test_placeholders_in_a_title_are_not_expanded
+test_placeholders_in_the_feed_are_not_expanded
+test_placeholders_in_the_blog_name_are_not_expanded
 test_editing_post_template_rebuilds_fragments
 test_editing_base_template_rebuilds_every_page
 test_rssitem_has_absolute_link_and_rfc822_date

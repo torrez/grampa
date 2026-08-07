@@ -381,6 +381,30 @@ endef
 # the same silently-deployable wrong output the .staged
 # recipe's && chain exists to prevent.
 #
+# The fill order below is load-bearing, and it is the same
+# ordering rule in all four programs. fill() rescans the
+# line it just composed, so anything substituted early is
+# itself searched for the placeholders substituted after
+# it. Author-supplied text therefore goes in LAST: the
+# derived values (pub_date, permalink, category_url,
+# category) first, then title, then body. Before this, a
+# post whose body mentioned {{permalink}} -- a post about
+# grampa's own template syntax, on a blog whose README
+# invites people to read the Makefile -- published the real
+# URL in place of the example.
+#
+# What this does NOT close: whatever is filled last is
+# still injectable into everything filled before it, so a
+# *title* containing the literal {{body}} still expands, on
+# the one template line that carries both. Closing that
+# needs a single-pass fill that never rescans a substituted
+# value -- a real change to fill()'s signature and to all
+# four call sites, and it would also drop the documented
+# "first {{key}} on a line only" behaviour. Deferred: the
+# body is the large author-controlled blob and the realistic
+# case, and it is now closed. Guarded by the four
+# test_placeholders_* tests.
+#
 define RENDER_POST
 BEGIN {
     post_output = "";
@@ -388,12 +412,12 @@ BEGIN {
 $(PARSE_FRONT_MATTER)
 END {
     while ((rc = (getline line < "templates/post.txt")) > 0){
-        new_line = fill(line, "title", title);
-        new_line = fill(new_line, "body", body);
-        new_line = fill(new_line, "pub_date", pub_date);
+        new_line = fill(line, "pub_date", pub_date);
         new_line = fill(new_line, "permalink", permalink);
         new_line = fill(new_line, "category_url", category_url);
         new_line = fill(new_line, "category", category);
+        new_line = fill(new_line, "title", title);
+        new_line = fill(new_line, "body", body);
         post_output = post_output new_line "\n";
     }
     if (rc < 0){
@@ -425,10 +449,10 @@ $(PARSE_FRONT_MATTER)
 END {
     link = ENVIRON["SITE_URL"] item_path;
     while ((rc = (getline line < "templates/rss-item.txt")) > 0){
-        new_line = fill(line, "title", xml_escape(title));
-        new_line = fill(new_line, "link", xml_escape(link));
+        new_line = fill(line, "link", xml_escape(link));
         new_line = fill(new_line, "pub_date", pub_date);
         new_line = fill(new_line, "category", xml_escape(category));
+        new_line = fill(new_line, "title", xml_escape(title));
         new_line = fill(new_line, "body", xml_escape(body));
         item_output = item_output new_line "\n";
     }
@@ -462,8 +486,8 @@ BEGIN {
 }
 END {
     while ((rc = (getline line < "templates/base.txt")) > 0){
-        new_line = fill(line, "main", main_output);
-        new_line = fill(new_line, "page_title", ENVIRON["PAGE_TITLE"]);
+        new_line = fill(line, "page_title", ENVIRON["PAGE_TITLE"]);
+        new_line = fill(new_line, "main", main_output);
         html_output = html_output new_line "\n";
     }
     if (rc < 0){
@@ -499,9 +523,9 @@ BEGIN {
 }
 END {
     while ((rc = (getline line < "templates/rss.txt")) > 0){
-        new_line = fill(line, "title", xml_escape(ENVIRON["BLOG_NAME"]));
+        new_line = fill(line, "link", xml_escape(ENVIRON["SITE_URL"]));
+        new_line = fill(new_line, "title", xml_escape(ENVIRON["BLOG_NAME"]));
         new_line = fill(new_line, "description", xml_escape(ENVIRON["BLOG_NAME"]));
-        new_line = fill(new_line, "link", xml_escape(ENVIRON["SITE_URL"]));
         new_line = fill(new_line, "items", items_output);
         xml_output = xml_output new_line "\n";
     }
