@@ -119,6 +119,48 @@ date and title slug in different categories — `2026-08-06-home_dup.txt` and
 `2026-08-06-work_dup.txt` — both want `/2026/08/06/dup.html`. `CHECKED_POST_PAGES` errors
 naming both files rather than letting filename sort order pick a winner.
 
+Two more parse-time errors guard the filename itself, so there are four rules in all and this
+is the one place to find them.
+
+**A filename may contain letters, digits, and only `-`, `_`, and `.`.** Every other ASCII
+punctuation character is rejected by `BAD_CHARS`. Non-ASCII is fine, so
+`2026-01-02-home_café.txt` builds, as do CJK, emoji, and uppercase slugs. This exists because
+a slug containing glob characters used to publish a *different post*: `_a[b]c.txt` beside
+`_abc.txt` built at exit 0 and shipped `abc`'s body, since `$<` is unquoted in the `%.staged`
+recipe and the shell expanded the glob onto the neighbour before awk saw it. The set is every
+ASCII punctuation character but three, closed by enumeration rather than by judging which look
+dangerous — which is how `[` and `]` got through in the first place. `%` and `+` are collateral;
+both built correctly before, and `%` is make's pattern-rule wildcard, so it was a landmine that
+happened not to have gone off. An empty title slug (`2026-01-02-home_.txt`, which published
+`build/2026/01/02/.html`) is rejected too, by the sibling of the empty-category clause. Two
+things still get through: an ASCII **control character** builds and lands in the URL — not
+shell-hazardous, so the bug above stays closed — and a **`:`** dies earlier and less helpfully,
+at `.SECONDARY`'s prerequisite list, with make's own `target pattern contains no '%'`.
+
+**The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
+`2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit, and `2028-02-29` build.
+`date` already rejected these dates and exited 1 — nothing heard it, because
+`date_from_filename` is a `$(shell)` call, which keeps the output and discards the status, and
+make 3.81 has no `.SHELLSTATUS`. The result was a page with an empty posted-on line and an
+empty `<pubDate>`.
+
+The check is two stages. Make clears any year of one to five digits with month 1–12 and day
+1–28 — valid in every month of every year, so no calendar knowledge is needed — and only days
+29–31 and malformed fields are handed to `date` itself, one batched `$(shell)` per build. That
+keeps it near-free: a 60-post corpus dated the 1st–28th forks zero times and costs nothing
+measurable, and one deliberately loaded with month-ends (18 suspects of 66, about triple a real
+calendar's share) took a no-op rebuild from 0.130s to 0.181s. Stage one *proves* rather than
+judges: it must never clear anything `date` would reject, which is what the five-digit year
+bound is for.
+
+**The date check must stay below `CHECKED_POST_NAMES` in the Makefile.** Its `$(shell)`
+interpolates filenames into a shell command line unquoted, so a post named
+`20xx-01-02-home_x$(>PWN).txt` executes during the parse — verified, and the payload is
+consumed by the shell, so even the resulting error message looks clean. The character check
+rejects `$`, `(`, `)`, and the backtick first, which is the only reason that is safe. Both are
+`:=`, so it is a guarantee about textual order in the file and nothing else, and it is guarded
+by `test_character_error_precedes_the_date_error` rather than by the comment alone.
+
 ```
 posts/2026-08-06-home_installing-a-doorbell.txt   →  /2026/08/06/installing-a-doorbell.html
 posts/2026-07-04-project-ideas_raspberry-pi-backup.txt
@@ -322,7 +364,12 @@ more than a format-string swap.
   `posts/` is already handled by `2>/dev/null`. Measured on a 60-post no-op rebuild:
   0.79s → 0.12s, with `build/` and `work/` byte-identical either way.
 - **BSD-only.** `date_from_filename` uses `date -v` (BSD/macOS). It fails on GNU
-  coreutils, so builds are macOS-only as written.
+  coreutils, so builds are macOS-only as written. Since the parse-time date check calls the
+  same `date -v`, GNU is now also where a *legal* filename gets rejected: posts dated the
+  1st–28th are cleared by the pure-make stage and build, while a post dated the 31st becomes
+  a suspect, `date -v` fails for the wrong reason, and the post is rejected as having a bad
+  date. A confusing error on a platform this repo does not claim to support, and arguably an
+  improvement on GNU's behaviour before, which was to publish empty date fields silently.
 - **`config` is read lazily, not at parse time.** `CONFIG_NAME` and `CONFIG_URL` both use
   `=`, not `:=`, because on a first-ever run the `config` target hasn't copied the file into
   place yet when the Makefile is parsed. `config` is also a prerequisite of the HTML rules

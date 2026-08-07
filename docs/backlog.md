@@ -421,6 +421,54 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   Original finding: `Makefile:562`, **verified**. `PARSE_FRONT_MATTER` stops at the
   delimiter; this `sed` did not.
 
+- **Out-of-range dates build successfully — DONE**, and closed wider than the item asked.
+  The key realisation is that **`date` already rejected these dates and exited 1** — nothing
+  heard it, because `date_from_filename` is a `$(shell)` call, which keeps the output and
+  discards the status, and make 3.81 has no `.SHELLSTATUS`. So the fix is not a second
+  implementation of `date`'s judgement; it is the only way to hear a verdict `date` already
+  reaches, asked at parse time where a non-zero exit can still become an `$(error)`.
+
+  Two stages, which is this entry's own "~6 lines of range-checking" with its known hole
+  plugged. Make clears any year of one to five digits with month 1–12 and day 1–28 — the
+  largest day valid in every month of every year, so clearing it needs no calendar knowledge —
+  and only days 29–31 and malformed fields go to `date`, in one batched `$(shell)` per build.
+  Range-checking alone would have passed `2026-02-30`, leaving the item half closed while
+  reading as done. The result is leap-year exact: `2026-02-29` rejected, `2028-02-29` built.
+
+  Stage one **proves rather than judges** — it must never clear anything `date` would reject —
+  and the plan review caught it breaking exactly that invariant: an unbounded all-digit year
+  cleared `999999999999-01-02`, never sent it to `date`, and published it with empty date
+  fields, the optimisation reintroducing the bug it was meant to make cheap. Hence the
+  five-digit bound. Note the real cliff is on the year's *value*, not its digit count —
+  `100000000000` is accepted and `999999999999` is not, both twelve digits — which is the
+  reason stage one does not try to be clever and simply defers.
+
+  Cost: a 60-post corpus dated the 1st–28th forks zero times and measures 0.120s → 0.120s; one
+  loaded with month-ends (18 suspects of 66, about triple a real calendar's share) goes 0.130s
+  → 0.181s. Forking for every post instead measured 0.285s against a 0.150s baseline.
+
+  `date_words` and `date_args` were factored out of `date_from_filename` and
+  `rfc822_from_filename` so the check runs the same arguments the build will — a second,
+  independently written copy could drift, and a check that answers a slightly different
+  question is the same class of defect as no check. Verified byte-identical over `build/` and
+  `work/`.
+
+  Guarded by `test_out_of_range_date_is_rejected`, `test_non_numeric_date_is_rejected`,
+  `test_impossible_calendar_date_is_rejected`, `test_non_leap_february_29_is_rejected`,
+  `test_absurdly_long_year_is_rejected`, `test_unpadded_date_still_builds`, and
+  `test_month_end_dates_still_build`. Fable's sweep cross-checked 6,188 candidate filenames
+  against a direct `date` probe with zero mismatches in either direction.
+
+  The two checks are **order-dependent and that is now tested, not merely commented**. The date
+  check's `$(shell)` interpolates filenames unquoted, so `20xx-01-02-home_x$(>PWN).txt`
+  executes during the parse — demonstrated, with the payload consumed so the error message
+  looks clean. The character check rejects `$`, `(`, `)`, and the backtick first. The Task 2
+  review found the whole property unguarded: with the two swapped, all eleven other tests still
+  passed, because each used a name bad in exactly one way.
+  `test_character_error_precedes_the_date_error` uses one bad in both.
+
+  Original finding follows.
+
 - **Out-of-range dates build successfully** — **verified**. `2026-13-40-home_bad-date.txt`
   exits 0, spews `date` usage text mid-build, and publishes `/2026/13/40/bad-date.html`
   with an empty posted-on line and an empty `<pubDate>`. `check_post_name` could range-check
@@ -518,6 +566,47 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   **first** build — a second `make` exits 0, because the surviving post's files are up to date
   and its `rm` never runs again, so a test that built twice could not fail. Original finding
   follows.
+
+- **NEW — a slug containing shell glob characters silently stages a same-date sibling's
+  content — DONE**, by rejecting the filename rather than by quoting the recipes. `BAD_CHARS`
+  is every ASCII punctuation character except `-`, `_`, and `.`, checked as the first clause of
+  `check_post_name`, so `posts/2026-01-02-home_a[b]c.txt` is now a parse-time `$(error)` naming
+  the file and the offending characters.
+
+  Quoting `$<` was the other option and is the one this entry originally leaned toward. It was
+  rejected on this entry's own argument: `%.tmp` and `%.rssitem` interpolate stems the same
+  way, so quoting one rule half-fixes it and reads as closed. With the filename rejected there
+  is no reachable input left that reaches any of the three.
+
+  The set is closed by enumeration rather than by judging which characters look dangerous —
+  which is precisely how `[` and `]` got through in the first place. Cost: `%` and `+` stop
+  building, both of which built correctly before; `%` is make's pattern-rule wildcard, so it
+  was a landmine that happened not to have gone off. Non-ASCII is untouched, verified end to
+  end for CJK, emoji, RTL, combining marks, and fullwidth forms.
+
+  Guarded by `test_glob_character_slug_is_rejected` (whose load-bearing assertion is that the
+  *sibling's* page is absent, not merely that the build failed),
+  `test_shell_metacharacter_slug_is_rejected`, and `test_unusual_but_safe_slug_still_builds`.
+  All three watched failing at 226/8 — and the RED run is worth recording, because only the
+  `a*c` case failed on exit status. The apostrophe, `$` and `;` cases already failed for
+  unrelated reasons (`usage: cp`, `no post in posts/ builds this page`, `No rule to make
+  target`), so an exit-status assertion would have passed against the bug it exists to catch.
+  All four assert the message instead.
+
+  Two things found by review and left open, both recorded rather than snuck in: an ASCII
+  **control character** in a slug still builds and lands in the URL (not shell-hazardous, so
+  this item's own failure mode stays closed; rejecting it means raw control bytes in the
+  Makefile source), and a **`:`** never reaches the check at all — it hits `.SECONDARY`'s
+  prerequisite list first and make's own parser stops with `target pattern contains no '%'`,
+  naming neither the post nor the reason. Loud, but the one character of the 29 whose error is
+  make's rather than ours.
+
+  An **empty title slug** was found in the same pass and closed with it:
+  `posts/2026-01-02-home_.txt` passed every clause and published `build/2026/01/02/.html`, a
+  dotfile nothing will serve. One clause, the sibling of the empty-category one, and
+  `test_empty_title_slug_is_rejected`.
+
+  Original finding follows.
 
 - **NEW — a slug containing shell glob characters silently stages a same-date sibling's
   content** — **verified**, and **pre-existing**: found while reviewing the awk staging split.
@@ -700,21 +789,41 @@ staleness to actually work as advice.
    grep read the pattern as an option — which is this list's recurring lesson showing up in
    the tests for once rather than in the code.
 
-   That leaves item 5 as the only remaining bullet producing silently wrong output on a
-   strange post, plus the newly found glob-character slug above, which is worse than item 5 in
-   kind and rarer in practice.
+   That left item 5 and the newly found glob-character slug as the only remaining bullets
+   producing silently wrong output on a strange post. **The glob-character slug has since been
+   closed**, along with the out-of-range dates and an empty title slug found beside them, by
+   rejecting degenerate filenames at parse time — so item 5, the residual half of the
+   placeholder fix, is now the only one left, and it is a deliberate deferral rather than an
+   oversight.
 2. **The behaviour half of item 8** — the feed's post-deletion self-heal. Real design, shares
    its shape with the deleted-post and deleted-category gotchas, and `make clean && make` is
    already the documented answer for all three.
-3. **Out-of-range dates build successfully** — ~6 lines of range-checking in
-   `check_post_name`, or leave as garbage-in-garbage-out.
-4. **`make deploy` does not depend on `build`** — arguably more honest as it is.
-5. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`
+3. ~~**Out-of-range dates build successfully** — ~6 lines of range-checking in
+   `check_post_name`, or leave as garbage-in-garbage-out.~~ Done, together with the
+   glob-character slug, since both wanted the same function. Range-checking turned out to be
+   the right shape but not the whole answer: it passes `2026-02-30`, so the check clears the
+   ordinary case in make and asks `date` about the rest, which makes it leap-year exact. The
+   recurring lesson of this list showed up twice more — the prefilter added to make it cheap
+   reintroduced the very bug it was guarding, on absurdly long years, and the ordering the two
+   checks depend on turned out to be guarded by a comment and no test at all.
+4. **An ASCII control character in a slug still builds** — **verified**, found by the Task 1
+   review of the filename checks. `posts/2026-01-02-home_a<0x01>c.txt` exits 0 and publishes
+   `build/2026/01/02/a\001c.html`, control byte and all, in the URL. It is not shell-hazardous
+   — no globbing, no word-splitting — so the sibling-body bug that motivated `BAD_CHARS` stays
+   closed, and this is a policy gap rather than a reopened hole. It also falls outside
+   `BAD_CHARS`' own taxonomy: a control byte is neither a letter, a digit, ASCII punctuation,
+   nor "any non-ASCII byte". Closing it means either raw control bytes in the Makefile source
+   or moving the test into the date check's shell stage. Deliberately left: a control byte in a
+   filename takes effort to produce, and it is not the class of mistake — a mistyped date —
+   that motivated these checks.
+
+5. **`make deploy` does not depend on `build`** — arguably more honest as it is.
+6. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`
    or `{{main}}`, or a `url=` containing `{{title}}`; see the full entry above for all four
    reproduced cases. Silently wrong output on a strange post, same as item 1, but this one is
    a decision rather than an oversight: it needs the single-pass fill, deliberately deferred.
-6. **The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.
-7. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
+7. **The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.
+8. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
    option is a line in the Commands section.
 
 ---
