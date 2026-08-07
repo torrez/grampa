@@ -54,7 +54,9 @@ RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 # target is up to date against its prerequisites'
 # prerequisites, which suppresses exactly that rebuild -- the
 # feed goes stale instead of self-healing. Verified
-# empirically both ways; see the design doc.
+# empirically both ways; see the design doc, and
+# test_deleting_a_post_heals_the_feed in tests/run.sh,
+# which was watched failing against exactly that edit.
 #
 .SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 

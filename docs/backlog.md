@@ -104,7 +104,31 @@ never have one (see item 5).
 failing step fails the recipe and `.DELETE_ON_ERROR` removes the partial file.
 **Cost:** a few characters per line. No happy-path behaviour change.
 
-### 2. Nothing guards the feed's post-deletion self-heal — STILL OPEN
+### 2. Nothing guards the feed's post-deletion self-heal — DONE
+
+Fixed: `test_deleting_a_post_heals_the_feed` — 12 posts, build, `sleep 1`, `rm` the newest,
+rebuild, assert the window is still ten and Post 2 has been pulled in.
+
+Watched fail first, against a `Makefile` with `$(RSSITEM_FILES)` appended to `.SECONDARY` —
+the tidy-up this item predicts. It fails exactly as described: the feed freezes with Post 12
+still in it and Post 2 never pulled in.
+
+Worth recording what the RED run showed: **the item count stays at 10 in the broken case.**
+A test that only counted `<item>` would have passed against the regression it exists to
+catch. The title assertions — Post 2 present, Post 12 gone — are the whole test; the count is
+decoration. (`test_feed_is_capped_at_ten_newest` does assert titles as well as counts; the
+point is only that for *this* behaviour the count carries no information at all.)
+
+The `.SECONDARY` comment block in the Makefile now names the test, so the next person to
+consider the tidy-up finds out it is enforced without going looking.
+
+**The review found the guarded behaviour is narrower than this item and CLAUDE.md both said**
+— see item 8. The test is unaffected: its sandbox builds all twelve posts at once, which is
+exactly the history the heal needs, and its docstring now says so.
+
+Full suite: **164 passed, 0 failed.**
+
+Original finding follows.
 
 `tests/run.sh` — **verified** (the behaviour works; the gap is that no test covers it)
 
@@ -279,6 +303,40 @@ subtraction.
 keep their already-copied stub harmlessly.
 **Cost:** one commit, two lines of doc.
 
+### 8. The feed's post-deletion self-heal barely ever fires — CLAUDE.md FIXED, behaviour STILL OPEN
+
+Found by the item 2 review. **verified** twice — once by the reviewer, once by hand.
+
+The heal needs the newly-in-window post to have **no `.rssitem` on disk**: building the
+missing fragment is the only thing that makes `work/rss.tmp` out of date. Delete a post whose
+successor already has a fragment and every prerequisite of `rss.tmp` exists and is older than
+it, so nothing rebuilds and the deleted post's `<item>` survives.
+
+That "already has a fragment" case is the normal one. A post that is out of the window today
+was in it when it was published, so on any blog grown a post at a time past ten with the feed
+on, **every** out-of-window post already has its fragment. Reproduced against the unmodified
+Makefile: 11 posts, build; add post 12, build; delete post 12, rebuild → `rss.xml` still
+carries Post 12 and never pulls Post 2 in. The heal only shows up when `work/` is missing the
+incoming fragment — a fresh clone, a `make clean`, or the all-at-once sandbox item 2's test
+uses.
+
+So item 2's test is honest but the behaviour it guards is a corner. What made this worth
+finding is that CLAUDE.md stated the broad version as fact — "with more than ten posts …
+the feed self-heals on a plain `make`" — in a repo whose stated identity is documentation
+checkable against the code.
+
+The CLAUDE.md gotcha is now rewritten to state the real condition, name the incremental
+history as the case where it does not fire, and point at `make clean && make` as the reliable
+answer. The `.SECONDARY` comment block in the Makefile is unaffected: its claim is about what
+listing `RSSITEM_FILES` would suppress, which is true in the case where the heal fires at all.
+
+**Still open: the behaviour.** Making deletion reliably heal the feed means giving `rss.tmp` a
+dependency on the *set* of posts rather than on the current ten fragments — a stamp file
+holding `RECENT_ITEMS`, rewritten only when the list changes, then made a prerequisite. That
+is real design, and it overlaps the deleted-post and deleted-category gotchas, which have the
+same shape and no fix either. **Cost:** ~10 lines of make plus a test; not obviously worth it
+against `make clean && make`, which is already the documented answer for its two siblings.
+
 ---
 
 ## Minor
@@ -418,9 +476,13 @@ are current as of `b0971a2`. New bullets are marked NEW.
    silently" above `build/category/%.html`, and the slash-for-hyphen fragment mapping above
    `%.html`. Both are prose-only, and both should go in one commit.
 
-All three are now done. Next up, on the same reasoning that ranked them: item 2 stays the
-most likely regression in the repo, and item 7 stays the cheapest subtraction. What remains
-of items 4 and 6 — two stale Makefile comment blocks — is still a single prose-only commit.
+All three are now done, and so is item 2 — what was the most likely regression in the repo
+is now guarded by a test that was watched failing against the exact edit that would cause it.
+Writing that test turned up item 8, whose documentation half is fixed in the same commit and
+whose behaviour half is new work nobody has asked for yet.
+
+Next up: item 7 stays the cheapest subtraction, and what remains of items 4 and 6 — two stale
+Makefile comment blocks — is still a single prose-only commit.
 
 ---
 

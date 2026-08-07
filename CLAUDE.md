@@ -297,12 +297,17 @@ more than a format-string swap.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
   post. `make clean` fixes it.
 - **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
-  `make clean && make` after removing a post. The feed is only sometimes as forgiving: with
-  more than ten posts, deleting one of the ten currently in the feed's window makes the
-  next-oldest post newly in-window, so its `.rssitem` gets built and `rss.tmp` is re-cat'd —
-  the feed self-heals on a plain `make`. With ten or fewer posts, every post was already in
-  the window, so deleting one changes nothing that `.rssitem` or `rss.tmp` depend on and the
-  stale `<item>` persists in `build/rss.xml` until `make clean && make`.
+  `make clean && make` after removing a post. The feed is only sometimes as forgiving, and
+  the condition is narrower than it looks: deleting a post heals the feed on a plain `make`
+  only when the post that becomes newly in-window has **no `.rssitem` on disk**. Then the
+  missing fragment must be built, which makes it newer than `work/rss.tmp`, which re-cats and
+  re-wraps. If that fragment already exists — because the post was in the window once before,
+  which is the case on any blog grown a post at a time past ten with the feed on — then every
+  prerequisite of `rss.tmp` exists and is older than it, nothing rebuilds, and the deleted
+  post's `<item>` stays in `build/rss.xml`. With ten or fewer posts there is no window edge to
+  cross at all and the stale `<item>` likewise persists. Verified all three ways;
+  `test_deleting_a_post_heals_the_feed` covers the healing case. `make clean && make` is the
+  reliable answer in every case.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.

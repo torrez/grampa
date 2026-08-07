@@ -593,6 +593,51 @@ EOF
 }
 
 #
+# Guards the decision NOT to list RSSITEM_FILES in
+# .SECONDARY. Adding them looks like an obvious tidy-up --
+# it matches what .tmp and .staged do and it passes every
+# other assertion in this file -- but it makes make tolerate
+# a missing .rssitem, which suppresses the rebuild that pulls
+# the next-oldest post into the window when one is deleted.
+# The feed goes stale instead of healing.
+#
+# Deleting a post is otherwise untested. Note the heal is
+# narrower than "more than ten posts": it needs the newly
+# in-window post to have NO .rssitem on disk, so that
+# building the missing one is what makes rss.tmp out of
+# date. A blog grown a post at a time past ten already has
+# that fragment from when the post was last in-window, and
+# goes stale until make clean -- see the deleted-post gotcha
+# in CLAUDE.md. This sandbox builds all twelve at once, so
+# posts 1 and 2 never got a fragment, which is the history
+# the heal needs.
+#
+test_deleting_a_post_heals_the_feed() {
+	sandbox feed_delete
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+		add_post "2026-01-$(printf '%02d' $i)-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	build || return
+	assert_eq "items in feed" "10" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+	assert_not_grep build/rss.xml "<title>Post 2</title>"
+	# Whole-second mtime resolution: the newly built
+	# .rssitem must come out strictly newer than the
+	# rss.tmp of the first build, or nothing re-cats.
+	sleep 1
+	rm posts/2026-01-12-home_post-12.txt
+	build || return
+	assert_eq "items in feed after delete" "10" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+	assert_grep build/rss.xml "<title>Post 2</title>"
+	assert_not_grep build/rss.xml "<title>Post 12</title>"
+}
+
+#
 # The feed path re-derives everything that made
 # test_zero_posts_does_not_hang necessary: cat with no
 # operands would read stdin, and an unguarded getline on a
@@ -1213,6 +1258,7 @@ test_no_url_means_no_feed
 test_feed_is_built_when_url_is_set
 test_feed_escapes_titles_and_bodies
 test_feed_is_capped_at_ten_newest
+test_deleting_a_post_heals_the_feed
 test_feed_with_zero_posts
 test_feed_is_byte_stable_across_rebuilds
 test_changing_url_rebuilds_the_feed
