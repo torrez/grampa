@@ -8,3 +8,4 @@ deploy.sh
 templates/
 Markdown.pl
 .claude/worktrees/
+.superpowers/
