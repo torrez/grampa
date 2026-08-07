@@ -325,7 +325,11 @@ more than a format-string swap.
   only `y`/`m`/`d` keeps the current wall-clock time, so without pinning, every build would
   stamp a different `<pubDate>` on the same post and `rss.xml` would look changed on every
   deploy even when no post did.
-- `templates/index.txt` is an unimplemented stub.
+- **An install set up before the stub was removed (2026-08-07) has a leftover
+  `templates/index.txt`.** It was a
+  0-byte stub for a feature the index does not need — `build/index.html` is fragments wrapped
+  in `base.txt` — and it is no longer in `.source/`, so new installs never get one. Nothing
+  reads it; deleting it from `templates/` is safe and optional.
 
 ## Review cycle
 

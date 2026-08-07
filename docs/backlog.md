@@ -52,7 +52,8 @@ since been made: the CLAUDE.md halves of those items are marked fixed below, in 
 commit that records this sweep. What remains of items 4 and 6 is the same two claims still
 sitting in the Makefile's own comments.
 
-**Subtractions worth making:** delete `.source/templates/index.txt` (item 7). Nothing in the Makefile itself was
+**Subtractions worth making:** delete `.source/templates/index.txt` (item 7 — since done).
+Nothing in the Makefile itself was
 found removable — every rule, helper, and comment block is load-bearing. `tests/run.sh` is
 longer than the program at 1108 lines, but it is plain bash with no framework and it buys
 the 149 assertions that make claims like these checkable; that is the tool's spirit, not a
@@ -214,9 +215,16 @@ rewriting that CLAUDE.md paragraph to describe the real path.
 **Cost:** minimal, but it touches two working programs on the critical path for every page,
 so it wants the full suite run behind it.
 
-### 4. Two documents claim the rule-order breakage is silent. It is not — an earlier fix made it loud — CLAUDE.md FIXED, Makefile comment STILL OPEN
+### 4. Two documents claim the rule-order breakage is silent. It is not — an earlier fix made it loud — DONE
 
-`Makefile:506-524` — **verified**, still open. `CLAUDE.md` — fixed.
+Fixed. The comment block above `$(BUILD_DIR)category/%.html` now says the `%.html` rule
+would still claim the target in the wrong order, but that the unknown-page guard stops it
+loudly, and quotes the error. The ordering requirement is stated as still real, because it
+is. Done in one commit with items 6 and 7.
+
+Original finding follows.
+
+`Makefile:506-524` — **verified**, was still open. `CLAUDE.md` — fixed earlier.
 
 Re-verified in the second sweep after `b0971a2`: swapping the two rules in a sandbox gives
 `build/category/home.html: no post in posts/ builds this page` and `make: *** Error 1`.
@@ -268,10 +276,17 @@ only passes once item 1 is fixed, so the two verify each other.
 **Cost:** ~30 lines in `run.sh`. No new dependency, and a bash stub is in the same spirit as
 the rest of the tool.
 
-### 6. The slash-for-hyphen fragment mapping is documented in two places and is dead in both — CLAUDE.md FIXED, Makefile comment STILL OPEN
+### 6. The slash-for-hyphen fragment mapping is documented in two places and is dead in both — DONE
 
-`CLAUDE.md` — fixed. The comment block above `$(BUILD_DIR)%.html` in the Makefile
-(~line 534) — **read**, still open.
+Fixed. The comment above `$(BUILD_DIR)%.html` now says `tmp_for_page` searches `TMP_FILES`,
+says why it has to be a search — the category is in the filename but not the URL — and keeps
+the slash-for-hyphen mapping only as the historical note it is. Done in one commit with items
+4 and 7.
+
+Original finding follows.
+
+`CLAUDE.md` — fixed earlier. The comment block above `$(BUILD_DIR)%.html` in the Makefile
+(~line 534) — **read**, was still open.
 
 CLAUDE.md said the `%.html` stem's slashes are substituted to hyphens to name the `.tmp`
 file, then twenty lines later correctly said that is impossible and `tmp_for_page` searches
@@ -289,7 +304,15 @@ be. The pipeline diagrams also used `posts/2026-08-06-first-post.txt` — a file
 "turning the slashes back into hyphens names the one .tmp file this page is built from".
 **Fix:** one sentence, in the same pass as item 4's Makefile half. **Cost:** prose only.
 
-### 7. Delete `.source/templates/index.txt` — NEW
+### 7. Delete `.source/templates/index.txt` — DONE
+
+Deleted. `make setup` copies with `cp .source/templates/*`, a glob, so it simply copies four
+files now instead of five; no recipe named the stub. The CLAUDE.md line that called it an
+unimplemented stub is replaced by a gotcha noting that installs created before 2026-08-07
+still have a copy in their `templates/`, that nothing reads it, and that removing it is safe
+and optional.
+
+Original finding follows.
 
 `.source/templates/index.txt` and `CLAUDE.md:312` — **verified** (0 bytes; `make setup`
 copies it into `templates/` in every install; nothing in the Makefile or the suite
@@ -432,9 +455,13 @@ are current as of `b0971a2`. New bullets are marked NEW.
   serving the old body — reproduced by editing a post, deleting `templates/post.txt`, and
   rebuilding. `templates/base.txt` and `templates/rss.txt` hard-error in the same state,
   because they are also prerequisites of the explicit `build/index.html` and
-  `build/rss.xml` rules. Same silent-stale-output family as the deleted-post and
-  deleted-category gotchas. Note this does **not** weaken item 3's fix: awk still never runs
-  against a missing template.
+  `build/rss.xml` rules. Note this does **not** weaken item 3's fix: awk still never runs
+  against a missing template. **Fix (verified since):** one line —
+  `build: templates/post.txt templates/rss-item.txt` — gives them the same "ought to exist"
+  standing the other two already have, and the silent-stale case becomes
+  `No rule to make target 'templates/post.txt'`, exit 2. Reads as silent-stale-output family
+  with the deleted-post and deleted-category gotchas, but it is not: those are untracked
+  outputs make cannot know about, this is a nameable input.
 
 - **NEW — `.gitignore` leaves `posts/` and `config` unanchored** — `.gitignore:2-3`,
   **read**. `e4f912f` anchored `/templates/` precisely because an unanchored pattern matches
@@ -481,8 +508,18 @@ is now guarded by a test that was watched failing against the exact edit that wo
 Writing that test turned up item 8, whose documentation half is fixed in the same commit and
 whose behaviour half is new work nobody has asked for yet.
 
-Next up: item 7 stays the cheapest subtraction, and what remains of items 4 and 6 — two stale
-Makefile comment blocks — is still a single prose-only commit.
+Items 4, 6, and 7 followed in one commit, which closes every Important item except the
+behaviour half of item 8. **What is left is the Minor list**, and the two worth ranking above
+the rest are both silent-wrong-output: a deleted `templates/post.txt` or `rss-item.txt`
+rebuilding from stale fragments with exit 0, and `PAGE_TITLE`'s `sed` reading `title:` from
+the body. Both are cheap — an address-and-quit `sed` for the second, and for the first one
+line naming the two templates as prerequisites of `build`, which is the same mechanism that
+already makes `base.txt` and `rss.txt` hard-error. Verified: with
+`build: templates/post.txt templates/rss-item.txt` appended, the stale case becomes
+`make: *** No rule to make target 'templates/post.txt', needed by 'work/….tmp'.  Stop.`
+Unlike item 8 and the deleted-post gotcha — which are about untracked *outputs* make cannot
+know it should remove — this one is a nameable *input*, which is why it is cheap and they
+are not.
 
 ---
 
@@ -507,7 +544,8 @@ Second sweep, all **verified** by execution:
    HTML and `rss.xml`, no stray intermediates; a non-executable `Markdown.pl` falls back to
    verbatim (the Markdown test-gap bullet's behaviours).
 10. `rm config; make build` recreates `config` and exits 0 (the stale `make build` bullet).
-11. `.source/templates/index.txt` is 0 bytes and unreferenced; `splitter.txt` ends in a
+11. `.source/templates/index.txt` is 0 bytes and unreferenced (since deleted — item 7);
+    `splitter.txt` ends in a
     blank line (`od -c`).
 12. `git ls-files` against `CLAUDE.md:35`; `grep` confirms no test deletes a post or touches
     `templates/base.txt`.

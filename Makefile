@@ -553,14 +553,21 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # for a category stem, since no single fragment maps to a
 # category page, and an empty prerequisite list is
 # trivially satisfiable. So a %.html rule defined first
-# would claim build/category/notes.html and build it out
-# of templates/base.txt -- a base.txt document nested
-# inside another one, titled with the blog name instead
-# of the category. No error, just a wrong page.
+# would claim build/category/notes.html.
 #
-# Verified empirically in both orders. Reordering these
-# two rules breaks the build silently, so this rule must
-# stay above the %.html rule below it.
+# That used to mean a wrong page and no error -- a
+# base.txt document nested inside another one, titled
+# with the blog name instead of the category. It no
+# longer does: the unknown-page guard in that rule sees
+# an empty tmp_for_page and stops with
+#
+#   build/category/notes.html: no post in posts/ builds this page
+#
+# So the ordering constraint is still real -- category
+# pages will not build in the wrong order -- but the
+# failure is loud rather than silent. Verified
+# empirically in both orders. Keep this rule above the
+# %.html rule below it.
 #
 $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
 	@echo "Building $@"
@@ -571,8 +578,15 @@ $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.t
 #
 # This builds almost everything. The stem of a target
 # like build/2026/08/06/a-post.html is the y/m/d/name
-# path, so turning the slashes back into hyphens names
-# the one .tmp file this page is built from.
+# path, and tmp_for_page searches TMP_FILES for the one
+# fragment that path came from.
+#
+# It is a search and not a substitution because the
+# category lives in the filename but not in the URL:
+# nothing in the stem 2026/08/06/a-post says the fragment
+# is work/2026-08-06-home_a-post.tmp. Turning the slashes
+# back into hyphens did name it, before categories moved
+# into filenames.
 #
 # The post's own title comes from its front matter --
 # the .tmp fragment has already baked it into HTML --
