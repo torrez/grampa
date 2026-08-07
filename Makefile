@@ -28,7 +28,22 @@ WORK_DIR := work/
 # ones (2026-10-01). A plain $(wildcard) sorts as
 # strings and gets that wrong.
 #
-POST_NAMES = $(shell ls posts 2>/dev/null | grep '\.txt$$' | sort -t- -k1,1n -k2,2n -k3,3n)
+# := and not =, so the ls|grep|sort runs once per build
+# instead of once per expansion. TMP_FILES below is built
+# from it, and the %.html rule's second-expanded
+# prerequisites reach tmp_for_page twice per page -- once
+# directly, once through post_for_page -- so with = the
+# pipeline ran O(posts) times: counted at 131 runs for a
+# 60-post no-op rebuild, against 1 now. The
+# lazy-expansion argument that keeps CONFIG_NAME and
+# CONFIG_URL on = does not apply here: those exist because
+# config may not be on disk when this file is parsed,
+# whereas a missing posts/ is already handled by the
+# 2>/dev/null, which yields the same empty list either
+# way. Being simply expanded also removes a window where
+# two expansions in one build could disagree.
+#
+POST_NAMES := $(shell ls posts 2>/dev/null | grep '\.txt$$' | sort -t- -k1,1n -k2,2n -k3,3n)
 POST_FILES = $(addprefix posts/, $(POST_NAMES))
 TMP_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.tmp))
 STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
@@ -518,12 +533,31 @@ export WRAP_IN_CHANNEL
 # This does not clean first, so a rebuild only
 # touches the posts that actually changed.
 #
+# Phony for hygiene rather than for a live bug: a file
+# named `all` does not currently break this, because the
+# prerequisite `build` is itself phony and so always out
+# of date, which drags `all` along with it. Declaring it
+# means that keeps working if build ever stops being
+# phony. Guarded by
+# test_default_build_works_with_a_file_named_all, which
+# passes both with and without this line today.
+#
+.PHONY: all
 all: config build
 	@echo "All done."
 
 #
 # Both generated directories get wiped.
 #
+# Phony because this one does break: `clean` names nothing
+# on disk, so a file that happens to be called `clean` --
+# one stray shell redirect -- makes the target up to date
+# and make runs no recipe at all. It prints
+# `'clean' is up to date` and wipes nothing, which reads
+# exactly like success. Guarded by
+# test_clean_works_with_a_file_named_clean.
+#
+.PHONY: clean
 clean:
 	@echo "Cleaning";
 	@rm -rf $(BUILD_DIR) $(WORK_DIR);

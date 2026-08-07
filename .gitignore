@@ -1,11 +1,26 @@
-*.swp
-posts/
-config
-build/
-work/
-tests/tmp/
-deploy.sh
+# Everything the build creates or that is per-install.
+#
+# These are anchored with a leading / because an
+# unanchored pattern matches at every depth: plain
+# `config` hid a future tools/config, and plain `posts/`
+# hid any nested posts/ directory under docs/ or tests/.
+# /templates/ was anchored in e4f912f for that reason;
+# the rest follow it here.
+#
+/posts/
+/config
+/build/
+/work/
+/deploy.sh
 /templates/
-Markdown.pl
+/Markdown.pl
+
+# Already anchored: a pattern with a slash anywhere but
+# the end is relative to this file's directory.
+tests/tmp/
 .claude/worktrees/
+
+# Deliberately unanchored -- editor droppings and tool
+# state are worth ignoring at any depth.
+*.swp
 .superpowers/

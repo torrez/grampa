@@ -367,9 +367,17 @@ against `make clean && make`, which is already the documented answer for its two
 Every bullet below was re-checked in the second sweep. Line anchors are current as of
 `b0971a2`. New bullets are marked NEW; bullets closed since the sweep are marked DONE.
 
-- **`all` and `clean` are not `.PHONY`** — `Makefile:482,488`, **verified**. Only `build`,
-  `setup`, `deploy`, and `test` are declared. `touch clean && make clean` prints
-  `'clean' is up to date` and wipes nothing. One line: `.PHONY: all clean`.
+- **`all` and `clean` are not `.PHONY` — DONE**, but the finding was half wrong and the
+  half that was right is the one that mattered. `clean` breaks exactly as described:
+  `touch clean && make clean` prints `'clean' is up to date` and wipes nothing. **`all`
+  does not** — verified in a sandbox after the fact: `touch all && make` builds normally,
+  because `all`'s prerequisite `build` is phony and therefore always out of date, which
+  drags `all` along with it. So `.PHONY: all` is hygiene against `build` ever losing its
+  own declaration, not a live bug. Both are now declared, in the per-rule style the file
+  already used for `build`/`setup`/`deploy`/`test` rather than one shared line. Guarded by
+  `test_clean_works_with_a_file_named_clean` (watched failing) and
+  `test_default_build_works_with_a_file_named_all` (passes with and without the fix; both
+  the test's banner and the `.PHONY: all` comment in the Makefile say so).
 
 - **Template placeholders in post bodies get expanded** — `Makefile:351-356,418-419`,
   **verified**. `fill()` rescans the composed line, so a body containing a literal
@@ -413,11 +421,13 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   the cost of an incremental no-op build. Arguably the current form is more honest about
   doing exactly what it says.
 
-- **`POST_NAMES` uses `=`** — `Makefile:31`, **read**. The `ls | grep | sort` re-runs on
-  every expansion, many times per build via `TMP_FILES` and `tmp_for_page`. `:=` is safe
-  here — the lazy-`config` rationale does not apply, and `2>/dev/null` already covers a
-  missing `posts/` — and removes a mid-build inconsistency window. Pure polish at blog
-  scale.
+- **`POST_NAMES` uses `=` — DONE**. Now `:=`. Filed as "pure polish at blog scale", and it
+  is more than that: **verified** by measurement rather than by reading, a 60-post no-op
+  rebuild goes from 0.79s to 0.12s, since `tmp_for_page` searches `TMP_FILES` once per page
+  and so re-ran the `ls | grep | sort` once per page. `build/` and `work/` are byte-identical
+  under both forms (`diff -r`, 12 posts across three categories with `url=` set), and the
+  suite is unchanged at 179 passing. The lazy-`config` rationale does not apply, and
+  `2>/dev/null` already covers a missing `posts/`.
 
 - **The `split` cleanup glob stops at `az`** — `Makefile:621-626`, **read**. The masking is
   at least documented now, in the rule's own comment at `Makefile:612-614`. `$*.a[b-z]*` misses
@@ -473,11 +483,19 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   with the deleted-post and deleted-category gotchas, but it is not: those are untracked
   outputs make cannot know about, this is a nameable input.
 
-- **NEW — `.gitignore` leaves `posts/` and `config` unanchored** — `.gitignore:2-3`,
-  **read**. `e4f912f` anchored `/templates/` precisely because an unanchored pattern matches
-  at any depth; `posts/` and `config` still match anywhere, so a future `tools/config` or a
-  nested `posts/` under `docs/` would silently vanish from git. Fix: `/posts/`, `/config`,
-  and while there `/build/`, `/work/`, `/deploy.sh`, `/Markdown.pl`. Cost: a few characters.
+- **NEW — `.gitignore` leaves `posts/` and `config` unanchored — DONE**. All six anchored:
+  `/posts/`, `/config`, `/build/`, `/work/`, `/deploy.sh`, `/Markdown.pl`. Upgraded from
+  **read** to **verified**: `git check-ignore` confirmed `tools/config`,
+  `docs/posts/notes.md`, `docs/build/x.md`, `tools/work/x.sh`, `src/deploy.sh`, and
+  `docs/Markdown.pl` were all ignored before and none is now, while every real target still
+  is and `git ls-files` is unchanged at 18. `*.swp` and `.superpowers/` are left unanchored
+  on purpose — editor droppings and tool state are worth ignoring at any depth — and
+  `tests/tmp/` and `.claude/worktrees/` needed nothing, since a pattern with a slash
+  anywhere but the end is already relative to the `.gitignore`. The file now says which
+  group each pattern is in and why.
+
+  The suite cannot guard this one: its sandboxes are plain directories, not git
+  repositories, so there is nothing for `git check-ignore` to run against.
 
 - **NEW — CLAUDE.md's tool list omits `sed` — DONE**. `sed` is load-bearing in three places
   (config parsing at `Makefile:116,140`, the `PAGE_TITLE` extraction at `Makefile:562`) and
@@ -489,6 +507,18 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   for the present-but-unreadable one. Fixed with item 3: the full explanation now lives
   above `RENDER_POST` and the other three programs point at it, so there is one place to
   keep true instead of three.
+
+- **NEW — `make -j setup all` in a fresh directory fails** — **verified**, and
+  **pre-existing**: found by the review of the `.PHONY`/`:=`/`.gitignore` commit, reproduced
+  identically against that commit's Makefile and against `HEAD`'s, so it is not a
+  regression from it. In a directory with no `templates/` yet, `make -j4 setup all` races
+  `setup`'s template-copying against the build rules and stops with
+  `No rule to make target 'templates/base.txt', needed by 'build/index.html'`. Serial
+  `make setup all` is fine, and so is the documented `make setup` followed by `make`. Fix
+  would be an order-only prerequisite or simply documenting that `setup` wants its own
+  invocation — which `README.md` and `CLAUDE.md` already show it having, so this is close to
+  a non-problem. Cheapest honest option: a line in the Commands section saying `setup` is a
+  one-time step and not to combine it with a build goal under `-j`.
 
 - **NEW — no test covers editing `templates/base.txt`** — `tests/run.sh`, **verified**
   (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
@@ -532,10 +562,12 @@ cheap and they are not.
 **What is left is the rest of the Minor list.** Nothing left there goes wrong on an ordinary
 post — but two bullets are still silent on a strange one: a body containing a literal
 `{{permalink}}` expands it, and a body with more than 25 delimiter lines truncates. The
-cheapest are `.PHONY: all clean`, anchoring `.gitignore`, `POST_NAMES` to `:=`, and the
-README nits; the two test gaps (`templates/base.txt` edits, the Markdown branch under `-j`
-and into `rss.xml`) are ~10 lines each; the two glob items in the staging branch want doing
-together and need the pipeline broken up rather than a one-liner.
+cheapest were `.PHONY: all clean`, anchoring `.gitignore`, and `POST_NAMES` to `:=`, **all
+three now done** in one commit. What is left: the README nits; the two test gaps
+(`templates/base.txt` edits, the Markdown branch under `-j` and into `rss.xml`), ~10 lines
+each; out-of-range dates; `make deploy` not depending on `build`; the placeholder-expansion
+mitigation; the trailing blank line in `splitter.txt`; and the two glob items in the staging
+branch, which want doing together and need the pipeline broken up rather than a one-liner.
 
 ---
 

@@ -1332,6 +1332,53 @@ EOF
 	assert_not_grep build/2026/08/06/untitled.html "<title>Sneaky"
 }
 
+#
+# ---------------------------------------------------
+# all and clean must be phony. Both are named after
+# nothing on disk, but make does not know that: create a
+# file with either name -- a stray shell redirect, a
+# `touch clean` -- and make finds the target up to date
+# and runs no recipe at all.
+#
+# Only the clean case actually bites, and it bites hard,
+# because it looks like it worked. The all case does not:
+# all's prerequisite `build` is phony and so always out of
+# date, which drags all along with it. That test therefore
+# passes with and without .PHONY: all -- it is a guard
+# against build ever losing its own declaration, not a
+# reproduction of a live bug.
+# ---------------------------------------------------
+#
+
+test_clean_works_with_a_file_named_clean() {
+	sandbox file_named_clean
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file build/2026/08/06/hello.html
+
+	touch clean
+	build clean || return
+	assert_no_file build/2026/08/06/hello.html
+	assert_no_file work/2026-08-06-home_hello.tmp
+}
+
+test_default_build_works_with_a_file_named_all() {
+	sandbox file_named_all
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	touch all
+	build || return
+	assert_file build/2026/08/06/hello.html
+	assert_file build/index.html
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -1388,5 +1435,7 @@ test_unreadable_rss_template_fails_the_build
 test_deleted_post_template_fails_the_build
 test_deleted_rss_item_template_fails_the_build
 test_body_title_line_is_not_the_page_title
+test_clean_works_with_a_file_named_clean
+test_default_build_works_with_a_file_named_all
 
 pass_fail_summary

@@ -282,6 +282,13 @@ more than a format-string swap.
   because wildcard sorts as strings and would put `2026-10-1` before `2026-7-4`. The
   numeric sort makes ordering correct for padded *and* unpadded dates. Zero-padding is
   still worth doing for the URLs' sake — an unpadded post becomes `/2026/7/4/slug.html`.
+  It is `:=`, so that pipeline runs once per build rather than once per expansion — the
+  `%.html` rule's second-expanded prerequisites reach `tmp_for_page` twice per page, once
+  directly and once through `post_for_page`, which had it shelling out O(posts) times:
+  counted at 131 runs for a 60-post no-op rebuild, against 1 now.
+  The lazy-`config` reasoning in the bullet below does *not* apply to it: a missing
+  `posts/` is already handled by `2>/dev/null`. Measured on a 60-post no-op rebuild:
+  0.79s → 0.12s, with `build/` and `work/` byte-identical either way.
 - **BSD-only.** `date_from_filename` uses `date -v` (BSD/macOS). It fails on GNU
   coreutils, so builds are macOS-only as written.
 - **`config` is read lazily, not at parse time.** `CONFIG_NAME` and `CONFIG_URL` both use
