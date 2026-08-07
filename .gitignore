@@ -7,3 +7,4 @@ tests/tmp/
 deploy.sh
 templates/
 Markdown.pl
+.claude/worktrees/
