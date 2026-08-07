@@ -31,14 +31,16 @@ WORK_DIR := work/
 POST_NAMES = $(shell ls posts 2>/dev/null | grep '\.txt$$' | sort -t- -k1,1n -k2,2n -k3,3n)
 POST_FILES = $(addprefix posts/, $(POST_NAMES))
 TMP_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.tmp))
+STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
 
 #
-# The .tmp files are made by a pattern rule, which
-# make would treat as intermediate and delete on the
-# way out. Keeping them is the whole point of
-# incremental builds.
+# The .tmp and .staged files are made by pattern rules,
+# which make would treat as intermediate and delete on
+# the way out. Keeping .tmp is the whole point of
+# incremental builds; .staged is kept for the same
+# reason, and because more than one consumer reads it.
 #
-.SECONDARY: $(TMP_FILES)
+.SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 
 #
 # Reverses a list
@@ -393,40 +395,49 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 	@cat /dev/null $(RECENT_FILES) > $@
 
 #
-# This builds all the .tmp files used for
-# posts and for the index.tmp which is used
-# by the index.html
+# The staging step: split the front matter off the body,
+# run just the body through Markdown.pl, then put it back
+# together. Every intermediate is named after the post so
+# that make -j can't have two posts clobber each other.
 #
-$(WORK_DIR)%.tmp: posts/%.txt templates/post.txt
-	@echo "Building $@"
+# This is a target of its own rather than part of %.tmp
+# below because the RSS items need the same rendered body
+# *and* the post's individual fields -- title, body, date
+# -- which the .tmp fragment has already dissolved into
+# HTML. Kept by .SECONDARY, so Markdown.pl runs once per
+# post rather than once per consumer.
+#
+$(WORK_DIR)%.staged: posts/%.txt
 	@mkdir -p $(WORK_DIR)
 
-	@#
-	@# Split the front matter off the body, run just the
-	@# body through Markdown.pl, then put it back together.
-	@# Every intermediate is named after the post so that
-	@# make -j can't have two posts clobber each other.
-	@#
 	@if [ -x Markdown.pl ]; \
 		then \
 		split -p----------------------------------- $< $(WORK_DIR)$*. ; \
 		cat $(WORK_DIR)$*.a[b-z]* | tail -n +2 > $(WORK_DIR)$*.body; \
 		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody; \
-		cat $(WORK_DIR)$*.aa .source/splitter.txt $(WORK_DIR)$*.mdbody > $(WORK_DIR)$*.staged; \
+		cat $(WORK_DIR)$*.aa .source/splitter.txt $(WORK_DIR)$*.mdbody > $@; \
 		rm -f $(WORK_DIR)$*.a[a-z]* $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
 	fi;
 
 	@if [ ! -x Markdown.pl ]; \
 		then \
-		cp $< $(WORK_DIR)$*.staged; \
+		cp $< $@; \
 	fi;
+
+#
+# This builds all the .tmp files used for
+# posts and for the index.tmp which is used
+# by the index.html
+#
+$(WORK_DIR)%.tmp: $(WORK_DIR)%.staged templates/post.txt
+	@echo "Building $@"
+	@mkdir -p $(WORK_DIR)
 
 	@awk -v pub_date="$(call date_from_filename, $@)" \
 		-v permalink="/$(call page_for,$@).html" \
 		-v category="$(call category_display,$(call category_slug,$@))" \
 		-v category_url="$(call category_url,$@)" \
-		"$$RENDER_POST" $(WORK_DIR)$*.staged > $@;
-	@rm -f $(WORK_DIR)$*.staged
+		"$$RENDER_POST" $< > $@;
 	@echo "Done";
 
 #

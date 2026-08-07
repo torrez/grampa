@@ -245,7 +245,50 @@ EOF
 	# Counts dated post pages only, so category pages
 	# added in Task 4 do not change the expected number.
 	assert_eq "post pages built" "6" "$(find build -type f -name '*.html' -path 'build/2*' | wc -l | tr -d ' ')"
-	assert_eq "no stray intermediates" "" "$(ls work/ | grep -v '\.tmp$' | tr '\n' ' ' | sed 's/ *$//')"
+	assert_eq "no stray intermediates" "" "$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+#
+# .SECONDARY has to keep .staged files. Without it make
+# reaps them as pattern-rule intermediates and Markdown
+# re-runs on every build.
+#
+test_staged_files_persist() {
+	sandbox staged_persist
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file work/2026-08-06-home_hello.staged
+	assert_grep work/2026-08-06-home_hello.staged "title: Hello"
+	assert_grep work/2026-08-06-home_hello.staged "<p>Hi.</p>"
+}
+
+#
+# Guards the pattern-rule trap: writing %.tmp's new
+# prerequisites as a bare dependency line looks right and
+# silently drops templates/post.txt, so editing the
+# template would rebuild nothing.
+#
+test_editing_post_template_rebuilds_fragments() {
+	sandbox post_template_rebuild
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	# GNU make 3.81's mtime comparisons resolve to whole
+	# seconds, so a touch landing in the same wall-clock
+	# second as the first build looks "not newer" and gets
+	# skipped. Same reason test_editing_one_category_does_
+	# not_rebuild_another sleeps.
+	sleep 1
+	touch templates/post.txt
+	build || return
+	assert_out_grep "Building work/2026-08-06-home_hello.tmp"
 }
 
 test_url_omits_the_category() {
@@ -661,6 +704,8 @@ test_blog_name_from_config
 test_ampersands_are_not_mangled
 test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
+test_staged_files_persist
+test_editing_post_template_rebuilds_fragments
 test_url_omits_the_category
 test_multi_hyphen_category_parses
 test_filename_without_underscore_fails
