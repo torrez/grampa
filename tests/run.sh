@@ -241,11 +241,17 @@ title: Post $i
 <p>Body $i.</p>
 EOF
 	done
+	# url= is set so -j8 also exercises the .staged ->
+	# .rssitem -> rss.tmp -> rss.xml chain, not just the
+	# .staged -> .tmp -> html chain the default config runs.
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
 	build -j8 || return
 	# Counts dated post pages only, so category pages
 	# added in Task 4 do not change the expected number.
 	assert_eq "post pages built" "6" "$(find build -type f -name '*.html' -path 'build/2*' | wc -l | tr -d ' ')"
 	assert_eq "no stray intermediates" "" "$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+	assert_file build/rss.xml
+	assert_eq "items in feed" "6" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
 }
 
 #

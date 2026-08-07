@@ -87,6 +87,10 @@ to render the feed from.
 The link tag is there whether or not you’ve set `url=`, so a site with no feed advertises
 one that 404s. Set `url=`, or delete the line.
 
+If you had grampa checked out before this feed existed, you’ll have a leftover
+`templates/atom.txt` sitting around from the old Atom stub — nothing reads it anymore, so
+it’s safe to delete.
+
 ## things i still need to do
 
 1. Better deployment examples
