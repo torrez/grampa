@@ -15,7 +15,21 @@ Nothing found endangers `posts/`. There were no critical findings.
 
 ## Important
 
-### 1. The Markdown staging branch swallows every failure
+### 1. The Markdown staging branch swallows every failure — DONE
+
+Fixed: the branch's steps are chained with `&&`, so a failing step fails the recipe.
+Guarded by `test_failing_markdown_fails_the_build`.
+
+Review caught a second-order bug the `&&` introduced: a failed run now stops before its
+trailing `rm -f` and leaves split chunks in `work/`. Since the reassembly collects chunks
+by glob, a post that later split into *fewer* chunks swept the stale ones back in — so
+recovering from a Markdown failure republished text the author had deleted. Reproduced,
+then closed by clearing the scratch namespace at the head of the chain too. Guarded by
+`test_failed_markdown_leaves_no_stale_chunks`.
+
+Note the fix catches a failing *step*, not a failing stage of a pipeline — `cat … | tail`
+still reports `tail`'s status, so the unmatched-glob half of the last Minor item below is
+still open.
 
 `Makefile:596-603` — **verified**
 
@@ -116,7 +130,12 @@ confident, formerly-true, empirically-false claim is worth more here than elsewh
 loudly by the unknown-page guard.
 **Cost:** prose only.
 
-### 5. The Markdown branch has no test coverage at all
+### 5. The Markdown branch has no test coverage at all — DONE
+
+Fixed alongside item 1: `markdown_stub` writes a suite-owned `Markdown.pl` into the
+sandbox, and two tests use it —
+`test_markdown_transforms_the_body_not_the_front_matter` and
+`test_failing_markdown_fails_the_build`.
 
 `tests/run.sh` — **verified** (a stub was built and shown to exercise the branch correctly)
 
@@ -190,7 +209,28 @@ the rest of the tool.
 - **The `split` cleanup glob stops at `az`** — `Makefile:599`, **read**. `$*.a[b-z]*` misses
   chunks past `az`, so a body containing more than 25 delimiter lines would silently
   truncate. Also, a post with no delimiter at all leaves the glob unmatched and `cat` errors
-  into the swallowed pipeline. Fixing item 1 would at least make the second case loud.
+  into the pipeline. This item originally predicted that fixing item 1 would make the second
+  case loud. It does not — **verified** after the fix: `cat … | tail` reports `tail`'s
+  status, so a `cat` that finds nothing to read is still masked and the build exits 0. Item
+  1's `&&` catches a failing *step*, never a failing stage of a pipe. Closing this one needs
+  the pipeline broken up (or `pipefail`, which is not POSIX `sh`).
+
+- **The staging branch's scratch glob can eat a same-date sibling's fragments** —
+  `Makefile`, the `%.staged` rule, **verified**. `rm -f $(WORK_DIR)$*.a[a-z]*` over-matches
+  when two posts share a date and one slug extends the other with `.a<letter>`:
+  `2026-01-01-home_x.txt` alongside `2026-01-01-home_x.ab.txt` means stem `x`'s glob deletes
+  stem `x.ab`'s `.staged` and `.tmp` mid-build. Fails loudly (`cat: … No such file or
+  directory`, exit 2, serial and `-j8`) and is pre-existing — `git show HEAD:Makefile` fails
+  identically, and both the head and tail `rm` have it. Differing dates don't collide, since
+  the stem carries the date. Dotted slugs are degenerate anyway (`/2026/01/01/x.ab.html`).
+  Same family as the `az` glob item below; whoever fixes that should fix this.
+
+- **Markdown-branch test gaps that remain** — `tests/run.sh`, **verified** by manual runs
+  rather than by the suite. No test runs the Markdown branch under `-j`
+  (`test_parallel_build_is_clean` installs no stub); no test asserts a Markdown-staged body
+  reaches `rss.xml` (all three stub sandboxes leave `url=` unset); and the
+  "`Markdown.pl` present but not executable → verbatim branch" path is untested. All three
+  were checked by hand when the branch was fixed and all pass. Cheap to add.
 
 - **`.source/splitter.txt` ends with a blank line** — **verified harmless**. Markdown-staged
   bodies gain a leading blank line that the verbatim branch does not have. Cosmetic.
@@ -199,9 +239,8 @@ the rest of the tool.
 
 ## If only three get done
 
-1. **Item 1 + item 5 together, as one commit.** The only route to silently deployed wrong
-   output, sitting in the only untested code in the repo. The failing-stub test and the
-   `&&` fix verify each other.
+1. ~~**Item 1 + item 5 together, as one commit.**~~ Done. The failing-stub test was written
+   first and watched fail against the `;`-chained recipe, then passed against the `&&` one.
 2. **Item 3.** Two-minute fix, closes a verified reachable hang, and stops a trap that is
    one copy-paste from spreading into the next renderer.
 3. **Item 4, with the CLAUDE.md prose fixes from Minor.** Prose only, but documentation

@@ -590,15 +590,39 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # HTML. Kept by .SECONDARY, so Markdown.pl runs once per
 # post rather than once per consumer.
 #
+# The steps below are chained with && rather than ;, and
+# that is load-bearing. With ; the compound's exit status
+# is the last command's -- rm -f, which essentially always
+# succeeds -- so a failing Markdown.pl was invisible: make
+# exited 0, .DELETE_ON_ERROR never fired, and a .staged
+# file holding front matter and nothing else was trusted
+# by every downstream consumer, publishing a fully
+# rendered page with an empty body. Do not relax these
+# back to ; -- tests/run.sh's failing-stub test guards it.
+#
+# The rm at the *head* of the chain is not redundant with
+# the one at the tail, and is there because of the &&: a
+# failed run now stops before its cleanup and leaves split
+# chunks behind. The reassembly collects chunks by glob
+# ($*.a[b-z]*), so a post that later splits into fewer
+# chunks than the failed run did would sweep the stale
+# ones back in and republish deleted text. Clearing the
+# scratch namespace first makes each run start clean.
+#
+# Note this catches a failing step, not a failing stage of
+# a pipeline: `cat ... | tail` still reports tail's status,
+# so a cat that finds no chunks to read stays quiet.
+#
 $(WORK_DIR)%.staged: posts/%.txt
 	@mkdir -p $(WORK_DIR)
 
 	@if [ -x Markdown.pl ]; \
 		then \
-		split -p----------------------------------- $< $(WORK_DIR)$*. ; \
-		cat $(WORK_DIR)$*.a[b-z]* | tail -n +2 > $(WORK_DIR)$*.body; \
-		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody; \
-		cat $(WORK_DIR)$*.aa .source/splitter.txt $(WORK_DIR)$*.mdbody > $@; \
+		rm -f $(WORK_DIR)$*.a[a-z]* $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
+		split -p----------------------------------- $< $(WORK_DIR)$*. && \
+		cat $(WORK_DIR)$*.a[b-z]* | tail -n +2 > $(WORK_DIR)$*.body && \
+		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
+		cat $(WORK_DIR)$*.aa .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
 		rm -f $(WORK_DIR)$*.a[a-z]* $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
 	fi;
 

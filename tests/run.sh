@@ -40,6 +40,21 @@ add_post() {
 }
 
 #
+# markdown_stub <<'EOF' ... EOF
+# Writes an executable Markdown.pl into the sandbox from
+# stdin. The real Markdown.pl is optional and gitignored,
+# so a sandbox never has one and the whole
+# `if [ -x Markdown.pl ]` staging branch would otherwise
+# never be executed by this suite. The stub stands in for
+# it: same calling convention (one filename argument,
+# transformed body on stdout).
+#
+markdown_stub() {
+	cat > Markdown.pl
+	chmod +x Markdown.pl
+}
+
+#
 # Builds, capturing output. Fails the test if make
 # fails. Stdin is closed so a hang shows up as an
 # error rather than blocking the suite.
@@ -270,6 +285,108 @@ EOF
 	assert_file work/2026-08-06-home_hello.staged
 	assert_grep work/2026-08-06-home_hello.staged "title: Hello"
 	assert_grep work/2026-08-06-home_hello.staged "<p>Hi.</p>"
+}
+
+#
+# The staging branch runs Markdown.pl over the body and
+# nothing else. A title is front matter, so asterisks in
+# it must survive to the page untouched -- if the whole
+# post went through the stub, the h4 would come back
+# wrapped in <em>.
+#
+test_markdown_transforms_the_body_not_the_front_matter() {
+	sandbox markdown_body_only
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
+EOF
+	add_post 2026-08-06-home_marked-up.txt <<'EOF'
+title: A *starred* title
+-----------------------------------
+<p>Body with *emphasis* in it.</p>
+EOF
+	build || return
+	assert_grep build/2026/08/06/marked-up.html "<em>emphasis</em>"
+	assert_grep build/2026/08/06/marked-up.html "<h4>A *starred* title</h4>"
+	# The branch's own scratch files are cleaned up after it.
+	assert_eq "no stray intermediates" "" \
+		"$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
+}
+
+#
+# The staging branch used to chain its steps with `;`, so
+# the recipe's exit status was `rm -f`'s and a failing
+# Markdown.pl was invisible: make exited 0, .staged held
+# front matter and nothing else, and a fully rendered
+# page with an empty body went into build/ ready to
+# deploy. This is the only path in the repo from a
+# healthy source tree to silently wrong output.
+#
+test_failing_markdown_fails_the_build() {
+	sandbox markdown_failure
+	markdown_stub <<'EOF'
+#!/bin/sh
+echo "Markdown.pl: broken" >&2
+exit 1
+EOF
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Real body content.</p>
+EOF
+	build_expect_fail || return
+	# Pin the failure to the Markdown step rather than
+	# accepting any nonzero make.
+	assert_out_grep "Markdown.pl: broken"
+	# The chain short-circuits before the cat that writes
+	# $@, so the staging file is never created at all --
+	# there is not even a half-written one to trust.
+	assert_no_file work/2026-08-06-home_hello.staged
+	# And nothing bodyless reached build/.
+	assert_no_file build/2026/08/06/hello.html
+}
+
+#
+# A failed staging run leaves its split chunks in work/.
+# The next build re-splits into the same namespace, but
+# the reassembly collects chunks by glob -- so a post that
+# now splits into fewer chunks than it did before would
+# sweep the stale ones back in and republish text the
+# author had deleted. Recovering from a Markdown failure
+# must not resurrect content.
+#
+test_failed_markdown_leaves_no_stale_chunks() {
+	sandbox markdown_stale_chunks
+	markdown_stub <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+	# Inner delimiter lines make split produce three chunks.
+	add_post 2026-01-01-home_t.txt <<'EOF'
+title: T
+-----------------------------------
+<p>Kept line.</p>
+-----------------------------------
+<p>Deleted secret.</p>
+EOF
+	build_expect_fail || return
+	# Same whole-second mtime granularity as the other
+	# rebuild tests.
+	sleep 1
+	# The author deletes the second half and fixes Markdown.pl.
+	markdown_stub <<'EOF'
+#!/bin/sh
+cat "$1"
+EOF
+	add_post 2026-01-01-home_t.txt <<'EOF'
+title: T
+-----------------------------------
+<p>Kept line.</p>
+EOF
+	build || return
+	assert_not_grep work/2026-01-01-home_t.staged "Deleted secret."
+	assert_not_grep build/2026/01/01/t.html "Deleted secret."
+	assert_grep build/2026/01/01/t.html "<p>Kept line.</p>"
 }
 
 #
@@ -950,6 +1067,9 @@ test_ampersands_are_not_mangled
 test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
 test_staged_files_persist
+test_markdown_transforms_the_body_not_the_front_matter
+test_failing_markdown_fails_the_build
+test_failed_markdown_leaves_no_stale_chunks
 test_editing_post_template_rebuilds_fragments
 test_rssitem_has_absolute_link_and_rfc822_date
 test_rssitem_link_survives_trailing_slash_in_url
