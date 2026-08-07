@@ -364,8 +364,8 @@ against `make clean && make`, which is already the documented answer for its two
 
 ## Minor
 
-Every bullet below was re-checked in the second sweep and **all remain open**. Line anchors
-are current as of `b0971a2`. New bullets are marked NEW.
+Every bullet below was re-checked in the second sweep. Line anchors are current as of
+`b0971a2`. New bullets are marked NEW; bullets closed since the sweep are marked DONE.
 
 - **`all` and `clean` are not `.PHONY`** — `Makefile:482,488`, **verified**. Only `build`,
   `setup`, `deploy`, and `test` are declared. `touch clean && make clean` prints
@@ -379,12 +379,15 @@ are current as of `b0971a2`. New bullets are marked NEW.
   `RENDER_POST`, `page_title` before `main` in `WRAP_IN_BASE`), which closes the realistic
   cases. A true single-pass fill is the full fix and probably not worth it yet.
 
-- **`PAGE_TITLE`'s `sed` reads `title:` from anywhere in the file** — `Makefile:562`,
-  **verified**. `PARSE_FRONT_MATTER` stops at the delimiter; this `sed` does not. A post
-  with no front-matter title but a body line beginning `title:` takes that as its
-  `<title>` while its `<h4>` renders empty. Fix: add a delimiter stop —
-  `sed -n '/^-----------------------------------/q; s/^title:…'` — the pattern
-  `tools/migrate-categories.sh` already uses for `category:`. Cost: nil.
+- **`PAGE_TITLE`'s `sed` reads `title:` from anywhere in the file — DONE**. The delimiter
+  stop is in, matching the pattern `tools/migrate-categories.sh` already used for
+  `category:`. Guarded by `test_body_title_line_is_not_the_page_title`, watched failing
+  first: a post whose front matter is empty and whose body contains `title: Sneaky`
+  rendered `<title>Sneaky - My Weblog</title>` over an empty `<h4>`; it now renders
+  `<title>My Weblog</title>`.
+
+  Original finding: `Makefile:562`, **verified**. `PARSE_FRONT_MATTER` stops at the
+  delimiter; this `sed` did not.
 
 - **Out-of-range dates build successfully** — **verified**. `2026-13-40-home_bad-date.txt`
   exits 0, spews `date` usage text mid-build, and publishes `/2026/13/40/bad-date.html`
@@ -448,7 +451,14 @@ are current as of `b0971a2`. New bullets are marked NEW.
   Re-confirmed with `od -c`: 35 hyphens, `\n`, `\n`.
 
 - **NEW — a deleted `templates/post.txt` or `rss-item.txt` silently rebuilds from stale
-  fragments** — **verified** (found by the item 3 review, not yet fixed). Both are named
+  fragments — DONE**. Fixed as predicted, with one line: `build: templates/post.txt
+  templates/rss-item.txt`. Guarded by `test_deleted_post_template_fails_the_build` and
+  `test_deleted_rss_item_template_fails_the_build`, both watched failing first — each edits
+  a post, deletes the template, rebuilds, and the old code reported success while serving
+  the previous body. CLAUDE.md's unreadable-template paragraph carried the old claim as
+  fact and is corrected in the same commit.
+
+  Original finding follows. **verified** (found by the item 3 review). Both are named
   only in *pattern* rules, so under make 3.81's pattern search they are not "ought to exist"
   files: delete one and the `%.tmp`/`%.rssitem` rule simply becomes inapplicable, the
   existing `work/` fragment is taken as-is with no dependency check, and the build exits 0
@@ -509,17 +519,23 @@ Writing that test turned up item 8, whose documentation half is fixed in the sam
 whose behaviour half is new work nobody has asked for yet.
 
 Items 4, 6, and 7 followed in one commit, which closes every Important item except the
-behaviour half of item 8. **What is left is the Minor list**, and the two worth ranking above
-the rest are both silent-wrong-output: a deleted `templates/post.txt` or `rss-item.txt`
+behaviour half of item 8. What was left was the Minor list, and the two worth ranking above
+the rest were both silent-wrong-output: a deleted `templates/post.txt` or `rss-item.txt`
 rebuilding from stale fragments with exit 0, and `PAGE_TITLE`'s `sed` reading `title:` from
-the body. Both are cheap — an address-and-quit `sed` for the second, and for the first one
-line naming the two templates as prerequisites of `build`, which is the same mechanism that
-already makes `base.txt` and `rss.txt` hard-error. Verified: with
-`build: templates/post.txt templates/rss-item.txt` appended, the stale case becomes
-`make: *** No rule to make target 'templates/post.txt', needed by 'work/….tmp'.  Stop.`
+the body. **Both are now done**, in one commit, and both cost what they were predicted to —
+an address-and-quit `sed`, and one line naming the two templates as prerequisites of
+`build`, which is the same mechanism that already made `base.txt` and `rss.txt` hard-error.
 Unlike item 8 and the deleted-post gotcha — which are about untracked *outputs* make cannot
-know it should remove — this one is a nameable *input*, which is why it is cheap and they
-are not.
+know it should remove — the deleted template was a nameable *input*, which is why it was
+cheap and they are not.
+
+**What is left is the rest of the Minor list.** Nothing left there goes wrong on an ordinary
+post — but two bullets are still silent on a strange one: a body containing a literal
+`{{permalink}}` expands it, and a body with more than 25 delimiter lines truncates. The
+cheapest are `.PHONY: all clean`, anchoring `.gitignore`, `POST_NAMES` to `:=`, and the
+README nits; the two test gaps (`templates/base.txt` edits, the Markdown branch under `-j`
+and into `rss.xml`) are ~10 lines each; the two glob items in the staging branch want doing
+together and need the pipeline broken up rather than a one-liner.
 
 ---
 

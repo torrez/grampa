@@ -1236,6 +1236,102 @@ EOF
 	assert_no_file build/rss.xml
 }
 
+#
+# ---------------------------------------------------
+# Deleted templates. templates/post.txt and
+# templates/rss-item.txt are named only in pattern rules,
+# so under make 3.81's pattern search they are not files
+# that "ought to exist": delete one and the %.tmp or
+# %.rssitem rule simply becomes inapplicable, the stale
+# fragment already in work/ is taken as-is with no
+# dependency check, and the build exits 0 serving the old
+# body. base.txt and rss.txt hard-error in the same state
+# only because they are also prerequisites of the explicit
+# build/index.html and build/rss.xml rules.
+#
+# Naming both in build's prerequisite list gives them that
+# same standing. These two tests are the guard.
+# ---------------------------------------------------
+#
+
+test_deleted_post_template_fails_the_build() {
+	sandbox deleted_post_template
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>First body.</p>
+EOF
+	build || return
+	assert_grep build/2026/08/06/hello.html "First body."
+
+	sleep 1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Second body.</p>
+EOF
+	rm templates/post.txt
+	build_expect_fail || return
+	assert_out_grep "templates/post.txt"
+	# build_expect_fail above is what detects the bug. These
+	# two do not -- the stale body sits there either way, and
+	# the old code reached them by reporting success. They are
+	# here for a different failure: a build that fails *and*
+	# leaves the already-published page damaged or gone.
+	assert_grep build/2026/08/06/hello.html "First body."
+	assert_not_grep build/2026/08/06/hello.html "Second body."
+}
+
+test_deleted_rss_item_template_fails_the_build() {
+	sandbox deleted_rss_item_template
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>First body.</p>
+EOF
+	build || return
+	assert_grep build/rss.xml "First body."
+
+	sleep 1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Second body.</p>
+EOF
+	rm templates/rss-item.txt
+	build_expect_fail || return
+	assert_out_grep "templates/rss-item.txt"
+	# Same as above: these two guard the damaged-page case,
+	# not the silent-stale one build_expect_fail catches.
+	assert_grep build/rss.xml "First body."
+	assert_not_grep build/rss.xml "Second body."
+}
+
+#
+# ---------------------------------------------------
+# The page title comes from the front matter only.
+#
+# PARSE_FRONT_MATTER stops at the delimiter; the sed that
+# composes PAGE_TITLE has to stop there too, or a body line
+# beginning "title:" becomes the page's <title> while its
+# <h4> renders empty -- which is exactly what a post about
+# grampa's own post format contains.
+# ---------------------------------------------------
+#
+
+test_body_title_line_is_not_the_page_title() {
+	sandbox body_title_line
+	add_post 2026-08-06-home_untitled.txt <<'EOF'
+-----------------------------------
+<p>Front matter looks like this:</p>
+title: Sneaky
+EOF
+	build || return
+	assert_grep build/2026/08/06/untitled.html "<title>My Weblog</title>"
+	assert_not_grep build/2026/08/06/untitled.html "<title>Sneaky"
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -1289,5 +1385,8 @@ test_unreadable_post_template_fails_the_build
 test_unreadable_base_template_fails_the_build
 test_unreadable_rss_item_template_fails_the_build
 test_unreadable_rss_template_fails_the_build
+test_deleted_post_template_fails_the_build
+test_deleted_rss_item_template_fails_the_build
+test_body_title_line_is_not_the_page_title
 
 pass_fail_summary

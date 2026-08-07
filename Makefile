@@ -531,7 +531,38 @@ clean:
 #
 # The only phony rule that builds all the index files
 #
+# templates/post.txt and templates/rss-item.txt are listed
+# here even though nothing in this rule reads them, and
+# that is load-bearing. They are otherwise named only in
+# the %.tmp and %.rssitem *pattern* rules, and make 3.81
+# does not consider a pattern rule's missing prerequisite
+# a file that ought to exist -- it just drops the rule
+# from consideration. Delete either template and the
+# matching rule becomes inapplicable, the stale fragment
+# sitting in work/ is taken as-is with no dependency
+# check, and the build exits 0 serving the old body.
+#
+# templates/base.txt and templates/rss.txt never had this
+# problem, because they are prerequisites of the explicit
+# build/index.html and build/rss.xml rules. Naming these
+# two here gives them the same standing, so a deleted
+# template stops the build with
+#
+#   No rule to make target 'templates/post.txt'
+#
+# This is unconditional, so rss-item.txt has to exist even
+# with url= unset and no feed being built. That is a real
+# asymmetry with rss.txt, which is only required when the
+# feed is on. Gating it on SITE_URL is the wrong cure: a
+# prerequisite list is expanded during the initial parse,
+# which is the same one-build-late trap FEED_PAGES already
+# has. A template make setup always installs is cheap to
+# require.
+#
+# Guarded by tests/run.sh's two deleted-template tests.
+#
 .PHONY: build
+build: templates/post.txt templates/rss-item.txt
 build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES)
 	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml. A previously built build/rss.xml, if any, is left in place."; fi
 	@echo "Build completed."
@@ -602,6 +633,13 @@ $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.t
 # operand for the same reason cat has one below: with no file
 # to read it would sit on stdin.
 #
+# The sed quits at the delimiter, the way
+# tools/migrate-categories.sh does for category:. Without
+# that it reads title: from anywhere in the file, so a post
+# with no front-matter title but a body line beginning
+# title: -- a post about this very format -- took that line
+# as its <title> while its <h4> rendered empty.
+#
 $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templates/base.txt config
 	@if [ -z "$(call tmp_for_page,$*)" ]; \
 		then \
@@ -612,7 +650,7 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 	@echo "Building $(@)"
 	@mkdir -p $(dir $(@))
 
-	@title=$$(sed -n 's/^title:[[:space:]]*//p' $(call post_for_page,$*) /dev/null | head -1); \
+	@title=$$(sed -n '/^-----------------------------------/q; s/^title:[[:space:]]*//p' $(call post_for_page,$*) /dev/null | head -1); \
 	if [ -n "$$title" ]; \
 		then \
 		export PAGE_TITLE="$$title - $$BLOG_NAME"; \

@@ -48,11 +48,22 @@ output the `.staged` recipe's `&&` chain exists to prevent. Exiting non-zero let
 The reachable path here is a template that is **present but unreadable** — one `chmod 000`,
 or a careless `cp`/`rsync` that drops the mode. Make sees the prerequisite satisfied and awk
 runs. A *missing* template never reaches awk, and neither does running from the wrong
-directory, since the template prerequisite is a relative path too. Note "never reaches awk"
-is not the same as "always errors": a missing `templates/base.txt` or `templates/rss.txt`
-does error, but a missing `templates/post.txt` or `rss-item.txt` can leave a stale fragment
-being reused with exit 0 — see the deleted-template bullet in `docs/backlog.md`. All
-verified, and guarded by the four `test_unreadable_*_template_fails_the_build` tests.
+directory, since the template prerequisite is a relative path too. A *missing* template
+errors rather than serving stale output: `post.txt` and `rss-item.txt` always error,
+`base.txt` always did, and `rss.txt` errors whenever the feed is being built — with `url=`
+unset nothing references it and deleting it builds clean, since `build/rss.xml` is not in
+`FEED_PAGES`.
+
+`post.txt` and `rss-item.txt` get that standing from being named as prerequisites of
+`build`. Named only in pattern rules they were not files make thought ought to exist, so
+deleting one made the `%.tmp`/`%.rssitem` rule inapplicable and the stale fragment in
+`work/` was reused with exit 0. The prerequisite is unconditional, which means
+`rss-item.txt` must exist even with the feed off — an asymmetry with `rss.txt`, and the
+deliberate price of not gating a prerequisite list on `SITE_URL`, which would land straight
+back in the parse-time-vs-recipe-time gotcha below. All verified, and guarded by the four
+`test_unreadable_*_template_fails_the_build` tests plus
+`test_deleted_post_template_fails_the_build` and
+`test_deleted_rss_item_template_fails_the_build`.
 
 ## Layout
 
