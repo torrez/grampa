@@ -55,7 +55,44 @@ three of which were found by running the proposed program rather than by designi
 Run: `make test 2>&1 | tail -3`
 Expected: `passed: 215  failed: 0`. If not, stop and report.
 
-- [ ] **Step 2: Write the four failing tests**
+- [ ] **Step 2: Make the grep helpers able to see a hyphen**
+
+This is not a detour. `assert_not_grep` runs `grep -qF "$2" "$1"`, and the fourth test's
+pattern is 35 hyphens, which grep parses as an unrecognized long option: exit 2, usage spew
+on stderr, and `assert_not_grep`'s else-branch counts any non-zero exit as **ok**. The test
+would pass against the broken build and guard nothing. Verified directly:
+
+```
+$ grep -qF "-----------------------------------" g.txt; echo $?
+grep: unrecognized option `-----------------------------------'
+2
+$ grep -qF -- "-----------------------------------" g.txt; echo $?
+0
+```
+
+In `tests/run.sh`, add `--` to the four grep-based helpers (`assert_grep`,
+`assert_not_grep`, `assert_out_grep`, `assert_out_not_grep`):
+
+```bash
+	if grep -qF -- "$2" "$1"; then ok; else fail "expected '$2' in $1" "$(cat "$1")"; fi
+```
+
+```bash
+	if grep -qF -- "$2" "$1"; then fail "did NOT expect '$2' in $1" "$(cat "$1")"; else ok; fi
+```
+
+```bash
+	if printf '%s\n' "$BUILD_OUT" | grep -qF -- "$1"; then ok; else fail "expected '$1' in make output" "$BUILD_OUT"; fi
+```
+
+```bash
+	if printf '%s\n' "$BUILD_OUT" | grep -qF -- "$1"; then fail "did NOT expect '$1' in make output" "$BUILD_OUT"; else ok; fi
+```
+
+Run: `make test 2>&1 | tail -3` → still `passed: 215  failed: 0`. The change affects no
+existing test; every current pattern starts with something other than a hyphen.
+
+- [ ] **Step 3: Write the four failing tests**
 
 In `tests/run.sh`, immediately after `test_non_executable_markdown_falls_back_to_verbatim`
 (the last of the Markdown staging tests), add all four. Each installs the identity Markdown
@@ -184,7 +221,7 @@ test_post_without_delimiter_stages_cleanly
 test_delimiter_on_first_line_leaves_no_stray_delimiter
 ```
 
-- [ ] **Step 3: Run the four tests and watch each fail for its own reason**
+- [ ] **Step 4: Run the four tests and watch each fail for its own reason**
 
 Run: `make test 2>&1 | grep -A4 'FAIL:'`
 
@@ -198,15 +235,20 @@ that the count is four:
 | `post_without_delimiter` | `did NOT expect 'No such file' in make output` (the build itself exits 0) |
 | `delimiter_on_first_line` | `did NOT expect '-----------------------------------' in build/2026/01/01/lead.html` |
 
-If `delimiter_on_first_line` fails for a different reason, check whether the rendered page
-carries 35 consecutive hyphens from `templates/base.txt` rather than from the body; that
-would make the assertion untrustworthy and the test needs a narrower target.
+None of the four templates in `.source/templates/` contains a 35-hyphen run, so the only
+source of one in a rendered page is the post body — checked, and it is what makes
+`delimiter_on_first_line`'s assertion trustworthy once Step 2 has made grep able to see the
+pattern at all.
 
-Suite total should be `passed: 215  failed: 4` — the four new assertions that fail. Note
-`assert_*` counts assertions, not tests, so passing assertions inside a failing test still
-raise the passed count; read the FAIL lines, not the totals.
+Suite total should be `passed: 218  failed: 4`: 215 baseline, plus the three assertions that
+pass *inside* the failing tests (`<p>section 1</p>`, the `Bare` title, `<p>body only</p>`),
+against four tests failing. `assert_*` counts assertions and not tests, which is why the
+total goes up rather than down — read the FAIL lines, not the totals.
 
-- [ ] **Step 4: Add the `SPLIT_STAGED` program**
+Without Step 2 this run reads `passed: 219  failed: 3` instead, with
+`delimiter_on_first_line` quietly passing. If you see that, Step 2 did not take.
+
+- [ ] **Step 5: Add the `SPLIT_STAGED` program**
 
 In `Makefile`, after the `endef` that closes `WRAP_IN_CHANNEL` and before the
 `# Passed to awk through the environment` comment block:
@@ -257,7 +299,7 @@ END {
 endef
 ```
 
-- [ ] **Step 5: Export it**
+- [ ] **Step 6: Export it**
 
 Add to the export list at `Makefile:561-564`, after `export WRAP_IN_CHANNEL`:
 
@@ -268,7 +310,7 @@ export SPLIT_STAGED
 Without this the recipe's `"$$SPLIT_STAGED"` expands to an empty awk program, which copies
 nothing and exits 0 — a silent failure, so do not skip it.
 
-- [ ] **Step 6: Rewrite the recipe and its comment block**
+- [ ] **Step 7: Rewrite the recipe and its comment block**
 
 Replace `Makefile:743-795` (the comment block and the rule) with:
 
@@ -303,14 +345,22 @@ Replace `Makefile:743-795` (the comment block and the rule) with:
 # fail silently, back when the body was reassembled with
 # `cat chunks | tail -n +2`.
 #
-# The rm at the *head* of the chain is not redundant with
-# the one at the tail, and is there because of the &&: a
-# failed run stops before its cleanup and leaves scratch
-# files behind. Each is truncated rather than appended to
-# on the next run, so a stale one cannot merge into the
-# output -- but a stale .mdbody left by a Markdown.pl that
-# failed *after* writing would be glued into $@ by the cat
-# if nothing cleared it first.
+# The rm at the *head* of the chain is hygiene and not
+# correctness, which is a demotion from what it used to be.
+# Under the old glob it was load-bearing: a failed run left
+# chunks behind and the reassembly globbed whatever it
+# found, so a post that later split into fewer chunks swept
+# the stale ones back in. Exact filenames cannot do that.
+# Every one of the three is truncated before it is read --
+# awk's `print >` truncates on first write, the END block's
+# printf truncates even when nothing else is written, and
+# the shell's `>` truncates .mdbody before Markdown.pl
+# starts -- so no stale byte can survive into $@. Verified
+# by neutering this rm: the failing-stub test and the
+# parallel test both still pass. It stays because a
+# persistently failing install should not accumulate
+# scratch, and because the truncation argument holds only
+# as long as nothing in the chain is reordered.
 #
 # Every scratch name is an exact filename, never a glob.
 # It used to be `split -p` plus $*.a[b-z]*, which was
@@ -342,7 +392,7 @@ $(WORK_DIR)%.staged: posts/%.txt
 The `awk` invocation is split across two continued lines for width; keep the `\` and the
 leading tab on the second, as the surrounding recipes do.
 
-- [ ] **Step 7: Run the four tests and watch them pass**
+- [ ] **Step 8: Run the four tests and watch them pass**
 
 Run: `make test 2>&1 | tail -3`
 Expected: `passed: 223  failed: 0` — 215 baseline plus the eight assertions in the four new
@@ -350,7 +400,7 @@ tests (2 + 2 + 2 + 2; the `build` calls do not assert). Verify the exact number
 rather than eyeballing "0 failed": a test whose sandbox name collides with another's is
 silently skipped work.
 
-- [ ] **Step 8: Verify the two existing tests the spec called out**
+- [ ] **Step 9: Verify the two existing tests the spec called out**
 
 Run: `make test 2>&1 | grep -c FAIL` → `0`, and confirm by name that these ran:
 `test_failed_markdown_leaves_no_stale_chunks` and `test_markdown_branch_is_parallel_safe`.
@@ -359,10 +409,11 @@ carried by truncation rather than by clearing a glob; the second asserts no stra
 intermediates in `work/`, which covers the three new scratch names as-is. If either fails,
 the fix is wrong — do not adjust the tests to match.
 
-- [ ] **Step 9: Verify no post-format regression by hand**
+- [ ] **Step 10: Verify no post-format regression by hand**
 
 The suite proves the defects are closed. This proves nothing else moved. In a scratch
-directory (not the repo):
+directory (not the repo), copying the **now-edited** Makefile — this step is meaningless run
+out of order, before Steps 5-7 have touched it:
 
 ```bash
 S=/private/tmp/claude-501/-Users-andre-Code-grampa/cb99cfb2-a708-43cb-975b-e51102bba9e8/scratchpad/t1
@@ -380,7 +431,7 @@ Expected: both `<p>a</p>` and `<p>b</p>` in the body with the inner delimiter be
 preserved, and `build/rss.xml` present. Inner-delimiter preservation is the behaviour most
 at risk from a mis-written `!seen` guard, and no suite test isolates it.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add Makefile tests/run.sh
@@ -390,7 +441,7 @@ git commit -m "Split staging with awk instead of split(1) and two globs."
 Message body should name all three defects and say that the four tests were watched failing
 first, with what each failure was.
 
-- [ ] **Step 11: Fable review of this task's diff**
+- [ ] **Step 12: Fable review of this task's diff**
 
 Dispatch `Agent` with `model: "fable"`. Give it the framing `CLAUDE.md` prescribes: this is
 a Makefile, so the failure modes are pattern-rule ambiguity, `=` vs `:=` timing,
@@ -431,11 +482,13 @@ because the tests still pass nothing else will ever flag them.
 
 1. `tests/run.sh:394-397` — the block above `test_failed_markdown_leaves_no_stale_chunks`
    explains the premise as "the reassembly collects chunks by glob -- so a post that now
-   splits into fewer chunks than it did before would sweep the stale ones back in". Rewrite
-   to the current reasoning: scratch files are exact names and are truncated on the next
-   run, so the sweep-back cannot happen — but a `.mdbody` from a Markdown.pl that failed
-   after writing would still be `cat`ed into `$@` if the head `rm` did not clear it. The
-   test guards that, and the test itself is unchanged.
+   splits into fewer chunks than it did before would sweep the stale ones back in". That
+   mechanism is gone, and the honest rewrite has to say the test is now weaker than its
+   comment implies: with exact filenames every scratch file is truncated before it is read,
+   so the sweep-back it was written against cannot happen and the test passes even with the
+   head `rm` removed — verified. Keep the test; say what it now covers, which is the
+   end-to-end property that recovering from a Markdown failure must not republish deleted
+   text, by whatever mechanism. Do not dress the head `rm` up as the thing it guards.
 2. `tests/run.sh:408` — "Inner delimiter lines make split produce three chunks" becomes a
    statement about what the test actually needs: content after a second delimiter, which the
    author then deletes.
@@ -455,10 +508,18 @@ first, then the original finding preserved below it.
    `.aa`/`.ab` chunks from a pre-change *failed* run keeps them indefinitely, because the
    new `rm -f` does not name them and nothing globs them any more. Inert; `make clean`
    clears them.
-4. Record the three unsought behaviour changes from the spec — delimiter matched mid-line,
-   delimiter on line 1, empty post file — with the empty-post one flagged as a
-   loud-to-silent conversion accepted because it makes the two staging branches agree.
-5. Strike through remaining-work item 1 ("The two staging-branch glob items") in the
+4. Record all four behaviour changes from the spec, marked for what they are: the mid-line
+   delimiter no longer splitting is the **sought** one, and the other three were found by
+   running the new program against the old — delimiter on line 1 (stray hyphen line leaves
+   the body), an empty post file (loud failure becomes an empty page, accepted because it
+   makes the two staging branches agree), and a post with no trailing newline gaining one
+   byte in `.staged`. Do not drop the trailing-newline one for being trivial; an unrecorded
+   byte-level change is exactly what makes a future `diff` investigation expensive.
+5. Leave the older DONE entries that narrate the `split`-chunk mechanism as history
+   (≈lines 72-84 and 270) alone. They are dated records of what was true when written, and
+   the "describes a mechanism that no longer exists" standard applied to `tests/run.sh`
+   above is about live comments on live code, not about the log.
+6. Strike through remaining-work item 1 ("The two staging-branch glob items") in the
    "What is left" list, the way items 1-3 above it are struck through, and renumber nothing
    — the list's existing entries keep their numbers.
 
