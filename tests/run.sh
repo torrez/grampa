@@ -459,6 +459,37 @@ EOF
 }
 
 #
+# The same bare-dependency-line trap as the test above,
+# but for templates/base.txt, which has three consumers
+# rather than one: the per-post %.html rule, the
+# category/%.html rule, and the explicit index.html rule.
+# Drop the prerequisite from any one of them and editing
+# base.txt -- adding the feed's <link> tag, say, which
+# README.md tells upgraders to do by hand -- leaves that
+# page rendered from the old template with no error and
+# no rebuild. Asserting all three in one test is
+# deliberate: they are three copies of one dependency and
+# the realistic mistake is fixing a rule and forgetting
+# its siblings.
+#
+test_editing_base_template_rebuilds_every_page() {
+	sandbox base_template_rebuild
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	# Whole-second mtime granularity, same as the test above.
+	sleep 1
+	touch templates/base.txt
+	build || return
+	assert_out_grep "Building build/2026/08/06/hello.html"
+	assert_out_grep "Building build/category/home.html"
+	assert_out_grep "Building index.html"
+}
+
+#
 # The item's link must be absolute -- readers have no
 # base to resolve against -- and must not contain the
 # category, which is in the filename but never a URL.
@@ -1394,6 +1425,7 @@ test_markdown_transforms_the_body_not_the_front_matter
 test_failing_markdown_fails_the_build
 test_failed_markdown_leaves_no_stale_chunks
 test_editing_post_template_rebuilds_fragments
+test_editing_base_template_rebuilds_every_page
 test_rssitem_has_absolute_link_and_rfc822_date
 test_rssitem_link_survives_trailing_slash_in_url
 test_rssitem_escapes_title_and_body
