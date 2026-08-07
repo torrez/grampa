@@ -1784,6 +1784,28 @@ EOF
 }
 
 #
+# posts/2026-01-02-home_.txt passes every shape clause --
+# .txt satisfies the has-a-category-word test and home
+# satisfies category_slug -- and publishes
+# build/2026/01/02/.html, a dotfile no server will serve and
+# no ls will show. Found by the Task 1 review. The sibling
+# of the empty-category clause, and it wants the same
+# treatment.
+#
+test_empty_title_slug_is_rejected() {
+	sandbox empty_title_slug_is_rejected
+	add_post '2026-01-02-home_.txt' <<'EOF'
+title: Nameless
+-----------------------------------
+<p>NAMELESS BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-01-02-home_.txt'
+	assert_out_grep 'empty title slug'
+	assert_no_file 'build/2026/01/02/.html'
+}
+
+#
 # ---------------------------------------------------
 # all and clean must be phony. Both are named after
 # nothing on disk, but make does not know that: create a
@@ -1903,5 +1925,6 @@ test_default_build_works_with_a_file_named_all
 test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
+test_empty_title_slug_is_rejected
 
 pass_fail_summary

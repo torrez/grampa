@@ -253,11 +253,20 @@ bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 # interpolates filenames into a shell, and its year test
 # maps digits onto + and would be fooled by a literal one.
 #
+# "First" means first among these clauses, not first of
+# anything in the file. A filename containing a : never gets
+# here at all: it reaches .SECONDARY's prerequisite list up
+# at the top and make's own parser stops with "target
+# pattern contains no `%'", naming neither the post nor the
+# reason. Loud either way, and the one character out of the
+# 29 whose error is make's rather than ours.
+#
 check_post_name = \
 	$(if $(call bad_chars_in,$(1)),$(error posts/$(1): illegal character in filename: $(call bad_chars_in,$(1)); a post filename may contain letters, digits, and only these punctuation marks: - _ .))\
 	$(if $(word 3,$(call underscore_split,$(1))),$(error posts/$(1): more than one _ in filename; expected y-m-d-category_title.txt))\
 	$(if $(word 2,$(call underscore_split,$(1))),,$(error posts/$(1): no category in filename; expected y-m-d-category_title.txt))\
-	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))
+	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))\
+	$(if $(call post_slug,$(1)),,$(error posts/$(1): empty title slug in filename; expected y-m-d-category_title.txt))
 CHECKED_POST_NAMES := $(foreach f,$(POST_NAMES),$(call check_post_name,$(f)))
 
 #
