@@ -1666,6 +1666,96 @@ EOF
 }
 
 #
+# Detection records field 2 -- the whole command line --
+# not the probe name. Recorded as field 1, cmark-gfm loses
+# -e table and renders tables as paragraphs at exit 0.
+#
+test_setup_records_the_full_argv() {
+	sandbox setup_full_argv
+	path_stub cmark-gfm 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark-gfm --unsafe -e table"
+}
+
+#
+# Preference order: the table's first working candidate
+# wins, not whichever happens to be installed.
+#
+test_setup_prefers_the_earlier_candidate() {
+	sandbox setup_order
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+	path_stub lowdown 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := lowdown --out-no-smarty"
+}
+
+#
+# The probe tests the flags, not just the binary: a
+# candidate that drops raw HTML is skipped, which is the
+# real behaviour of cmark/cmark-gfm/lowdown without their
+# --unsafe-family flags.
+#
+test_probe_skips_a_candidate_that_eats_raw_html() {
+	sandbox probe_raw_html
+	path_stub lowdown 'sed "s|<i>y</i>|RAWGONE|" "$f"'
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+}
+
+#
+# A candidate emitting a whole document is skipped: base.txt
+# would otherwise wrap it in a second <html> at exit 0.
+#
+test_probe_skips_a_whole_document_candidate() {
+	sandbox probe_document
+	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
+# One candidate truncating the probe file must not poison
+# the candidates behind it. The file is rewritten per
+# candidate for exactly this reason.
+#
+test_a_truncating_candidate_does_not_poison_the_walk() {
+	sandbox probe_truncate
+	path_stub lowdown ': > "$f"; exit 1'
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+}
+
+#
+# Nothing installed is a legitimate state, not an error.
+#
+test_setup_with_no_processor_records_empty() {
+	sandbox setup_none
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
+# The cmp guard: a no-op setup must not bump the mtime, or
+# every setup re-stages every post once Task 4 lands.
+#
+test_noop_setup_leaves_config_mk_untouched() {
+	sandbox setup_noop
+	local before after
+	before=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
+	sleep 1
+	make setup >/dev/null 2>&1
+	after=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
+	assert_eq "config.mk mtime unchanged by a no-op setup" "$before" "$after"
+	assert_no_file config.mk.new
+}
+
+#
 # ---------------------------------------------------
 # Unreadable templates. A template that is present but
 # cannot be read -- one chmod 000, or a cp/rsync that
@@ -2524,5 +2614,12 @@ test_character_error_precedes_the_date_error
 test_setup_writes_the_host_date_dialect
 test_build_without_config_mk_fails
 test_setup_bootstraps_with_a_month_end_post
+test_setup_records_the_full_argv
+test_setup_prefers_the_earlier_candidate
+test_probe_skips_a_candidate_that_eats_raw_html
+test_probe_skips_a_whole_document_candidate
+test_a_truncating_candidate_does_not_poison_the_walk
+test_setup_with_no_processor_records_empty
+test_noop_setup_leaves_config_mk_untouched
 
 pass_fail_summary

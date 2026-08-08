@@ -10,6 +10,7 @@
 /posts/
 /config
 /config.mk
+/config.mk.new
 /build/
 /work/
 /deploy.sh

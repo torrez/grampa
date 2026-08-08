@@ -15,6 +15,52 @@ SHELL := /bin/bash
 -include config.mk
 
 #
+# The markdown processors grampa knows how to drive, in
+# preference order: tables first, runtime-free first, and
+# Markdown.pl last. Field 1 is what setup probes, field 2
+# is the command line it records. A field 1 containing a
+# slash is probed with [ -x ] rather than run from PATH.
+#
+# An argv here must not contain # or $, which would
+# truncate or misparse the config.mk line it is written
+# into.
+#
+# The --unsafe / --html-no-skiphtml / --html flags are not
+# optional extras. cmark, cmark-gfm, lowdown, comrak and
+# markdown-it all DISCARD raw HTML in the input without
+# them -- lowdown deletes it outright, cmark replaces it
+# with <!-- raw HTML omitted --> -- which would silently
+# drop an embedded iframe from a post. Grampa already
+# copies post bodies through as raw HTML when there is no
+# processor at all, so this restores existing behaviour
+# rather than relaxing anything.
+#
+# lowdown and discount also smarten punctuation by
+# default, rewriting the author's quotes and dashes; hence
+# --out-no-smarty and -smarty, and pandoc's -smart.
+#
+# comrak and markdown-it are the two rows never executed
+# -- their flags are inferred from the family behaviour
+# above, not observed. The probe below is what keeps that
+# honest.
+#
+define MARKDOWN_CANDIDATES
+lowdown|lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
+cmark-gfm|cmark-gfm --unsafe -e table -e strikethrough -e autolink -e tasklist
+md2html|md2html --github
+comrak|comrak --unsafe -e table
+multimarkdown|multimarkdown --snippet
+markdown|markdown -f +tables,-smarty
+cmark|cmark --unsafe
+smu|smu
+markdown_py|markdown_py -x tables
+markdown-it|markdown-it --html
+pandoc|pandoc -f markdown-smart -t html
+./Markdown.pl|./Markdown.pl
+endef
+export MARKDOWN_CANDIDATES
+
+#
 # build/ holds only publishable output. Everything
 # the build needs along the way lives in work/ so
 # deploy.sh never has to filter anything out.
@@ -1263,8 +1309,27 @@ setup: config
 	@if date -v1d >/dev/null 2>&1; then dialect=bsd; \
 	elif date -d 2026-01-15 >/dev/null 2>&1; then dialect=gnu; \
 	else echo "grampa: no supported date dialect (need BSD 'date -v' or GNU 'date -d')" >&2; exit 1; fi; \
-	echo "DATE_DIALECT := $$dialect" > config.mk; \
-	echo "Configured date dialect: $$dialect"
+	winner=$$(printf '%s\n' "$$MARKDOWN_CANDIDATES" | while IFS='|' read -r probe cmd; do \
+		[ -n "$$probe" ] || continue; \
+		case "$$probe" in \
+			*/*) [ -x "$$probe" ] || continue;; \
+			*) command -v "$$probe" >/dev/null 2>&1 || continue;; \
+		esac; \
+		probefile=$$(mktemp); printf 'x <i>y</i>\n' > "$$probefile"; \
+		out=$$($$cmd "$$probefile" 2>/dev/null </dev/null); rc=$$?; \
+		rm -f "$$probefile"; \
+		[ $$rc -eq 0 ] || continue; \
+		case "$$out" in *'<html'*|*'<HTML'*|*DOCTYPE*) continue;; esac; \
+		case "$$out" in *'<i>'*) ;; *) continue;; esac; \
+		echo "$$cmd"; break; \
+	done); \
+	{ echo "DATE_DIALECT := $$dialect"; \
+	  echo "DETECTED_MARKDOWN := $$winner"; } > config.mk.new; \
+	if cmp -s config.mk.new config.mk; then rm -f config.mk.new; \
+	else mv config.mk.new config.mk; fi; \
+	echo "Configured date dialect: $$dialect"; \
+	if [ -n "$$winner" ]; then echo "Configured markdown: $$winner"; \
+	else echo "Configured markdown: none -- post bodies stay HTML"; fi
 
 #
 # deploy: all, and not a bare deploy, because
