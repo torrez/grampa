@@ -119,8 +119,8 @@ date and title slug in different categories — `2026-08-06-home_dup.txt` and
 `2026-08-06-work_dup.txt` — both want `/2026/08/06/dup.html`. `CHECKED_POST_PAGES` errors
 naming both files rather than letting filename sort order pick a winner.
 
-Two more parse-time errors guard the filename itself, so there are four rules in all and this
-is the one place to find them.
+Three more parse-time errors guard the filename itself, so there are five rules in all and
+this is the one place to find them.
 
 **A filename may contain letters, digits, and only `-`, `_`, and `.`.** Every other ASCII
 punctuation character is rejected by `BAD_CHARS`. Non-ASCII is fine, so
@@ -132,10 +132,28 @@ ASCII punctuation character but three, closed by enumeration rather than by judg
 dangerous — which is how `[` and `]` got through in the first place. `%` and `+` are collateral;
 both built correctly before, and `%` is make's pattern-rule wildcard, so it was a landmine that
 happened not to have gone off. An empty title slug (`2026-01-02-home_.txt`, which published
-`build/2026/01/02/.html`) is rejected too, by the sibling of the empty-category clause. Two
-things still get through: an ASCII **control character** builds and lands in the URL — not
-shell-hazardous, so the bug above stays closed — and a **`:`** dies earlier and less helpfully,
-at `.SECONDARY`'s prerequisite list, with make's own `target pattern contains no '%'`.
+`build/2026/01/02/.html`) is rejected too, by the sibling of the empty-category clause.
+
+**A filename may not contain a control character.** `CONTROL_CHAR_NAMES` greps the posts
+directory under `LC_ALL=C` for `[[:cntrl:]]` — `0x00`–`0x1F` and `0x7F` — and errors naming
+every offender, rendered through `cat -vt` so the bytes show as `^A`, `^?`, `^I` rather than
+reaching your terminal raw. It is a separate check and not a `BAD_CHARS` clause because a
+control byte cannot be an element of a make list at all, which is the same reason space and
+tab are absent from that set. Before it, `_a<0x01>c.txt` built at exit 0 and published
+`/2026/01/02/a\001c.html`, control byte and all.
+
+It re-reads the directory rather than interpolating `POST_NAMES`, so unlike the date check it
+has no ordering hazard, and its position above `BAD_CHARS` is a free choice spent on the
+message: a **tab** word-splits `POST_NAMES`, so checked second it died on the category clause
+naming `posts/c.txt` — a file that does not exist, for a reason that is not the reason.
+Checked first it names the whole file.
+
+Two things still get through, and both are one character. A **`0x0A`** — a newline inside a
+filename — is invisible to a line-based grep, since `ls` prints such a name as two lines and
+neither matches, so it still dies with that fragment message. CR is caught and renders `^M`,
+so this residual is exactly one byte and not a category. And a **`:`** dies earlier and less
+helpfully, at `.SECONDARY`'s prerequisite list, with make's own
+`target pattern contains no '%'`.
 
 **The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
 `2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit, and `2028-02-29` build.

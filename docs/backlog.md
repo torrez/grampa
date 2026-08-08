@@ -806,7 +806,64 @@ staleness to actually work as advice.
    recurring lesson of this list showed up twice more — the prefilter added to make it cheap
    reintroduced the very bug it was guarding, on absurdly long years, and the ordering the two
    checks depend on turned out to be guarded by a comment and no test at all.
-4. **An ASCII control character in a slug still builds** — **verified**, found by the Task 1
+4. ~~**An ASCII control character in a slug still builds**~~ — **DONE**, and by neither of the
+   two routes this item predicted. Not raw control bytes in the Makefile source, and not the
+   date check's shell stage — which would have been wrong anyway, since that stage only runs
+   for posts whose date make cannot clear, and a control byte is orthogonal to the date.
+   `CONTROL_CHAR_NAMES` is a second `$(shell)` that re-reads the posts directory and greps it
+   under `LC_ALL=C` for `[[:cntrl:]]`, sharing the listing with `POST_NAMES` through a new
+   `POST_LS` so the two cannot drift about what counts as a post.
+
+   Re-reading the directory rather than interpolating `POST_NAMES` is what earns the design:
+   it interpolates no filenames, so it has **no ordering hazard in either direction** and needs
+   no equivalent of `test_character_error_precedes_the_date_error`. Verified against the real
+   diff in three payload spellings — `…home_a<0x01>$(>PWN).txt` renders the payload literally
+   and executes nothing, backticks likewise, and the decisive case is `$(SHELL)`, which prints
+   as `$(SHELL)` and not `/bin/bash`, because `:=` never rescans a function's result.
+
+   **The item was one item short.** A **tab** already failed, so it read as out of scope — but
+   it failed with `posts/c.txt: no category in filename`, naming a file that does not exist for
+   a reason that is not the reason, because `POST_NAMES` word-splits on the tab and
+   `check_post_name` then judges the fragments. Having no ordering hazard made the check's
+   position a free choice, and spending it on going *first* makes that message true.
+   `test_tab_in_filename_names_the_whole_file` asserts both the new text and the absence of the
+   old, because the build already failed and an exit-status assertion would have passed against
+   the behaviour being fixed — the same trap the shell-metacharacter tests record.
+
+   `cat -vt` and not `cat -v`: BSD `cat -v` passes a tab through untouched, and a raw tab in
+   the message would split the filename back into two make words, reintroducing the exact
+   fragment problem the ordering exists to fix.
+
+   **The class is not closed, and this entry names the byte that is left.** `0x0A` is invisible
+   to a line-based grep — `ls` prints such a name as two lines and neither matches — so a
+   newline in a filename still dies with the fragment message. CR is caught and renders `^M`,
+   so the residual is one byte and not a category. Closing it needs `-print0` and a different
+   shape of check, for a filename nobody can type by accident.
+
+   `LC_ALL=C` stays as a pin by principle rather than by demonstration, the same standing
+   `rfc822_from_filename`'s has. Fable swept all 288 locales installed on the development
+   machine against a mixed corpus: zero differ from the C reference, `en_US.ISO8859-1`
+   included, and APFS rejects invalid UTF-8 filenames outright, so the continuation-byte hazard
+   cannot reach the grep at all. `test_ordinary_filenames_survive_the_control_check` therefore
+   guards the grep's false-positive surface — café, CJK, emoji — and its banner says plainly
+   that it does **not** guard the locale pin. A test whose docstring claims a guarantee it has
+   not got is the same defect as a test that can only pass.
+
+   Cost: one process group per build, unconditionally. A 60-post no-op rebuild measured 0.128s
+   without and 0.134s with. It does not touch the date check's "a blog dated the 1st to the
+   28th spawns nothing" property, which is about a fork per *suspect post*.
+
+   Guarded by `test_control_character_slug_is_rejected` — whose load-bearing assertion is that
+   no page was published under the byte's name, not merely that the build failed —
+   `test_tab_in_filename_names_the_whole_file`, `test_del_character_slug_is_rejected` (DEL is
+   the one control character outside the `0x00`–`0x1F` run, so a class that stopped at `0x1F`
+   would pass the first test and fail this one), and
+   `test_ordinary_filenames_survive_the_control_check`. All watched failing first except the
+   last, which cannot fail and says so. Full suite: **271 passed, 0 failed.**
+
+   Original finding follows.
+
+   **An ASCII control character in a slug still builds** — **verified**, found by the Task 1
    review of the filename checks. `posts/2026-01-02-home_a<0x01>c.txt` exits 0 and publishes
    `build/2026/01/02/a\001c.html`, control byte and all, in the URL. It is not shell-hazardous
    — no globbing, no word-splitting — so the sibling-body bug that motivated `BAD_CHARS` stays

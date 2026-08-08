@@ -43,7 +43,18 @@ WORK_DIR := work/
 # way. Being simply expanded also removes a window where
 # two expansions in one build could disagree.
 #
-POST_NAMES := $(shell ls posts 2>/dev/null | grep '\.txt$$' | sort -t- -k1,1n -k2,2n -k3,3n)
+# POST_LS is the listing itself, split out so the
+# control-character check below can share it and the two
+# cannot drift about which files are posts. It holds a
+# shell fragment, not a command that runs: the $$ escapes
+# to a single $ once, here, and the stored value is
+# substituted verbatim into both $(shell) calls rather than
+# rescanned. Same argument as date_args -- a check that
+# answers a slightly different question than the build asks
+# is the same class of defect as no check.
+#
+POST_LS := ls posts 2>/dev/null | grep '\.txt$$'
+POST_NAMES := $(shell $(POST_LS) | sort -t- -k1,1n -k2,2n -k3,3n)
 POST_FILES = $(addprefix posts/, $(POST_NAMES))
 TMP_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.tmp))
 STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
@@ -256,16 +267,87 @@ BAD_CHARS := ! " \# $$ % & ' ( ) * + , / : ; < = > ? @ [ \ ] ^ ` { | } ~
 bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 
 #
+# Control characters, rejected before anything tries to
+# make sense of the filename's shape.
+#
+# They are checked here and not as a clause of
+# check_post_name below because they cannot be elements of
+# a make list at all -- the same reason space and tab are
+# absent from BAD_CHARS. A grep over the directory is the
+# only way to see them.
+#
+# LC_ALL=C pins [[:cntrl:]] to 0x00-0x1F and 0x7F. That pin
+# is by principle rather than by demonstration: all 288
+# locales installed on the development machine agree with C
+# here, and APFS refuses invalid UTF-8 filenames outright,
+# so no undecodable byte can reach the grep on this
+# platform. It has the same standing as
+# rfc822_from_filename's LC_ALL=C -- both are about
+# environments this machine cannot reproduce, and neither
+# is guarded by a test that could fail.
+#
+# This re-reads the directory rather than interpolating
+# $(POST_NAMES) into the shell, which is why -- unlike the
+# date check below -- it has no ordering dependency in
+# either direction. Verified: a post named
+# ...home_a<0x01>$(>PWN).txt renders the payload literally
+# and executes nothing, because := never rescans a
+# function's result. $(SHELL) in a filename prints as
+# $(SHELL) and not /bin/bash, which is the decisive case.
+#
+# That freedom is spent on putting the check FIRST. A tab
+# in a filename word-splits POST_NAMES, so checked second
+# it dies on check_post_name's category clause naming
+# "posts/c.txt" -- a file that does not exist, for a reason
+# that is not the reason. Checked first it names the whole
+# file. Guarded by test_tab_in_filename_names_the_whole_file,
+# which asserts both the new text and the absence of the
+# old.
+#
+# cat -vt and not cat -v: BSD cat -v passes a tab through
+# untouched, and a raw tab in the message would split the
+# filename back into two make words, reintroducing the very
+# fragment problem this ordering exists to fix. -t renders
+# it ^I. The rendering also keeps raw control bytes off the
+# terminal, at the cost of the message showing ^A for one
+# byte -- which is why it says so.
+#
+# The one-make-word guarantee covers control characters
+# alone. A filename holding both a control byte and a SPACE
+# still renders with the space intact and still fragments --
+# loudly, and with the control-character message, so the
+# diagnosis stays right even when the naming does not.
+#
+# 0x0A is the one control character this cannot catch: a
+# line-based grep cannot see a newline inside a filename, so
+# ls prints such a name as two lines and neither matches. It
+# falls through to the fragment message, exactly as a tab
+# used to. Deliberately left -- closing it needs -print0 and
+# a different shape of check, for one byte nobody can type
+# by accident. CR is caught and renders ^M, so the residual
+# is that one byte and not a category.
+#
+CONTROL_CHAR_NAMES := $(shell $(POST_LS) | LC_ALL=C grep '[[:cntrl:]]' | cat -vt)
+CHECKED_CONTROL_CHARS := $(if $(CONTROL_CHAR_NAMES),$(error control character in filename: $(addprefix posts/,$(CONTROL_CHAR_NAMES)); shown rendered, so ^A is one byte. A post filename may contain letters, digits, and only these punctuation marks: - _ .))
+
+#
 # A malformed filename is a parse-time error, so the
 # build stops before any recipe runs. Assigning with
 # := forces the check to happen now; the result is
 # discarded.
 #
-# Characters are checked first, before any clause tries to
-# make sense of the filename's shape. Two things downstream
+# Characters are checked before any clause tries to make
+# sense of the filename's shape. Two things downstream
 # depend on that having happened: the date check below
 # interpolates filenames into a shell, and its year test
 # maps digits onto + and would be fooled by a literal one.
+#
+# The control-character check above runs before this one,
+# but nothing depends on that: it interpolates nothing, so
+# its position is a free choice made for the sake of the tab
+# message, not a requirement. The constraint that still
+# matters is unchanged and is about the two checks below --
+# BAD_CHARS must stay above BAD_POST_DATES.
 #
 # "First" means first among these clauses, not first of
 # anything in the file. A filename containing a : never gets

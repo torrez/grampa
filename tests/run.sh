@@ -1807,6 +1807,139 @@ EOF
 
 #
 # ---------------------------------------------------
+# Control characters. These fall outside BAD_CHARS' own
+# taxonomy -- a control byte is neither a letter, a digit,
+# ASCII punctuation, nor a non-ASCII byte -- and cannot be
+# elements of a make list at all, so they are checked by a
+# separate grep over the directory rather than by a clause
+# of check_post_name.
+# ---------------------------------------------------
+#
+
+#
+# A control byte in a slug built today at exit 0 and landed
+# in the URL: build/2026/01/02/a<0x01>c.html, control byte
+# and all. Not shell-hazardous -- no globbing, no word
+# splitting -- so the sibling-body bug that motivated
+# BAD_CHARS stayed closed and this was a policy gap rather
+# than a reopened hole.
+#
+# The load-bearing assertion is that no page was published
+# under the byte's name, not merely that the build failed.
+#
+test_control_character_slug_is_rejected() {
+	sandbox control_character_slug_is_rejected
+	add_post "$(printf '2026-01-02-home_a\001c.txt')" <<'EOF'
+title: Control
+-----------------------------------
+<p>CONTROL BODY</p>
+EOF
+	add_post '2026-01-03-home_ok.txt' <<'EOF'
+title: Fine
+-----------------------------------
+<p>FINE BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'control character in filename'
+	assert_out_grep '2026-01-02-home_a^Ac.txt'
+	assert_no_file "build/2026/01/02/$(printf 'a\001c').html"
+	assert_no_file 'build/2026/01/03/ok.html'
+}
+
+#
+# A tab ALREADY failed before this check existed, so an
+# assertion on exit status alone would pass against the
+# behaviour being fixed and guard nothing. What was wrong
+# was the message: POST_NAMES word-splits on the tab and
+# check_post_name then judges the fragments, so the build
+# said "posts/c.txt: no category in filename" -- naming a
+# file that does not exist, for a reason that is not the
+# reason. Assert the text, both halves.
+#
+# This also pins the check's POSITION. Moved below
+# CHECKED_POST_NAMES it still catches the byte, but the
+# fragment message comes back and the second assertion
+# fails.
+#
+test_tab_in_filename_names_the_whole_file() {
+	sandbox tab_in_filename_names_the_whole_file
+	add_post "$(printf '2026-01-02-home_a\tc.txt')" <<'EOF'
+title: Tabbed
+-----------------------------------
+<p>TAB BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep '2026-01-02-home_a^Ic.txt'
+	assert_out_not_grep 'no category in filename'
+}
+
+#
+# DEL is the one control character outside the 0x00-0x1F
+# run, so a hand-written character class that stopped at
+# 0x1F would pass the 0x01 test above and fail this one.
+# That is the whole reason it is separate.
+#
+test_del_character_slug_is_rejected() {
+	sandbox del_character_slug_is_rejected
+	add_post "$(printf '2026-01-02-home_a\177c.txt')" <<'EOF'
+title: Delete
+-----------------------------------
+<p>DEL BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'control character in filename'
+	assert_out_grep '2026-01-02-home_a^?c.txt'
+	assert_no_file "build/2026/01/02/$(printf 'a\177c').html"
+}
+
+#
+# CANNOT FAIL BEFORE THE CHANGE. It guards the new check's
+# false-positive surface: any edit that widens the grep
+# pattern, or breaks the pipeline into matching everything,
+# fails here.
+#
+# It does NOT guard the LC_ALL=C pin, and must not be read
+# as doing so. The spec review swept all 288 locales
+# installed on the development machine against a corpus of
+# exactly these names plus 0x01, 0x7F, and tab: zero locales
+# differ from the LC_ALL=C reference, en_US.ISO8859-1
+# included. APFS also rejects invalid UTF-8 filenames
+# outright, so the continuation-byte hazard cannot reach the
+# grep here at all. LC_ALL=C stays as a pin by principle,
+# the same standing rfc822_from_filename's has -- both are
+# about environments this machine cannot reproduce.
+#
+# Multibyte names on purpose, rather than repeating
+# test_unusual_but_safe_slug_still_builds' ASCII set: a
+# byte-oriented grep is likeliest to trip on multibyte
+# input, which is a different false-positive surface from
+# the one BAD_CHARS has.
+#
+test_ordinary_filenames_survive_the_control_check() {
+	sandbox ordinary_filenames_survive_the_control_check
+	add_post '2026-01-02-home_café.txt' <<'EOF'
+title: Accented
+-----------------------------------
+<p>ACCENT BODY</p>
+EOF
+	add_post '2026-01-03-home_日本語.txt' <<'EOF'
+title: CJK
+-----------------------------------
+<p>CJK BODY</p>
+EOF
+	add_post '2026-01-04-home_🎉party.txt' <<'EOF'
+title: Emoji
+-----------------------------------
+<p>EMOJI BODY</p>
+EOF
+	build || return
+	assert_grep 'build/2026/01/02/café.html' 'ACCENT BODY'
+	assert_grep 'build/2026/01/03/日本語.html' 'CJK BODY'
+	assert_grep 'build/2026/01/04/🎉party.html' 'EMOJI BODY'
+}
+
+#
+# ---------------------------------------------------
 # The date half. date -v already rejects every bad date
 # below and exits 1; nothing hears it, because
 # date_from_filename is a $(shell) call, which keeps the
@@ -2123,6 +2256,10 @@ test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
 test_empty_title_slug_is_rejected
+test_control_character_slug_is_rejected
+test_tab_in_filename_names_the_whole_file
+test_del_character_slug_is_rejected
+test_ordinary_filenames_survive_the_control_check
 test_out_of_range_date_is_rejected
 test_non_numeric_date_is_rejected
 test_impossible_calendar_date_is_rejected
