@@ -81,15 +81,38 @@ The table is data. Adding or dropping a tool is a one-line edit.
 ### 2. Detection at `make setup`
 
 `setup`'s recipe walks the table top to bottom and records the first hit in `config.mk`,
-beside the dialect it already writes:
+beside the dialect it already writes. **What gets recorded is field 2, the whole command
+line** — not the probe name:
 
 ```
 DATE_DIALECT := gnu
-DETECTED_MARKDOWN := lowdown
+DETECTED_MARKDOWN := cmark-gfm -e table -e strikethrough -e autolink -e tasklist
 ```
+
+`lowdown` would make a misleadingly tidy example here, since its two fields are identical.
+Recording field 1 for a candidate whose fields differ would drop every flag — `cmark-gfm`
+without `-e table` renders tables as paragraphs, at exit 0. A test asserts the exact
+`cmark-gfm` line above.
 
 Nothing found writes `DETECTED_MARKDOWN :=` empty, which means post bodies stay verbatim
 HTML — today's no-`Markdown.pl` behavior, unchanged.
+
+**Each candidate is probed by *running* it, not by `command -v`.** `command -v` proves a name
+is on `PATH`; it says nothing about whether the thing wearing that name speaks the interface
+in field 2. `markdown` is the sharp case — it is discount's binary name, but also a perl
+wrapper's and an npm shim's, and a non-discount `markdown` sitting above a working `cmark`
+gets `markdown -f +tables` recorded and then **fails every build**, with a working candidate
+one row down. So:
+
+```sh
+printf 'x\n' > "$$probefile"
+$$cmd "$$probefile" >/dev/null 2>&1 </dev/null
+```
+
+Exit zero means the candidate honors the contract; anything else moves to the next row. The
+`</dev/null` matters: a candidate that ignores its file argument and waits on stdin would
+otherwise hang `make setup` forever. `./Markdown.pl` keeps its `[ -x ]` test *in addition*,
+since a non-executable one must not be run at all.
 
 Setup echoes what it picked, next to its existing `Configured date dialect:` line, so the
 choice is visible when it is made rather than something to go find in a generated file. This
@@ -105,6 +128,53 @@ whole file into a temp, `cmp -s`, then `mv` or discard. This is load-bearing, no
 §4 makes `config.mk` a prerequisite of every `.staged` file, so an unconditional rewrite
 would make every `make setup` re-stage every post. The current recipe's unconditional
 `echo … > config.mk` must change even though the dialect half of it did not care.
+
+`config.mk.new` goes in `.gitignore` beside `/config.mk`. `setup` is `.PHONY`, so
+`.DELETE_ON_ERROR` will not reap the temp if setup is killed mid-write, and an untracked
+temp showing up in `git status` is exactly the kind of litter this repo doesn't leave.
+
+The dialect probe, the candidate walk, and the `cmp`/`mv` are one `; \`-continued logical
+line: each recipe line is its own shell, so `dialect` and the walk's winner do not otherwise
+survive to the write.
+
+### 2a. The upgrade guard
+
+An install set up before this change has a `config.mk` containing only `DATE_DIALECT := gnu`.
+Pull the new Makefile and nothing fails: `DATE_DIALECT` is set, so the existing loud check is
+satisfied, `DETECTED_MARKDOWN` is merely undefined, `MARKDOWN_CMD` is empty, and **markdown
+silently turns off**. The rot is worse than it first looks and was reproduced: already-staged
+posts are up to date and keep their rendered bodies, while the next post you *edit* re-stages
+verbatim — a **mixed site**, rendered HTML on one page and literal `*asterisks*` on its
+neighbour, at exit 0, which `make deploy` then ships.
+
+Silent wrong output is the failure class this repo treats as its worst, so it gets the same
+loud upgrade path `DATE_DIALECT` itself got:
+
+```make
+ifeq ($(if $(BUILD_GOAL),$(if $(DATE_DIALECT),$(filter undefined,$(origin DETECTED_MARKDOWN)))),undefined)
+$(error grampa: config.mk predates markdown detection -- run `make setup`)
+endif
+```
+
+`$(origin)` is what makes this precise, and the distinction is verified: an old-style
+`config.mk` gives `undefined`, while a new one where detection found *nothing* gives `file`
+even though both expand empty. So a probed-empty install — a legitimate state — never trips it.
+
+**The `$(BUILD_GOAL)` gate is load-bearing, not symmetry with §5.** Without it the check is a
+deadlock, and this was verified rather than reasoned about: the error instructs you to run
+`make setup`, and `make setup` parses the same Makefile, hits the same parse-time `$(error)`,
+and dies before its recipe can rewrite `config.mk`. That is the identical trap CLAUDE.md
+documents for `BAD_POST_DATES` and `date_select` — can't build without it, can't setup to make
+it — arriving through a different door. Gated on the goal, `make setup` parses clean and
+bootstraps, `make clean` stays quiet, and a build on an unconverted install fails loud. All
+four states verified.
+
+`BUILD_GOAL` is therefore shared by the guard and §5's notice and should be defined once,
+immediately after `-include config.mk`:
+
+```make
+BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter all build deploy,$(MAKECMDGOALS)),default)
+```
 
 ### 3. The `config` override
 
@@ -138,18 +208,40 @@ installed fails loudly at build time, which is the right shape for an explicit o
 $(WORK_DIR)%.staged: posts/%.txt config $(wildcard config.mk)
 ```
 
-and the recipe's two `[ -x Markdown.pl ]` / `[ ! -x Markdown.pl ]` branches become
-`[ -n "$(MARKDOWN_CMD)" ]` / `[ -z "$(MARKDOWN_CMD)" ]`, with `./Markdown.pl $(WORK_DIR)$*.body`
-becoming `$(MARKDOWN_CMD) $(WORK_DIR)$*.body`.
+The recipe's two `[ -x Markdown.pl ]` / `[ ! -x Markdown.pl ]` shell branches collapse into a
+single shell, with **make** choosing the branch at recipe-expansion time rather than the shell
+choosing it at run time:
+
+```make
+$(if $(strip $(MARKDOWN_CMD)),<split, run $(MARKDOWN_CMD), reassemble>,cp $< $@)
+```
+
+Two reasons, and the second is the one that matters. A shell `[ -n "$(MARKDOWN_CMD)" ]` test
+breaks outright on a `markdown=` value containing an unbalanced quote — verified, it produces
+`` bash: syntax error near unexpected token `fi' `` naming the *recipe*, so the failure is loud
+but points at grampa rather than at the config line that caused it. And `MARKDOWN_CMD` is lazy
+and shells out through `sed | sed | tail` every time it expands: the two-branch shell form
+expands it three times per staged post, this form once, saving roughly nine forks per changed
+post. This repo counts forks — see the `POST_NAMES` bullet in CLAUDE.md's gotchas.
+
+The *exec* site stays interpolated unquoted, which is the settled trust decision. There is no
+path by which a post filename or the blog name reaches that command line: `BAD_CHARS` rejects
+every glob and quoting metacharacter, space/tab/newline names die at parse time before any
+recipe runs, and `BLOG_NAME` never enters the staging recipe at all. Confirmed under review.
 
 **The `$(wildcard)` is doing real work and must not be simplified away.** `config.mk` has no
 rule that builds it. Named as a bare prerequisite on an unconfigured tree, make would die
 with its own `No rule to make target 'config.mk'`, pre-empting the deliberately-worded
 recipe-time ``grampa: no DATE_DIALECT -- run `make setup` first``. Wrapped in `$(wildcard)`
 the prerequisite is simply absent when the file is, and the good error still wins. It is
-expanded at parse time, but the case it guards — `config.mk` absent — is exactly the case
-where the build is going to fail anyway, so nothing depends on it noticing a mid-build
-appearance.
+expanded at parse time, which has one visible shadow rather than none. In a single invocation
+that both recreates `config.mk` and builds — `rm config.mk; make setup work/X.staged` — the
+wildcard already expanded empty, so the staged file reports "up to date" against a `config.mk`
+that same run just wrote with a newer mtime. It self-heals on the next invocation. This is a
+**fifth member of the parse-time-vs-recipe-time family**, after `FEED_PAGES`/`url=`, the
+`BAD_POST_DATES` gate, `make -j setup all`, and §5's notice; combined setup-and-build
+invocations are exactly where that family lives, and it belongs in the gotchas rather than
+being claimed away.
 
 Adding `config` as a prerequisite means editing `name=` also re-stages every post. That is
 accepted: staging is an awk split plus one processor run, and `config` is already a
@@ -174,9 +266,8 @@ grampa: markdown: none -- post bodies stay HTML
 ```
 
 Gated twice. On `$(DATE_DIALECT)` being non-empty, so an unconfigured tree leads with the
-`run make setup first` error instead of a markdown note. And on the goal being a build —
-`all`, `build`, `deploy`, or the default — derived from `MAKECMDGOALS`, so `make clean`,
-`make setup`, and `make test` stay quiet.
+`run make setup first` error instead of a markdown note. And on `$(BUILD_GOAL)` from §2a — the
+same variable, defined once — so `make clean`, `make setup`, and `make test` stay quiet.
 
 **Known wrinkle, documented not fixed.** Reading `markdown=` for the note means reading
 `config` at parse time, and on a first-ever run `config` does not exist yet — so that one
@@ -204,6 +295,14 @@ All new tests use stub processors written into a sandbox `bin/` prepended to `PA
 nothing in the suite depends on what is installed on the machine running it. The existing
 `markdown_stub` helper stays for the `Markdown.pl` cases and gains a sibling for PATH tools.
 
+**Every markdown test needs a `make setup` re-run after its stub is installed, and the stub
+helpers should do it themselves rather than leaving it to each test.** `sandbox()` runs
+`make setup` *before* the test body executes, so detection happens before any stub exists.
+This is not an incidental detail: a prototype of this design run against the current suite
+produced 260 passes and 11 failures, and all eleven were markdown tests failing for exactly
+this reason. That number is the expected cost of the §"Behavior changes" habit break, not a
+regression, and anyone implementing this should expect to see it before adapting the helpers.
+
 - Detection picks the first available candidate and skips absent ones — stub `cmark` only,
   assert `DETECTED_MARKDOWN := cmark`; add a stub `lowdown`, re-run setup, assert it wins.
 - `markdown=` in `config` beats detection.
@@ -217,7 +316,15 @@ nothing in the suite depends on what is installed on the machine running it. The
   `No rule to make target 'config.mk'` — the `$(wildcard)` guard.
 - The notice appears once, before any `Building …` line, and is absent for `clean`, `setup`,
   and `test`.
-- `Markdown.pl` alone is still found, as candidate 12.
+- `Markdown.pl` alone is still found, as candidate 12; `chmod 644` plus a re-setup drops it,
+  preserving today's executable-bit behavior.
+- The recorded value is the full argv — stub `cmark-gfm`, assert the `config.mk` line carries
+  all four `-e` flags.
+- A squatting `markdown` that rejects `-f` is skipped in favour of a working `cmark` below it
+  (the §2 running probe).
+- The §2a upgrade guard: an old-style `config.mk` fails a build loud, permits `make setup`,
+  stays quiet for `clean`, and does **not** fire on a `DETECTED_MARKDOWN :=` empty file.
+- `config.mk.new` never survives a successful setup, on either the `mv` or the discard branch.
 
 ## Flag verification
 
@@ -236,7 +343,25 @@ For each, confirm two things specifically: that output is a fragment rather than
 document, and that a table in the input produces a `<table>` in the output.
 
 `discount`'s `-f` syntax and `multimarkdown`'s fragment flag are the two the author is least
-confident of from memory and should be checked first.
+confident of from memory and should be checked first. The §2 running probe reduces the blast
+radius of a wrong flag from "every build fails" to "that candidate is skipped", but it does
+not make a wrong flag correct — a flag that is accepted yet does the wrong thing, like a
+tables switch that silently isn't, still passes the probe.
+
+A comment above the table warns that a future candidate's argv must not contain `#` or `$`,
+which would truncate or misparse the `config.mk` line it gets written into. None of the twelve
+do.
+
+## Verification residue
+
+Under review, the design was prototyped against the real Makefile and the full suite run
+against it. Two things were **not** established and should not be treated as settled:
+
+- **Everything was verified on GNU make 4.4.1, not 3.81.** Nothing here adds a pattern rule or
+  depends on the rule-ordering behavior CLAUDE.md pins to 3.81, but the `$(wildcard)`
+  prerequisite timing in §4 is asserted from the manual on that version rather than observed.
+- **None of the eleven tools were executed**, since none is installed on this machine — which
+  is what the Flag Verification section above exists to fix before implementation starts.
 
 ## Out of scope
 
