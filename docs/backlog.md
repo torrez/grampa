@@ -718,11 +718,27 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   across branches, and that the file named "the delimiter" holds only the delimiter.
 
   Existing installs need nothing: `.source/splitter.txt` is read directly by the `%.staged`
-  recipe and `make setup` never copies it, so there is no stale-copy problem of the kind item
-  7's deleted `index.txt` had.
+  recipe and `make setup` never copies it, so there is no stale-copy problem of the kind the
+  deleted `.source/templates/index.txt` stub had (§7 above, not residual item 7, which is this
+  entry). The contrast is exact: `index.txt` lived inside `.source/templates/` and *was* copied
+  by `make setup`'s glob; `splitter.txt` sits at `.source/` root and never was.
+
+  One qualification on "need nothing", since the entry's stated benefit is about `.staged`
+  files: `%.staged`'s only prerequisite is `posts/%.txt`, so an install's **existing** `.staged`
+  files keep the old blank line indefinitely. The diffable-across-branches property arrives
+  per-post as posts are next edited, or all at once on `make clean`. Verified harmless in the
+  mixed state — one post restaged, its sibling stale — with `build/` byte-identical including
+  `rss.xml`.
 
   Guarded by `test_markdown_staged_file_has_no_blank_line_after_the_delimiter`, watched failing
-  first — `expected [MD:<p>STAGED BODY</p>] got []`. Full suite: **274 passed, 0 failed.**
+  first — `expected [MD:<p>STAGED BODY</p>] got []` — and it is the **only** one of the 274 that
+  notices the regression, which is consistent with "reached no output" and means the single
+  assertion carries all the weight. That is why the review's finding on its shape mattered: the
+  first form checked line 3 by number while its label claimed "line after the delimiter", and a
+  title-less fixture — a shape that already exists elsewhere in the suite — moves the delimiter
+  to line 1. Verified across all four combinations, `sed -n '3p'` is wrong in **both**
+  directions there: it passes against the old splitter and fails against the new one. The
+  delimiter-relative `awk` form is correct in all four.
 
   Original finding follows.
 

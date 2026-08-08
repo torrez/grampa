@@ -398,9 +398,16 @@ title: Staged
 <p>STAGED BODY</p>
 EOF
 	build || return
+	# Delimiter-relative and not `sed -n 3p`, which was the
+	# first form and had a silent-pass path: give this fixture
+	# no title: line and the delimiter moves to line 1, so
+	# line 3 is the body under the OLD splitter too and the
+	# assertion passes against the regression it exists to
+	# catch. Found by review. The label says "after the
+	# delimiter", so the code should look for the delimiter.
 	assert_eq "line after the delimiter" \
 		'MD:<p>STAGED BODY</p>' \
-		"$(sed -n '3p' work/2026-01-02-home_s.staged)"
+		"$(awk 'f{print; exit} /^-----------------------------------$/{f=1}' work/2026-01-02-home_s.staged)"
 }
 
 #
