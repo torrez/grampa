@@ -50,8 +50,20 @@ Add `posts` — the directory — as a prerequisite of `work/index.tmp`, `work/r
 Removing a file updates its parent directory's mtime, so a directory mtime records exactly the
 condition we need: *the set of posts changed*. Adding, deleting, and renaming all bump it;
 editing a post's contents does not, and does not change the set either. There is no
-under-trigger. The over-trigger is an unrelated file appearing in `posts/` — an editor
-dropping — which costs one re-`cat` and one re-wrap.
+under-trigger. The over-trigger is anything that changes a directory entry: an unrelated file
+appearing in `posts/`, and also any editor that saves by **rename-into-place** rather than
+in-place write (`sed -i`, vim under `backupcopy=auto`). Verified both ways — an in-place
+append does not bump the directory mtime, a rename-into-place save does. Each costs one
+re-`cat` and one re-wrap.
+
+It also over-triggers *across* categories: deleting a `home` post rebuilds
+`build/category/work.html` too, since `posts` is now a prerequisite of every category page.
+Cheap and correct, but it falsifies a CLAUDE.md sentence — see Documentation below.
+
+Verified on Linux/ext4. POSIX requires a parent directory's mtime to update on entry creation
+and removal, and APFS complies by specification, but that half is **guaranteed by spec, not
+observed** — no macOS host was available. It belongs in the same bucket as the BSD `date`
+dialect, which the owner exercised by hand and no automated run covers.
 
 This is preferred over the stamp file the backlog proposed (`work/rss.list` holding
 `RECENT_ITEMS`, rewritten under `cmp`, plus a `FORCE` target to make it checked every build).
@@ -77,18 +89,35 @@ recipe, so this costs nothing on every normal build. With the directory absent i
 and the empty site builds at exit 0, exactly as before. Verified in both states, including
 that a following no-op rebuild stays quiet.
 
-### A claim that must be re-checked, not assumed
+### The `.SECONDARY` argument stops being load-bearing, and the mutation has been run
 
 The `.SECONDARY` comment block argues at length that keeping `RSSITEM_FILES` *out* of
-`.SECONDARY` is what lets the feed self-heal, and names
-`test_deleting_a_post_heals_the_feed` as the guard. After this change `rss.tmp` is out of date
-on any deletion regardless of whether the incoming `.rssitem` exists, so that argument may no
-longer be load-bearing.
+`.SECONDARY` is what lets the feed self-heal, calls listing them "actively harmful", says it
+was "verified empirically both ways", and names `test_deleting_a_post_heals_the_feed` as the
+guard. The spec's first draft left this as a task to be settled by mutation rather than
+reasoning. It has now been settled by mutation.
 
-This is not to be reasoned about. Run the mutation — append `$(RSSITEM_FILES)` to `.SECONDARY`
-against the *fixed* Makefile — and rewrite the comment block to say whatever is then true. A
-confident comment that used to be true is this repo's most common defect and the thing its
-backlog exists to catch.
+**Result: after fix D the mutation is harmless, and no test distinguishes it.** With
+`$(RSSITEM_FILES)` appended to `.SECONDARY` on top of D, both corpus shapes heal completely —
+ten items, Post 2 pulled in, Post 12 gone, and the newly-in-window `.rssitem` built (11 on
+disk after the delete). The mechanism: the `posts` prerequisite makes `work/rss.tmp`
+unconditionally out of date on any set change, and once a target must be remade make builds
+its missing secondary prerequisites anyway.
+
+So the rewrite must say **unnecessary, not harmful**: `.rssitem` files are explicit
+prerequisites of an explicit target and are therefore never reaped, and `.SECONDARY`
+membership no longer changes any observable behaviour. Three specific sentences become false
+and must go: "actively harmful", "verified empirically both ways", and the citation of
+`test_deleting_a_post_heals_the_feed` as the guard — that test now passes *with* the mutation.
+
+The same claim is duplicated in CLAUDE.md's build-pipeline section, in the paragraph about
+`.rssitem` files ("listing them in `.SECONDARY` anyway would be actively harmful"). Both
+copies get rewritten; see Documentation.
+
+**One caveat, stated because it is exactly the kind of claim this repo does not let stand
+unqualified.** Intermediate-file and `.SECONDARY` semantics are the area where make 3.81 and
+4.x have historically differed most, and this mutation result was obtained on GNU make 4.4.1.
+If the 3.81 floor is still real, this is the finding to re-confirm there first.
 
 ## 2. Item 9 — the punctuation probe, and the false positive it nearly caused
 
@@ -131,12 +160,18 @@ mangled in all three wrong ones, and immune to the escaping confound. So:
 - No quote check, and no quote in the probe input — asserting nothing about it means it earns
   no place there.
 
-The `<i>` and whole-document checks stay; the dash check does not subsume them.
+The `<i>` and whole-document checks stay, and **that sentence is load-bearing rather than
+tidy**: `cmark` without `--unsafe` renders the dash input as
+`<p>x <!-- raw HTML omitted -->y<!-- raw HTML omitted --> -- z</p>`, which *contains* `--`, so
+the dash check alone would accept a candidate that eats raw HTML. The `<i>` check is what
+rejects it. Either order works and both report the truer reason.
 
 **Residual, deliberately.** A processor that smartens quotes but *not* dashes passes. No row in
 the table can reach that state — every candidate gates both behind a single switch.
 Python-Markdown is the only one whose smarty extension separates `smart_dashes` from
-`smart_quotes`, and our row (`markdown_py -x tables`) never enables smarty at all.
+`smart_quotes`, and our row (`markdown_py -x tables`) never enables smarty at all. That last
+claim is **from documentation, not observed** — the same standing the three unrun candidate
+rows have — since three of the four relevant tools are not installed on any review host.
 
 ## 3. Setup is quiet about a candidate it rejected
 
@@ -148,12 +183,25 @@ likely, not less.
 Each rejection inside the probe loop gains one line on stderr naming the candidate and the
 reason: `not runnable`, `emits a whole document`, `drops raw HTML`, `smartens punctuation`.
 
-Two constraints:
+Three constraints:
 
+- **The prefix must not be `grampa: markdown:`.** `test_clean_and_setup_print_no_notice`
+  (`tests/run.sh:669`) captures `make setup` with `2>&1` and asserts `grampa: markdown:` is
+  absent, because that is the build notice's prefix and setup must stay quiet about it. The
+  line is therefore `grampa: setup: <probe>: <reason>`. Confirmed against the test, and a
+  Makefile using that wording passes the full suite.
 - **Only for candidates actually found.** The `command -v` / `[ -x ]` misses keep their silent
   `continue`, or a machine with one processor prints eleven lines of noise every setup.
 - **stderr, not stdout.** The loop runs inside `winner=$(… )`, so anything on stdout would be
-  captured as the winner.
+  captured as the winner. Verified under `make setup`, `make -s setup` and `make -j4 setup`:
+  notices on stderr only, winner uncorrupted.
+
+**Known cosmetic consequence in the suite.** `hide_markdown_tools` installs executable exit-1
+stubs for all eleven PATH candidates, so in every sandbox all eleven are *found*, probed, and
+rejected — each test setup will emit up to eleven `not runnable` lines on stderr. Harmless:
+`sandbox()` redirects them and `markdown_stub` shows output only on failure, where the lines
+are arguably useful. Recording it so nobody reads it as a regression. The "only for candidates
+actually found" rule keeps real machines quiet; it does not keep the suite quiet.
 
 ## 4. Item 10 — two concurrent setups share one scratch name
 
@@ -166,7 +214,11 @@ interleaving has to land inside the write rather than the rename.
 `config.mk.new` becomes `config.mk.$$$$` — Makefile `$$$$` expands to shell `$$`, the PID.
 
 `.gitignore`'s `/config.mk.new` becomes `/config.mk.*`, which covers the PID form and the old
-name both, and is one line shorter.
+name both. It is a one-for-one replacement, **not** a line saved — `/config.mk.*` does not
+match `config.mk` itself, so the `/config.mk` line above it stays. Verified with
+`git check-ignore -v` in a scratch repo: `config.mk.new`, `config.mk.12345` and
+`config.mk.orig` all match the new pattern, `config.mk` matches its own line, and
+`docs/config.mk.12345` matches neither — still anchored.
 
 No test. Reproducing it needs two racing shells and a window inside a `printf`; the backlog's
 judgement was that no test is worth writing and that is right.
@@ -188,8 +240,20 @@ All watched failing first, each against the specific regression it guards.
 | `test_deleting_a_post_heals_the_feed_after_incremental_growth` | the feed case that was *actually* broken; distinct from the existing all-at-once test, which passed against the bug |
 | `test_build_works_without_a_posts_directory` | the `posts:` rule; fails with a bare prerequisite |
 | `test_probe_rejects_a_smartening_candidate` | the new dash check |
-| `test_probe_accepts_escaped_quotes` | the false positive above — a stub emitting `&quot;` must still win |
+| `test_probe_accepts_escaped_quotes` | the false positive above — a stub that escapes a quote must still win |
 | `test_setup_names_a_rejected_candidate` | the stderr notice |
+
+`test_probe_accepts_escaped_quotes` is a **tripwire, not a live guard**, and its banner must
+say so. With no quote in the probe input a cmark-like stub escapes nothing, so it passes
+trivially today; it only bites if someone later adds a quote to the probe input *and* a
+literal-`"` check, which is exactly the mistake this spec avoided. For it to bite at all the
+stub must escape *conditionally* (`sed 's/"/\&quot;/g'`) rather than emit `&quot;`
+unconditionally — an unconditional stub would test nothing in either world.
+
+`test_deleting_a_post_heals_the_feed_after_incremental_growth` is confirmed distinct: the
+existing `test_deleting_a_post_heals_the_feed` **passes against the unfixed Makefile**, because
+its all-at-once sandbox is the one shape where the heal already worked. The new test covers
+what the old one never did.
 
 `test_deleting_a_post_heals_the_feed` stays as-is; its sandbox builds all twelve posts at once,
 which is the corner where the heal already worked, and it should keep passing unchanged.
@@ -205,7 +269,15 @@ whole seconds, so a sub-second-newer prerequisite rebuilds nothing.
   unfixable: the deleted post's own page lingers in `build/`. The front page no longer links to
   it. Same for the deleted-category gotcha, which is unchanged — a removed category's page is
   still an untracked output nothing can know about.
-- The `.SECONDARY` comment block, per §1, rewritten to whatever the mutation shows is true.
+- The `.SECONDARY` comment block (`Makefile:169-185`), per §1: "actively harmful" becomes
+  "unnecessary", the "verified empirically both ways" sentence goes, and the citation of
+  `test_deleting_a_post_heals_the_feed` as its guard goes with it.
+- **CLAUDE.md:353**, the build-pipeline paragraph about `.rssitem` files, carries the same
+  "listing them in `.SECONDARY` anyway would be actively harmful" claim and gets the same
+  rewrite. The spec's first draft named only the Makefile comment and missed this copy.
+- **CLAUDE.md:373**, "Its prerequisites are exact, because `CATEGORY_SLUGS` is derived from
+  filenames at parse time" — no longer true once `posts` is a prerequisite of every category
+  page. Verified: deleting a `home` post rebuilds `build/category/work.html` too.
 - The markdown-detection section gains the dash check and the reason it is not a quote check;
   the `--unsafe`-family gotcha gains the rejection notice.
 - `docs/backlog.md`: items 8, 9, 10 and the rejected-candidate bullet marked done, with the
@@ -220,3 +292,17 @@ whole seconds, so a sub-second-newer prerequisite rebuilds nothing.
   9. Installing three toolchains to correct today's table remains available and remains
   unranked.
 - **make 3.81.** Whether that floor is still real is a decision, not work.
+
+## Provenance of the evidence in this spec
+
+Everything measured here was run on **GNU make 4.4.1 on Linux/ext4**, in scratch sandboxes
+seeded from `Makefile`, `.source/`, `tests/` and `tools/` the way `tests/run.sh` seeds them.
+The real tree was never built in. A Makefile carrying all four changes passes the existing
+suite at **335 passed, 0 failed**.
+
+Three things are **not** verified and are marked as such where they appear: anything about make
+3.81 (the `.SECONDARY` mutation result is the one that could plausibly differ), anything about
+macOS/APFS (directory-mtime semantics), and the dash behaviour of the four candidates not
+installed on any review host — `smu`, `comrak`, `multimarkdown`, `markdown-it`. The last is
+unchanged from today's position: the probe is what keeps those rows honest, and extending it is
+the whole point of §2.
