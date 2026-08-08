@@ -7,3 +7,28 @@ name=My Weblog
 # Setting this turns on the RSS feed at /rss.xml. Leave it
 # commented out and no feed is built.
 #url=https://example.com
+
+# markdown= overrides the processor `make setup` detected.
+# It is a shell command line, run as: <command> <file>
+# It must write an HTML *fragment* to stdout and exit
+# non-zero on failure. Like deploy.sh, it is executed --
+# only put something here you would run yourself.
+#
+# A # after markdown= does NOT start a comment: the whole
+# rest of the line is part of the command, and the shell
+# running it will treat the # as its own comment marker.
+#
+# These are the command lines `make setup` detects, in the
+# order it prefers them. Uncommenting one pins that choice.
+#
+# markdown=lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
+# markdown=cmark-gfm --unsafe -e table -e strikethrough -e autolink -e tasklist
+# markdown=md2html --github
+# markdown=comrak --unsafe -e table
+# markdown=multimarkdown --snippet
+# markdown=markdown -f +tables,-smarty
+# markdown=cmark --unsafe
+# markdown=smu
+# markdown=markdown_py -x tables
+# markdown=markdown-it --html
+# markdown=pandoc -f markdown-smart -t html

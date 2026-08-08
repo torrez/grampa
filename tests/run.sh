@@ -429,6 +429,95 @@ EOF
 }
 
 #
+# markdown= beats detection.
+#
+test_config_markdown_overrides_detection() {
+	sandbox override_wins
+	path_stub cmark 'sed "s/HELLO/DETECTED/" "$f"'
+	path_stub mytool 'sed "s/HELLO/OVERRIDDEN/" "$f"'
+	make setup >/dev/null 2>&1
+	# There has to be something to beat: without this the
+	# test silently degrades to "override beats nothing"
+	# if the setup rerun above ever stops detecting.
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "OVERRIDDEN"
+}
+
+#
+# Editing markdown= re-stages, or switching processors
+# would appear to do nothing.
+#
+test_changing_markdown_restages_posts() {
+	sandbox override_restage
+	path_stub one 'sed "s/HELLO/FIRST/" "$f"'
+	path_stub two 'sed "s/HELLO/SECOND/" "$f"'
+	printf 'name=T\nmarkdown=one\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "FIRST"
+	printf 'name=T\nmarkdown=two\n' > config
+	build
+	assert_grep build/2026/08/06/hello.html "SECOND"
+}
+
+#
+# An override naming something absent fails loud rather
+# than silently falling back to verbatim.
+#
+test_missing_override_tool_fails_the_build() {
+	sandbox override_missing
+	printf 'name=T\nmarkdown=no-such-tool-xyz\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build_expect_fail
+	# Pin the reason, not just the exit status: a bare
+	# build_expect_fail is satisfied by any failure, so an
+	# unrelated future parse-time error would keep it green
+	# while the 127 behaviour regressed. Make's own wording
+	# is stabler than the shell's "command not found".
+	assert_out_grep "Error 127"
+}
+
+#
+# An override is a command LINE, not a command name. The
+# flags have to survive to the tool -- and the commas in
+# something like `-f +tables,-smarty` are the interesting
+# part, since MARKDOWN_CMD is expanded inside $(or) and
+# $(strip). They are safe because make splits a function's
+# arguments on the literal commas in its source text,
+# before any expansion, so commas arriving from a variable
+# never become argument separators. Verified, and pinned
+# here so a future re-quoting of the .staged recipe can't
+# quietly break it.
+#
+test_multi_word_override_keeps_its_flags() {
+	sandbox override_flags
+	path_stub mytool 'case "$*" in *"-f +tables,-smarty"*) sed "s/HELLO/FLAGGED/" "$f";; *) exit 1;; esac'
+	printf 'name=T\nmarkdown=mytool -f +tables,-smarty\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "FLAGGED"
+}
+
+#
 # The staging branch runs Markdown.pl over the body and
 # nothing else. A title is front matter, so asterisks in
 # it must survive to the page untouched -- if the whole
@@ -2698,6 +2787,10 @@ test_parallel_build_is_clean
 test_staged_files_persist
 test_detected_processor_stages_the_body
 test_no_processor_stages_verbatim
+test_config_markdown_overrides_detection
+test_changing_markdown_restages_posts
+test_missing_override_tool_fails_the_build
+test_multi_word_override_keeps_its_flags
 test_markdown_transforms_the_body_not_the_front_matter
 test_markdown_staged_file_has_no_blank_line_after_the_delimiter
 test_failing_markdown_fails_the_build
