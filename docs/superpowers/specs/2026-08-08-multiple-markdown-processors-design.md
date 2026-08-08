@@ -38,16 +38,16 @@ one per line, in preference order:
 
 ```make
 define MARKDOWN_CANDIDATES
-lowdown|lowdown
-cmark-gfm|cmark-gfm -e table -e strikethrough -e autolink -e tasklist
+lowdown|lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
+cmark-gfm|cmark-gfm --unsafe -e table -e strikethrough -e autolink -e tasklist
 md2html|md2html --github
-comrak|comrak -e table
+comrak|comrak --unsafe -e table
 multimarkdown|multimarkdown --snippet
-markdown|markdown -f +tables
-cmark|cmark
+markdown|markdown -f +tables,-smarty
+cmark|cmark --unsafe
 smu|smu
 markdown_py|markdown_py -x tables
-markdown-it|markdown-it
+markdown-it|markdown-it --html
 pandoc|pandoc -f markdown-smart -t html
 ./Markdown.pl|./Markdown.pl
 endef
@@ -66,6 +66,34 @@ non-zero on failure.** Two flags exist purely to hold tools to the "fragment" ha
 emit a complete `<html><head>` document, which `base.txt` would then wrap in a second one.
 
 The table is data. Adding or dropping a tool is a one-line edit.
+
+#### The CommonMark family drops raw HTML by default
+
+This is the single most important thing execution turned up, and it is a family trait rather
+than four separate slips. **cmark, cmark-gfm, and lowdown all discard raw HTML in the input**
+unless told otherwise — cmark and cmark-gfm replace it with `<!-- raw HTML omitted -->`,
+lowdown deletes it outright leaving nothing at all. A post embedding a video iframe would
+have silently lost it, at exit 0. Since `lowdown` is candidate #1, that was the *default*
+behavior for most installs.
+
+The flags that fix it — `--unsafe` for cmark and cmark-gfm, `--html-no-skiphtml
+--html-no-escapehtml` for lowdown — are named for a threat model that is not grampa's. They
+exist because these libraries assume input from untrusted commenters. Grampa's input is the
+author's own post file, at exactly the trust level grampa *already* extends to it: with no
+markdown processor at all, post bodies are copied through as raw HTML verbatim. Turning raw
+HTML back on restores that existing behavior rather than relaxing anything, and the alternative
+is a markdown processor that silently deletes half of what makes grampa's post format useful.
+
+`comrak --unsafe` and `markdown-it --html` are the same trait in the two unexecuted CommonMark
+implementations, added by inference from this finding rather than from running them. They are
+marked as inferred in Flag Verification below.
+
+#### Smartypants is on by default in two of them
+
+`lowdown` and `discount` both rewrite the author's punctuation — verified: `"quoted"` became
+`&#8220;quoted&#8221;` and `---` became `&#8212;`. Hence `--out-no-smarty` and `-smarty`. This
+is the same objection as pandoc's `smart` below, and it turned out to apply to three of the
+twelve rather than the one the author remembered.
 
 #### Two flag choices that are deliberate
 
@@ -105,9 +133,10 @@ gets `markdown -f +tables` recorded and then **fails every build**, with a worki
 one row down. So:
 
 ```sh
-printf 'x\n' > "$$probefile"
+printf 'x <i>y</i>\n' > "$$probefile"
 out=$$($$cmd "$$probefile" 2>/dev/null </dev/null) || continue
 case "$$out" in *'<html'*|*'<HTML'*|*'DOCTYPE'*) continue;; esac
+case "$$out" in *'<i>'*) ;; *) continue;; esac
 ```
 
 Exit zero means the candidate runs; the `case` is what holds it to the *fragment* half of the
@@ -116,9 +145,17 @@ and grampa would then wrap it in `base.txt` for a second `<html>` — a silently
 at exit 0. This is the failure mode `multimarkdown --snippet` and pandoc's missing `-s` exist
 to prevent, and the `case` makes the whole table robust to getting one of those flags wrong
 rather than trusting eleven remembered argv strings. A candidate that trips it is skipped, not
-fatal, so the next row still gets its turn. The `case` cannot false-positive: the probe input
-is the single character `x`, so any `<html` in the output is the tool's own scaffolding and
-never the author's text. The
+fatal, so the next row still gets its turn. Neither `case` can false-positive: the probe input
+is fixed and minimal, so any `<html` in the output is the tool's own scaffolding and never the
+author's text.
+
+The second `case` — requiring the `<i>` to survive — is what makes the probe test the flags
+rather than merely the binary. It was added because execution found that the three CommonMark
+tools drop raw HTML by default (see §1), and it was checked against exactly that: fed the
+*original* remembered argv, the probe skips `lowdown`, `cmark`, and `cmark-gfm -e table`; fed
+the corrected argv, it accepts all eight installed candidates. A candidate skipped this way is
+not silently downgraded — the winner is recorded in `config.mk` and announced at the top of
+every build, so the choice stays visible. The
 `</dev/null` matters: a candidate that ignores its file argument and waits on stdin would
 otherwise hang `make setup` forever. `./Markdown.pl` keeps its `[ -x ]` test *in addition*,
 since a non-executable one must not be run at all.
@@ -337,29 +374,42 @@ regression, and anyone implementing this should expect to see it before adapting
 
 ## Flag verification
 
-The eleven command lines above are the part of this design most likely to be wrong, since
-they are eleven other projects' interfaces. Before implementation they get executed, not
-trusted:
+**Done, not pending.** Eight of the twelve candidates were installed and executed against one
+body containing emphasis, a pipe table, a raw `<iframe>`, and `"quotes"` with `---`. Each was
+scored on four things: fragment vs whole document, whether a `<table>` appeared, whether the
+raw HTML survived, and whether punctuation was silently rewritten.
 
-- **Installable on Arch and therefore verified by running:** `lowdown`, `cmark`, `cmark-gfm`,
-  `discount` (`markdown`), `md4c` (`md2html`), `pandoc`, `python-markdown` (`markdown_py`),
-  `comrak`.
-- **Verified by building from source:** `smu` (plain C, no toolchain beyond `cc`). Confirmed
-  fragment output, no table support as documented, raw HTML preserved, punctuation untouched.
-- **Taken from documentation, deliberately not executed:** `multimarkdown` (needs `cmake`),
-  `comrak` (needs the Rust toolchain), `markdown-it` (needs Node). A decision, not an
-  oversight: roughly a gigabyte of toolchain to confirm three argv strings, against a
-  fragment-checking probe that now catches the failure mode those flags guard. They stay
-  marked unverified rather than passing as checked.
+**Four of the eight were wrong as originally specced** — every one of them silently, at exit 0:
 
-For each, confirm two things specifically: that output is a fragment rather than a whole
-document, and that a table in the input produces a `<table>` in the output.
+| Candidate | Specced from memory | What it actually did | Corrected |
+| --- | --- | --- | --- |
+| `lowdown` | `lowdown` | deleted the iframe entirely; smartened quotes and dashes | `--out-no-smarty --html-no-skiphtml --html-no-escapehtml` |
+| `cmark-gfm` | `-e table …` | replaced raw HTML with `<!-- raw HTML omitted -->` | added `--unsafe` |
+| `cmark` | `cmark` | same | added `--unsafe` |
+| `discount` | `-f +tables` | smartened quotes and dashes | `-f +tables,-smarty` |
 
-`discount`'s `-f` syntax and `multimarkdown`'s fragment flag are the two the author is least
-confident of from memory and should be checked first. The §2 running probe reduces the blast
-radius of a wrong flag from "every build fails" to "that candidate is skipped", but it does
-not make a wrong flag correct — a flag that is accepted yet does the wrong thing, like a
-tables switch that silently isn't, still passes the probe.
+The other four were correct as written: `md2html --github`, `markdown_py -x tables`,
+`pandoc -f markdown-smart -t html`, and `smu` (built from source; fragment, no tables as
+documented, raw HTML kept, punctuation untouched). All eight now pass the §2 probe; the three
+original argv strings are rejected by it.
+
+Two guesses in the original spec are worth recording as *wrong in the author's favour*:
+`discount`'s `-f` syntax and `multimarkdown`'s fragment flag were named as the two least
+trustworthy, and `discount` did need fixing — but for smartypants, not for the `-f` syntax,
+which was right. The failure the author did not anticipate at all is the one that hit four
+rows.
+
+**Taken from documentation, deliberately not executed:** `multimarkdown` (needs `cmake`),
+`comrak` (needs the Rust toolchain), `markdown-it` (needs Node). Roughly a gigabyte of
+toolchain to confirm three argv strings, against a probe that now catches the exact failure
+mode those flags guard. `comrak --unsafe` and `markdown-it --html` were *added* on the strength
+of the family finding above rather than from documentation, which makes them better-founded
+than they were but still unexecuted. They stay marked unverified.
+
+The probe reduces the blast radius of a wrong flag from "every build fails" or "output is
+silently mangled" to "that candidate is skipped and a visible different one wins". It does not
+make a wrong flag correct: a switch that is accepted yet does nothing — a tables flag that
+silently isn't — still passes.
 
 A comment above the table warns that a future candidate's argv must not contain `#` or `$`,
 which would truncate or misparse the `config.mk` line it gets written into. None of the twelve
@@ -373,8 +423,9 @@ against it. Two things were **not** established and should not be treated as set
 - **Everything was verified on GNU make 4.4.1, not 3.81.** Nothing here adds a pattern rule or
   depends on the rule-ordering behavior CLAUDE.md pins to 3.81, but the `$(wildcard)`
   prerequisite timing in §4 is asserted from the manual on that version rather than observed.
-- **None of the eleven tools were executed**, since none is installed on this machine — which
-  is what the Flag Verification section above exists to fix before implementation starts.
+- **Three of the twelve candidates remain unexecuted** — `multimarkdown`, `comrak`,
+  `markdown-it` — by decision, recorded in Flag Verification above. The other nine (eight tools
+  plus `Markdown.pl`, which the existing suite covers) have been run.
 
 ## Out of scope
 
