@@ -21,10 +21,27 @@ Both BSD/macOS and GNU userlands work. The only real difference between them is 
 `make setup` probes for the dialect you have and records it in a generated `config.mk`. The
 `bash` requirement is the one to check on a stock BSD, which doesn't ship it at that path.
 
-Optional: [`Markdown.pl`](https://daringfireball.net/projects/markdown/) in the repo root, to
-write post bodies in Markdown instead of HTML. It has to be **executable** — `chmod +x
-Markdown.pl` — because the build tests for an executable file and silently skips a copy that
-isn't one.
+Optional: a **markdown processor**, to write post bodies in Markdown instead of HTML. You do
+not have to pick one — `make setup` looks for these, in this order, and uses the first it
+finds working:
+
+`lowdown`, `cmark-gfm`, `md2html`, `comrak`, `multimarkdown`, `markdown` (discount), `cmark`,
+`smu`, `markdown_py`, `markdown-it`, `pandoc`, and finally
+[`Markdown.pl`](https://daringfireball.net/projects/markdown/) in the repo root.
+
+The order prefers processors that support tables and that need no language runtime.
+`Markdown.pl` is last because it is the slowest and the least maintained; it is still
+supported, and still has to be **executable** (`chmod +x Markdown.pl`) to be found. Install
+none of them and post bodies stay verbatim HTML, which is what grampa has always done.
+
+Each is run with flags meant to keep raw HTML in your post intact and to leave your quotes and
+dashes alone — the CommonMark family drops or escapes embedded HTML by default, which would
+silently delete an `<iframe>` from a post. That is checked, not assumed: `make setup` only
+accepts a processor whose output on a test snippet still contains the raw HTML it was given,
+so a wrong flag on your version means the processor is skipped rather than quietly mangling
+your posts. Every build prints which processor it is using on its first
+line. To pin a specific one, set `markdown=` in `config`; it overrides detection and is run as
+a shell command line, so it takes flags.
 
 ## Install
 
@@ -34,10 +51,13 @@ make setup
 ```
 
 `make setup` creates `posts/`, `templates/`, `build/`, and `work/`, copies the stock templates
-and an example `config` and `deploy.sh` into place, and detects your `date` dialect. It never
-overwrites a file you already have, so it is safe to re-run — with one deliberate exception,
-the generated `config.mk`, which is re-probed and rewritten every time. That's what re-fixes
-the `date` dialect if a checkout ever moves between machines.
+and an example `config` and `deploy.sh` into place, and detects your `date` dialect and your
+markdown processor. It never overwrites a file you already have, so it is safe to re-run —
+with one deliberate exception, the generated `config.mk`, which is re-probed every time and
+rewritten whenever the answer changed. That's what re-fixes the `date` dialect if a checkout
+moves between machines, and what picks up a markdown processor you installed later. Leaving
+it alone when nothing changed matters: `config.mk` is a build dependency, so touching it
+needlessly would re-stage every post.
 
 It is a one-time step and wants its own invocation. Run `make setup`, *then* `make` — see
 Known issues below for why you can't combine them.
@@ -103,16 +123,18 @@ Body of your post.
 </p>
 ```
 
-The body is copied through as-is, so it's HTML — unless `Markdown.pl` is present, in which
-case every body is run through it first.
+The body is copied through as-is, so it's HTML — unless a markdown processor was found, in
+which case every body is run through it first. The front matter never is: a title keeps its
+asterisks.
 
 ## Configuration
 
-`make setup` copies an example `config` into the repo root. It has two keys, both optional:
+`make setup` copies an example `config` into the repo root. It has three keys, all optional:
 
 ```
 name=My Weblog
 url=https://example.com
+markdown=cmark --unsafe
 ```
 
 `name=` goes in the title tags: the front page gets `My Weblog`, a post page gets
@@ -122,8 +144,19 @@ url=https://example.com
 means no feed is built, and no error either. It has to be absolute because a feed reader has
 no page to resolve a relative link against. A trailing slash is fine — it gets stripped.
 
+`markdown=` pins the processor, overriding whatever `make setup` detected. It is a command
+*line*, not a command name — flags belong here — and it is run as `<command> <file>`, so it
+must write an HTML fragment to standard output and exit non-zero if it fails. Naming something
+that isn't installed fails the build rather than quietly falling back to verbatim HTML. Like
+`deploy.sh`, it is executed: only put something here you'd run yourself. `.source/config.example`
+lists a ready-made line for each supported processor.
+
 Blank lines and lines starting with `#` are ignored, and if you set a key twice the last one
-wins. These are the only two keys anything reads.
+wins. A `#` *after* `markdown=` is not a comment, though — the rest of the line is part of the
+command, and the shell will treat the `#` as starting a comment of its own, which truncates
+the build step and produces a confusing error about a missing file in `work/`.
+
+These are the only three keys anything reads.
 
 ## What it builds
 
@@ -145,15 +178,15 @@ Edit the files in `templates/`, not the pristine copies in `.source/`.
 
 ## How it works
 
-Each post is staged once — front matter split off, body run through `Markdown.pl` if it's
-there, the two glued back together — and then rendered into a **fragment**. The fragment is
+Each post is staged once — front matter split off, body run through the markdown processor if
+there is one, the two glued back together — and then rendered into a **fragment**. The fragment is
 the unit of reuse: the permalink page, the front page, the category page, and the feed are all
 just different wrappers around the same rendered fragments, which is what makes incremental
 builds possible.
 
 ```
 posts/2026-08-06-home_first-post.txt
-  └─ awk split + (optional) Markdown.pl → work/2026-08-06-home_first-post.staged
+  └─ awk split + (optional) markdown   → work/2026-08-06-home_first-post.staged
         ├─ awk + templates/post.txt      → work/….tmp        (a post fragment)
         │     ├─ awk + templates/base.txt → build/2026/08/06/first-post.html
         │     ├─ cat 10 newest            → work/index.tmp → build/index.html
@@ -182,9 +215,13 @@ equivalents.
   says nothing about it.** Whether the feed is built is decided when the Makefile is parsed,
   which is before `config` exists on that first run. It only bites if you've customized
   `.source/config.example` with a `url=`; the second `make` picks it up.
-- **`Markdown.pl` has to be executable.** A non-executable copy is skipped silently and your
-  bodies stay verbatim HTML. After `chmod +x`, run `make clean && make` — already-staged posts
-  aren't rebuilt just because `Markdown.pl` turned up, so the fix looks like it did nothing.
+- **Installing or removing a markdown processor needs a `make setup`, not just a `make`.**
+  Detection happens once, at setup, and is recorded in `config.mk`; a plain `make` never looks
+  at your `PATH` again. So a newly installed processor appears to do nothing until you re-run
+  `make setup` — after which a plain `make` re-stages every post by itself, because `config.mk`
+  is a prerequisite of the staging step. No `make clean` needed. The same applies to
+  `Markdown.pl`, which still has to be **executable** to be detected: a non-executable copy is
+  skipped, silently, and your bodies stay verbatim HTML.
 
 ## Not done yet
 

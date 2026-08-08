@@ -79,10 +79,12 @@ endif
 # default, rewriting the author's quotes and dashes; hence
 # --out-no-smarty and -smarty, and pandoc's -smart.
 #
-# comrak and markdown-it are the two rows never executed
-# -- their flags are inferred from the family behaviour
-# above, not observed. The probe below is what keeps that
-# honest.
+# multimarkdown, comrak and markdown-it are the three rows
+# never executed -- their flags are inferred from the
+# family behaviour above and from documentation, not
+# observed (the spec's Flag Verification section is the
+# authority on which three). The probe below is what keeps
+# that honest.
 #
 define MARKDOWN_CANDIDATES
 lowdown|lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
@@ -1404,10 +1406,17 @@ config:
 
 #
 # config.mk is generated, not copied: setup probes date(1)
-# and always (re)writes it, the one deliberate exception to
-# the non-clobbering cp -i above, because it is derived from
-# the machine rather than authored. Re-running setup is what
-# re-fixes the dialect if a checkout ever moves between OSes.
+# and the markdown candidates and rewrites it, the one
+# deliberate exception to the non-clobbering cp -i above,
+# because it is derived from the machine rather than
+# authored. Re-running setup is what re-fixes the dialect if
+# a checkout ever moves between OSes, and what picks up a
+# markdown processor installed after the fact.
+#
+# The rewrite goes through config.mk.new and a cmp, so a
+# no-op setup leaves the mtime alone. config.mk is a
+# prerequisite of %.staged, so an unconditional write would
+# re-stage every post on every setup.
 #
 .PHONY: setup
 setup: config
