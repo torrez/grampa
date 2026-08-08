@@ -143,17 +143,24 @@ tab are absent from that set. Before it, `_a<0x01>c.txt` built at exit 0 and pub
 `/2026/01/02/a\001c.html`, control byte and all.
 
 It re-reads the directory rather than interpolating `POST_NAMES`, so unlike the date check it
-has no ordering hazard, and its position above `BAD_CHARS` is a free choice spent on the
-message: a **tab** word-splits `POST_NAMES`, so checked second it died on the category clause
-naming `posts/c.txt` — a file that does not exist, for a reason that is not the reason.
+has no ordering hazard, and its position above `CHECKED_POST_NAMES` is a free choice spent on
+the message: a **tab** word-splits `POST_NAMES`, so checked second it died on the category
+clause naming `posts/c.txt` — a file that does not exist, for a reason that is not the reason.
 Checked first it names the whole file.
 
-Two things still get through, and both are one character. A **`0x0A`** — a newline inside a
-filename — is invisible to a line-based grep, since `ls` prints such a name as two lines and
-neither matches, so it still dies with that fragment message. CR is caught and renders `^M`,
-so this residual is exactly one byte and not a category. And a **`:`** dies earlier and less
-helpfully, at `.SECONDARY`'s prerequisite list, with make's own
-`target pattern contains no '%'`.
+"Control character" here means the **bytes** `0x00`–`0x1F` and `0x7F`, not Unicode's category:
+U+0085 NEL arrives as the two bytes `C2 85`, is not `[[:cntrl:]]` under `LC_ALL=C`, and builds.
+That is the same line non-ASCII is already on — `café` builds — so it is consistent rather than
+an oversight.
+
+Three things still get through, and the first two share one failure mode: they die with the
+fragment message the tab fix exists to cure. A **`0x0A`** — a newline inside a filename — is
+invisible to a line-based grep, since `ls` prints such a name as two lines and neither matches.
+A **space** is caught by no rule at all: it is not `[[:cntrl:]]`, and it cannot be a `BAD_CHARS`
+element for the same reason a control byte cannot. Within the control-character class the
+residual really is one byte and not a category — CR is caught and renders `^M` — but the
+ruleset as a whole still has these two. Third, a **`:`** dies earlier and less helpfully, at
+`.SECONDARY`'s prerequisite list, with make's own `target pattern contains no '%'`.
 
 **The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
 `2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit, and `2028-02-29` build.

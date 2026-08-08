@@ -1841,7 +1841,7 @@ title: Fine
 EOF
 	build_expect_fail || return
 	assert_out_grep 'control character in filename'
-	assert_out_grep '2026-01-02-home_a^Ac.txt'
+	assert_out_grep 'posts/2026-01-02-home_a^Ac.txt'
 	assert_no_file "build/2026/01/02/$(printf 'a\001c').html"
 	assert_no_file 'build/2026/01/03/ok.html'
 }
@@ -1856,10 +1856,18 @@ EOF
 # file that does not exist, for a reason that is not the
 # reason. Assert the text, both halves.
 #
-# This also pins the check's POSITION. Moved below
-# CHECKED_POST_NAMES it still catches the byte, but the
-# fragment message comes back and the second assertion
-# fails.
+# This also pins the check's POSITION, and pins it harder
+# than first written. Moved below CHECKED_POST_NAMES, the
+# fragment $(error) aborts the parse before the relocated
+# check runs at all, so the control message never appears
+# and BOTH assertions fail -- not just the second, as an
+# earlier version of this comment predicted. Verified by
+# making that exact move.
+#
+# The first assertion carries the posts/ prefix on purpose.
+# Without it, dropping $(addprefix posts/,...) from
+# CHECKED_CONTROL_CHARS is a mutant that survives the whole
+# suite -- found by review, at 271 passing.
 #
 test_tab_in_filename_names_the_whole_file() {
 	sandbox tab_in_filename_names_the_whole_file
@@ -1869,7 +1877,7 @@ title: Tabbed
 <p>TAB BODY</p>
 EOF
 	build_expect_fail || return
-	assert_out_grep '2026-01-02-home_a^Ic.txt'
+	assert_out_grep 'posts/2026-01-02-home_a^Ic.txt'
 	assert_out_not_grep 'no category in filename'
 }
 
@@ -1888,7 +1896,7 @@ title: Delete
 EOF
 	build_expect_fail || return
 	assert_out_grep 'control character in filename'
-	assert_out_grep '2026-01-02-home_a^?c.txt'
+	assert_out_grep 'posts/2026-01-02-home_a^?c.txt'
 	assert_no_file "build/2026/01/02/$(printf 'a\177c').html"
 }
 
