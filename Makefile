@@ -15,6 +15,94 @@ SHELL := /bin/bash
 -include config.mk
 
 #
+# Which goals count as "a build is happening". A denylist,
+# not an allowlist: make build/index.html and
+# make work/X.staged are ordinary builds that an allowlist
+# of all/build/deploy scores as non-builds, which would
+# leave the guard below and the notice further down silent
+# for exactly the targeted invocations someone debugging
+# reaches for. A denylist fails loud on an unlisted future
+# goal; an allowlist fails silent. It must be kept in sync
+# with the phony non-build targets.
+#
+NONBUILD_GOALS := clean setup test config
+BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter-out $(NONBUILD_GOALS),$(MAKECMDGOALS)),default)
+
+#
+# An install set up before markdown detection has a
+# config.mk holding only DATE_DIALECT. Nothing else would
+# notice: DATE_DIALECT is set so the loud date check is
+# satisfied, DETECTED_MARKDOWN is merely undefined, and
+# markdown silently turns off -- already-staged posts keep
+# their rendered bodies while the next edited post stages
+# verbatim, so the site goes mixed at exit 0 and deploy
+# ships it.
+#
+# $(origin) is what makes this precise: an old config.mk
+# gives "undefined", while a new one where detection found
+# nothing gives "file", even though both expand empty. So a
+# legitimately processor-less install never trips it.
+#
+# The BUILD_GOAL gate is load-bearing, not symmetry with
+# the notice below. Without it this deadlocks: the error
+# says to run `make setup`, and make setup parses this same
+# Makefile and dies here before its recipe can rewrite
+# config.mk -- the same trap already documented for
+# BAD_POST_DATES and date_select.
+#
+ifeq ($(if $(BUILD_GOAL),$(if $(DATE_DIALECT),$(filter undefined,$(origin DETECTED_MARKDOWN)))),undefined)
+$(error grampa: config.mk predates markdown detection -- run `make setup`)
+endif
+
+#
+# The markdown processors grampa knows how to drive, in
+# preference order: tables first, runtime-free first, and
+# Markdown.pl last. Field 1 is what setup probes, field 2
+# is the command line it records. A field 1 containing a
+# slash is probed with [ -x ] rather than run from PATH.
+#
+# An argv here must not contain # or $, which would
+# truncate or misparse the config.mk line it is written
+# into.
+#
+# The --unsafe / --html-no-skiphtml / --html flags are not
+# optional extras. cmark, cmark-gfm, lowdown, comrak and
+# markdown-it all DISCARD raw HTML in the input without
+# them -- lowdown deletes it outright, cmark replaces it
+# with <!-- raw HTML omitted --> -- which would silently
+# drop an embedded iframe from a post. Grampa already
+# copies post bodies through as raw HTML when there is no
+# processor at all, so this restores existing behaviour
+# rather than relaxing anything.
+#
+# lowdown and discount also smarten punctuation by
+# default, rewriting the author's quotes and dashes; hence
+# --out-no-smarty and -smarty, and pandoc's -smart.
+#
+# multimarkdown, comrak and markdown-it are the three rows
+# never executed -- their flags are inferred from the
+# family behaviour above and from documentation, not
+# observed (the spec's Flag Verification section is the
+# authority on which three). The probe below is what keeps
+# that honest.
+#
+define MARKDOWN_CANDIDATES
+lowdown|lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
+cmark-gfm|cmark-gfm --unsafe -e table -e strikethrough -e autolink -e tasklist
+md2html|md2html --github
+comrak|comrak --unsafe -e table
+multimarkdown|multimarkdown --snippet
+markdown|markdown -f +tables,-smarty
+cmark|cmark --unsafe
+smu|smu
+markdown_py|markdown_py -x tables
+markdown-it|markdown-it --html
+pandoc|pandoc -f markdown-smart -t html
+./Markdown.pl|./Markdown.pl
+endef
+export MARKDOWN_CANDIDATES
+
+#
 # build/ holds only publishable output. Everything
 # the build needs along the way lives in work/ so
 # deploy.sh never has to filter anything out.
@@ -185,6 +273,72 @@ SITE_URL = $(patsubst %/,%,$(strip $(CONFIG_URL)))
 # $$ can't then break the build.
 #
 export SITE_URL
+
+#
+# The markdown command line: the markdown= override from
+# config if set, otherwise whatever setup detected.
+#
+# Lazily expanded for the same reason as CONFIG_NAME and
+# CONFIG_URL -- config may not exist when this is parsed.
+# $(or) rather than $(if) because it short-circuits and
+# names CONFIG_MARKDOWN once instead of twice, which is 5
+# shell-outs instead of 9 on a one-post rebuild with
+# markdown= set.
+#
+# Do NOT memoize this with the $(eval) idiom to save the
+# remaining expansions. A memo freezes whatever the first
+# expansion saw, and what this reads -- config -- is a file
+# another rule in this same build creates. The notice below
+# does snapshot at parse time, but into its own variables
+# and only to print; nothing that stages a post reads them.
+#
+CONFIG_MARKDOWN = $(shell sed -n 's/^markdown=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
+MARKDOWN_CMD = $(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
+
+#
+# Announce the processor once, at the top of a build.
+#
+# A parse-time $(info) rather than a line in build's
+# recipe, because build's recipe runs AFTER its
+# prerequisites -- the note would land below every page --
+# and because a phony prerequisite ordered first is not
+# ordering you can rely on under -j. Parse time runs before
+# any recipe, serial or parallel.
+#
+# Gated on DATE_DIALECT so an unconfigured tree leads with
+# the "run make setup first" error rather than a markdown
+# note, and on BUILD_GOAL so clean/setup/test stay quiet.
+#
+# Known wrinkle, same family as the url=/FEED_PAGES gotcha:
+# reading markdown= here reads config at parse time, so on
+# a first-ever run -- where config does not exist yet --
+# this line names the detected tool even if the config
+# about to be copied into place sets markdown=. It affects
+# only the printed line; the staging recipe expands
+# MARKDOWN_CMD lazily at recipe time and gets the right
+# answer. Verified end to end. Self-corrects on the next
+# make.
+#
+# It prints under -n, -q and -s too, since a parse-time
+# $(info) runs before make decides what it is going to do.
+# That is the one place a script parsing make's stdout
+# would see it.
+#
+# The gate is an ifneq around a := snapshot rather than one
+# $(if) wrapping everything, purely to shell out once. A
+# single $(if) naming MARKDOWN_CMD and CONFIG_MARKDOWN ran
+# the config sed THREE times per parse -- once for $(or)'s
+# condition, once for the value, once for the suffix test
+# -- measured at +48ms on a 60-post no-op rebuild. The
+# snapshot is safe to := precisely because the note is
+# documented as a parse-time reading; MARKDOWN_CMD itself
+# stays lazy. Both names are used only by the line below.
+#
+ifneq ($(and $(BUILD_GOAL),$(DATE_DIALECT)),)
+NOTICE_CONFIG_CMD := $(strip $(CONFIG_MARKDOWN))
+NOTICE_CMD := $(or $(NOTICE_CONFIG_CMD),$(DETECTED_MARKDOWN))
+$(info grampa: markdown: $(if $(NOTICE_CMD),$(NOTICE_CMD)$(if $(NOTICE_CONFIG_CMD), (from config)),none -- post bodies stay HTML))
+endif
 
 #
 # The three date fields of a post filename, as words, and
@@ -876,7 +1030,8 @@ endef
 # Splits a post into its front matter and its body, one
 # file each, for the staging step below. This is the only
 # awk program here that writes files rather than stdout,
-# because Markdown.pl has to be handed the body alone and
+# because the markdown processor has to be handed the body
+# alone and
 # the pieces glued back together afterwards.
 #
 # It shares nothing with PARSE_FRONT_MATTER even though the
@@ -893,7 +1048,7 @@ endef
 # The END block is load-bearing, and in both directions.
 # awk creates a redirect's file on first write, so a post
 # with no body would leave no body file at all and
-# Markdown.pl would be handed a missing argument, while a
+# the processor would be handed a missing argument, while a
 # post whose delimiter is on line 1 would leave no head file
 # and the reassembly cat would fail on it. Both were
 # confirmed by deleting this block: exit 2 either way.
@@ -1110,7 +1265,8 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 
 #
 # The staging step: split the front matter off the body,
-# run just the body through Markdown.pl, then put it back
+# run just the body through the markdown processor, then
+# put it back
 # together. Every intermediate is named after the post so
 # that make -j can't have two posts clobber each other.
 #
@@ -1118,13 +1274,13 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # below because the RSS items need the same rendered body
 # *and* the post's individual fields -- title, body, date
 # -- which the .tmp fragment has already dissolved into
-# HTML. Kept by .SECONDARY, so Markdown.pl runs once per
+# HTML. Kept by .SECONDARY, so the processor runs once per
 # post rather than once per consumer.
 #
 # The steps below are chained with && rather than ;, and
 # that is load-bearing. With ; the compound's exit status
 # is the last command's -- rm -f, which essentially always
-# succeeds -- so a failing Markdown.pl was invisible: make
+# succeeds -- so a failing processor was invisible: make
 # exited 0, .DELETE_ON_ERROR never fired, and a .staged
 # file holding front matter and nothing else was trusted
 # by every downstream consumer, publishing a fully
@@ -1155,30 +1311,52 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # truncated before they are read -- awk's `print >`
 # truncates on first write, the END block's printf truncates
 # even when nothing else is written, and the shell's `>`
-# truncates .mdbody before Markdown.pl starts -- so no stale
+# truncates .mdbody before the processor starts -- so no stale
 # byte survives into $@. Verified by neutering this rm: the
 # failing-stub test and the parallel test both still pass.
 # It stays because a persistently failing install should not
 # accumulate scratch, and because that truncation argument
 # holds only as long as nothing in the chain is reordered.
 #
-$(WORK_DIR)%.staged: posts/%.txt
+# config is a prerequisite because markdown= lives there, so
+# editing it must re-stage every post -- the same reasoning
+# that already makes config a prerequisite of every HTML
+# rule. $(wildcard config.mk) is NOT a bare prerequisite:
+# config.mk has no rule that builds it, so naming it directly
+# would die with make's own "No rule to make target
+# 'config.mk'" on an unconfigured tree, pre-empting the
+# deliberately-worded `no DATE_DIALECT -- run make setup
+# first` error. Wrapped in $(wildcard), the prerequisite is
+# simply absent when the file is.
+#
+# The parentheses around $(MARKDOWN_CMD) are not style. This
+# whole recipe is ONE shell line, so a `#` anywhere in a
+# markdown= value comments out everything after it --
+# including the `> .mdbody` redirect and the `&& cat ... >
+# $@` that follows. With a processor that succeeds when
+# handed no file (cat, and every markdown CLI that reads
+# stdin), the line then exits 0 having never written $@: on
+# a first build that surfaces as an awk fatal one rule
+# later, but on a REBUILD the previous .staged survives with
+# its old mtime, so make considers the page up to date and
+# the build reports success while silently dropping the
+# author's edit -- which make deploy then ships. Verified,
+# exit 0 and all. The `)` is swallowed by that same comment,
+# which turns the whole thing into a shell syntax error and
+# makes the build fail loud instead. Guarded by
+# test_hash_in_markdown_value_fails_the_rebuild.
+#
+$(WORK_DIR)%.staged: posts/%.txt config $(wildcard config.mk)
 	@mkdir -p $(WORK_DIR)
 
-	@if [ -x Markdown.pl ]; \
-		then \
+	@$(if $(strip $(MARKDOWN_CMD)),\
 		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
 		awk -v head=$(WORK_DIR)$*.head -v body=$(WORK_DIR)$*.body \
 			"$$SPLIT_STAGED" $< && \
-		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
+		( $(MARKDOWN_CMD) $(WORK_DIR)$*.body ) > $(WORK_DIR)$*.mdbody && \
 		cat $(WORK_DIR)$*.head .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
-		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
-	fi;
-
-	@if [ ! -x Markdown.pl ]; \
-		then \
-		cp $< $@; \
-	fi;
+		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody,\
+		cp $< $@)
 
 #
 # This builds all the .tmp files used for
@@ -1247,10 +1425,17 @@ config:
 
 #
 # config.mk is generated, not copied: setup probes date(1)
-# and always (re)writes it, the one deliberate exception to
-# the non-clobbering cp -i above, because it is derived from
-# the machine rather than authored. Re-running setup is what
-# re-fixes the dialect if a checkout ever moves between OSes.
+# and the markdown candidates and rewrites it, the one
+# deliberate exception to the non-clobbering cp -i above,
+# because it is derived from the machine rather than
+# authored. Re-running setup is what re-fixes the dialect if
+# a checkout ever moves between OSes, and what picks up a
+# markdown processor installed after the fact.
+#
+# The rewrite goes through config.mk.new and a cmp, so a
+# no-op setup leaves the mtime alone. config.mk is a
+# prerequisite of %.staged, so an unconditional write would
+# re-stage every post on every setup.
 #
 .PHONY: setup
 setup: config
@@ -1263,8 +1448,27 @@ setup: config
 	@if date -v1d >/dev/null 2>&1; then dialect=bsd; \
 	elif date -d 2026-01-15 >/dev/null 2>&1; then dialect=gnu; \
 	else echo "grampa: no supported date dialect (need BSD 'date -v' or GNU 'date -d')" >&2; exit 1; fi; \
-	echo "DATE_DIALECT := $$dialect" > config.mk; \
-	echo "Configured date dialect: $$dialect"
+	winner=$$(printf '%s\n' "$$MARKDOWN_CANDIDATES" | while IFS='|' read -r probe cmd; do \
+		[ -n "$$probe" ] || continue; \
+		case "$$probe" in \
+			*/*) [ -x "$$probe" ] || continue;; \
+			*) command -v "$$probe" >/dev/null 2>&1 || continue;; \
+		esac; \
+		probefile=$$(mktemp); printf 'x <i>y</i>\n' > "$$probefile"; \
+		out=$$($$cmd "$$probefile" 2>/dev/null </dev/null); rc=$$?; \
+		rm -f "$$probefile"; \
+		[ $$rc -eq 0 ] || continue; \
+		case "$$out" in *'<html'*|*'<HTML'*|*DOCTYPE*) continue;; esac; \
+		case "$$out" in *'<i>'*) ;; *) continue;; esac; \
+		echo "$$cmd"; break; \
+	done); \
+	{ echo "DATE_DIALECT := $$dialect"; \
+	  echo "DETECTED_MARKDOWN := $$winner"; } > config.mk.new; \
+	if cmp -s config.mk.new config.mk; then rm -f config.mk.new; \
+	else mv config.mk.new config.mk; fi; \
+	echo "Configured date dialect: $$dialect"; \
+	if [ -n "$$winner" ]; then echo "Configured markdown: $$winner"; \
+	else echo "Configured markdown: none -- post bodies stay HTML"; fi
 
 #
 # deploy: all, and not a bare deploy, because

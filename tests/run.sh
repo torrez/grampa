@@ -13,9 +13,51 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TMPROOT="$REPO/tests/tmp"
+ORIGINAL_PATH="$PATH"
 PASSED=0
 FAILED=0
 CURRENT=""
+
+#
+# Executable stubs that exit 1 for every PATH candidate in
+# the Makefile's table, so `make setup` finds nothing and
+# staging stays verbatim -- today's behaviour, and the same
+# on every machine. An `exit 1` stub is what it takes: a
+# non-executable placeholder does not shadow /usr/bin/x,
+# because PATH lookup skips files it cannot execute, and a
+# plain `exit` would be ACCEPTED by the probe.
+#
+# A test wanting a real processor overwrites one stub and
+# re-runs `make setup`.
+#
+hide_markdown_tools() {
+	mkdir -p "$SBOX/bin"
+	for t in lowdown cmark cmark-gfm md2html comrak multimarkdown \
+		markdown smu markdown_py markdown-it pandoc; do
+		printf '#!/bin/sh\nexit 1\n' > "$SBOX/bin/$t"
+		chmod +x "$SBOX/bin/$t"
+	done
+	PATH="$SBOX/bin:$PATH"
+	export PATH
+}
+
+#
+# path_stub <name> <shell-body>
+#
+# Writes an executable stub onto the sandbox PATH, with $f
+# preset to the stub's LAST argument.
+#
+# $f, not $1: every candidate's argv puts flags before the
+# filename -- `cmark --unsafe <file>`, `lowdown --out-no-smarty
+# --html-no-skiphtml --html-no-escapehtml <file>` -- so a stub
+# reading "$1" reads a flag and silently passes on the wrong
+# input. The last argument is the file in every row of the
+# table.
+#
+path_stub() {
+	printf '#!/bin/sh\nfor f; do :; done\n%s\n' "$2" > "$SBOX/bin/$1"
+	chmod +x "$SBOX/bin/$1"
+}
 
 #
 # Fresh sandbox for the test named in $1. cds into it.
@@ -23,11 +65,13 @@ CURRENT=""
 sandbox() {
 	CURRENT="$1"
 	SBOX="$TMPROOT/$1"
+	PATH="$ORIGINAL_PATH"
 	rm -rf "$SBOX"
 	mkdir -p "$SBOX"
 	cp "$REPO/Makefile" "$SBOX/"
 	cp -R "$REPO/.source" "$SBOX/"
 	cd "$SBOX" || exit 1
+	hide_markdown_tools
 	make setup >/dev/null 2>&1
 }
 
@@ -43,15 +87,27 @@ add_post() {
 # markdown_stub <<'EOF' ... EOF
 # Writes an executable Markdown.pl into the sandbox from
 # stdin. The real Markdown.pl is optional and gitignored,
-# so a sandbox never has one and the whole
-# `if [ -x Markdown.pl ]` staging branch would otherwise
-# never be executed by this suite. The stub stands in for
-# it: same calling convention (one filename argument,
-# transformed body on stdout).
+# so a sandbox never has one and the Markdown staging branch
+# would otherwise never be executed by this suite. The stub
+# stands in for it: same calling convention (one filename
+# argument, transformed body on stdout).
+#
+# Re-runs setup after chmod +x: staging is now driven by
+# DETECTED_MARKDOWN, recorded in config.mk at setup time, not
+# by a hardcoded `[ -x Markdown.pl ]` probe in the recipe.
+# sandbox() already ran setup once, before this file existed,
+# so without a second run here config.mk would still say
+# there is no processor and every markdown_stub caller would
+# silently stage verbatim.
 #
 markdown_stub() {
 	cat > Markdown.pl
 	chmod +x Markdown.pl
+	local setup_out
+	setup_out=$(make setup 2>&1)
+	if [ $? -ne 0 ]; then
+		fail "markdown_stub's make setup failed" "$setup_out"
+	fi
 }
 
 #
@@ -341,6 +397,284 @@ EOF
 }
 
 #
+# A detected processor is what stages the body now, not
+# a hardcoded ./Markdown.pl.
+#
+test_detected_processor_stages_the_body() {
+	sandbox detected_stages
+	path_stub cmark 'sed "s/HELLO/RENDERED/" "$f"'
+	make setup >/dev/null 2>&1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "RENDERED"
+}
+
+#
+# With nothing detected the body is copied verbatim --
+# today's behaviour when Markdown.pl is absent.
+#
+test_no_processor_stages_verbatim() {
+	sandbox none_verbatim
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hello *world*
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "Hello *world*"
+}
+
+#
+# markdown= beats detection.
+#
+test_config_markdown_overrides_detection() {
+	sandbox override_wins
+	path_stub cmark 'sed "s/HELLO/DETECTED/" "$f"'
+	path_stub mytool 'sed "s/HELLO/OVERRIDDEN/" "$f"'
+	make setup >/dev/null 2>&1
+	# There has to be something to beat: without this the
+	# test silently degrades to "override beats nothing"
+	# if the setup rerun above ever stops detecting.
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "OVERRIDDEN"
+}
+
+#
+# Editing markdown= re-stages, or switching processors
+# would appear to do nothing.
+#
+test_changing_markdown_restages_posts() {
+	sandbox override_restage
+	path_stub one 'sed "s/HELLO/FIRST/" "$f"'
+	path_stub two 'sed "s/HELLO/SECOND/" "$f"'
+	printf 'name=T\nmarkdown=one\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "FIRST"
+	printf 'name=T\nmarkdown=two\n' > config
+	build
+	assert_grep build/2026/08/06/hello.html "SECOND"
+}
+
+#
+# An override naming something absent fails loud rather
+# than silently falling back to verbatim.
+#
+test_missing_override_tool_fails_the_build() {
+	sandbox override_missing
+	printf 'name=T\nmarkdown=no-such-tool-xyz\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build_expect_fail
+	# Pin the reason, not just the exit status: a bare
+	# build_expect_fail is satisfied by any failure, so an
+	# unrelated future parse-time error would keep it green
+	# while the 127 behaviour regressed. Make's own wording
+	# is stabler than the shell's "command not found".
+	assert_out_grep "Error 127"
+}
+
+#
+# An override is a command LINE, not a command name. The
+# flags have to survive to the tool -- and the commas in
+# something like `-f +tables,-smarty` are the interesting
+# part, since MARKDOWN_CMD is expanded inside $(or) and
+# $(strip). They are safe because make splits a function's
+# arguments on the literal commas in its source text,
+# before any expansion, so commas arriving from a variable
+# never become argument separators. Verified, and pinned
+# here so a future re-quoting of the .staged recipe can't
+# quietly break it.
+#
+test_multi_word_override_keeps_its_flags() {
+	sandbox override_flags
+	path_stub mytool 'case "$*" in *"-f +tables,-smarty"*) sed "s/HELLO/FLAGGED/" "$f";; *) exit 1;; esac'
+	printf 'name=T\nmarkdown=mytool -f +tables,-smarty\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "FLAGGED"
+}
+
+#
+# A # in a markdown= value comments out the rest of the
+# staging recipe -- it is all ONE shell line -- taking the
+# redirect and the && chain with it. The dangerous case is
+# not the first build but the REBUILD: with a processor
+# that succeeds given no file (cat, and every markdown CLI
+# that reads stdin), the truncated line exits 0 without
+# writing .staged, the previous .staged survives with its
+# old mtime, and make calls the page up to date. That
+# shipped the author's edit into the bin at exit 0 with
+# "Build completed." on stdout. The parens around
+# $(MARKDOWN_CMD) turn it into a shell syntax error.
+#
+test_hash_in_markdown_value_fails_the_rebuild() {
+	sandbox hash_value_rebuild
+	# Exits 0 when handed no file at all, which is what
+	# every stdin-reading markdown CLI does and what makes
+	# the truncated line silent rather than loud. A stub
+	# that errored on no arguments would fail the build for
+	# the wrong reason and pass this test even unfixed --
+	# checked by mutation.
+	path_stub mytool '[ $# -gt 0 ] || exit 0; cat "$f"'
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "HELLO"
+	printf 'name=T\nmarkdown=mytool #note\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+EDITED
+EOF
+	build_expect_fail
+	assert_not_grep build/2026/08/06/hello.html "EDITED"
+}
+
+#
+# A processor detected at setup and uninstalled afterwards
+# must fail loud, not fall back to verbatim -- otherwise a
+# site quietly goes half-rendered. Markdown.pl is the
+# candidate to test it with: it is probed by path rather
+# than through PATH, so deleting it is host-independent in
+# a way that removing a PATH stub is not.
+#
+test_uninstalled_detected_processor_fails_the_build() {
+	sandbox detected_uninstalled
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's/HELLO/RENDERED/' "$1"
+EOF
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "RENDERED"
+	rm -f Markdown.pl
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+EDITED
+EOF
+	build_expect_fail
+	assert_out_grep "Error 127"
+}
+
+#
+# hide_markdown_tools' list is a hand-copy of the table's
+# field 1. A thirteenth candidate added to the Makefile
+# without updating it would silently restore the host
+# dependence the helper exists to remove -- invisible on
+# any machine that does not have the new tool. So derive
+# the expected list from the Makefile and compare.
+#
+test_stub_list_matches_the_candidate_table() {
+	sandbox stub_list_sync
+	local expected actual
+	expected=$(sed -n '/^define MARKDOWN_CANDIDATES/,/^endef/p' Makefile \
+		| sed -n 's/|.*//p' | grep -v / | sort | tr '\n' ' ')
+	actual=$(ls bin | sort | tr '\n' ' ')
+	assert_eq "sandbox stubs cover every PATH candidate in the table" \
+		"$expected" "$actual"
+}
+
+#
+# The notice says which processor a build is using, once,
+# before any page is built.
+#
+test_build_announces_the_processor() {
+	sandbox notice_detected
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: cmark --unsafe"
+	# assert_out_grep is a substring match, so the line
+	# above is equally happy with "cmark --unsafe (from
+	# config)". Without this, dropping the $(if) that makes
+	# the suffix conditional passes the whole suite while
+	# every build falsely credits config for the choice.
+	assert_out_not_grep "(from config)"
+	# Nothing re-executes make today, but a rule that
+	# remade config.mk or the Makefile would re-run the
+	# parse and print the notice twice, silently.
+	assert_eq "notice printed exactly once" 1 \
+		"$(printf '%s\n' "$BUILD_OUT" | grep -c 'grampa: markdown:')"
+	# Position is the whole reason it is a parse-time
+	# $(info) and not a line in build's recipe.
+	assert_eq "notice is the first line of the build" \
+		"grampa: markdown: cmark --unsafe" \
+		"$(printf '%s\n' "$BUILD_OUT" | head -1)"
+}
+
+test_build_announces_no_processor() {
+	sandbox notice_none
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: none -- post bodies stay HTML"
+}
+
+test_notice_marks_a_config_override() {
+	sandbox notice_override
+	path_stub mytool 'cat "$f"'
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: mytool (from config)"
+}
+
+#
+# Non-build goals stay quiet.
+#
+test_clean_and_setup_print_no_notice() {
+	sandbox notice_quiet
+	build clean
+	assert_out_not_grep "grampa: markdown:"
+	build setup
+	assert_out_not_grep "grampa: markdown:"
+}
+
+#
 # The staging branch runs Markdown.pl over the body and
 # nothing else. A title is front matter, so asterisks in
 # it must survive to the page untouched -- if the whole
@@ -421,8 +755,20 @@ EOF
 #
 test_failing_markdown_fails_the_build() {
 	sandbox markdown_failure
+	# Unconditional exit 1 would fail setup's own probe --
+	# which runs this exact stub against a synthetic
+	# "x <i>y</i>" file -- so detection would reject the
+	# candidate and DETECTED_MARKDOWN would come back empty,
+	# and the build below would then stage verbatim and
+	# succeed instead of failing. Passing the probe and only
+	# then failing is what exercises a processor that was
+	# detected and breaks for real, which is the case this
+	# test is about.
 	markdown_stub <<'EOF'
 #!/bin/sh
+case "$(cat "$1")" in
+	*'<i>y</i>'*) cat "$1"; exit 0 ;;
+esac
 echo "Markdown.pl: broken" >&2
 exit 1
 EOF
@@ -464,8 +810,16 @@ EOF
 #
 test_failed_markdown_leaves_no_stale_chunks() {
 	sandbox markdown_stale_chunks
+	# Same reasoning as test_failing_markdown_fails_the_build:
+	# an unconditional exit 1 fails setup's own probe, so
+	# nothing would be detected and this build would succeed
+	# verbatim instead of failing. Pass the probe, fail on the
+	# real post.
 	markdown_stub <<'EOF'
 #!/bin/sh
+case "$(cat "$1")" in
+	*'<i>y</i>'*) cat "$1"; exit 0 ;;
+esac
 exit 1
 EOF
 	# The second delimiter gives the post a section the
@@ -564,21 +918,42 @@ EOF
 }
 
 #
-# The Makefile tests [ -x Markdown.pl ], not [ -f ], so a
-# copy that was never chmod +x is skipped and the body
-# stays verbatim HTML. That is a silent fallback with no
-# warning, which makes it worth pinning: README.md now
-# tells people to check the execute bit precisely because
-# nothing else will tell them. Relax the test to [ -f ] and
-# this fails.
+# A Markdown.pl that was never chmod +x is invisible to
+# setup's detection, so DETECTED_MARKDOWN stays empty and the
+# body stays verbatim HTML. That is a silent fallback with no
+# warning, which makes it worth pinning: README.md now tells
+# people to check the execute bit precisely because nothing
+# else will tell them.
+#
+# Two things independently reject the candidate, so this
+# holds even if one of them is weakened: the case guard
+# `[ -x "$probe" ] || continue` for a slash-bearing candidate,
+# and, redundant with it, the probe's own attempt to run the
+# candidate against its scratch file, whose nonzero exit
+# (EACCES) is caught by `[ $rc -eq 0 ] || continue` either
+# way. Verified directly -- relaxing the case guard alone to
+# [ -f ] does not make this test fail, precisely because that
+# second check still catches it.
+#
+# This does not use markdown_stub: that helper chmod +x's
+# before re-running setup, so if it ran here setup would
+# detect the (then executable) stub and record it in
+# config.mk before the chmod 644 below ever ran -- and a
+# later build would try to exec a now-unreadable
+# ./Markdown.pl and fail loudly instead of falling back,
+# which is a different bug from the one this test is
+# guarding. Writing the file and chmodding it before setup
+# runs is what actually exercises detection rejecting the
+# candidate.
 #
 test_non_executable_markdown_falls_back_to_verbatim() {
 	sandbox markdown_not_executable
-	markdown_stub <<'EOF'
+	cat > Markdown.pl <<'EOF'
 #!/bin/sh
 sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
 EOF
 	chmod 644 Markdown.pl
+	make setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -1590,6 +1965,11 @@ title: Hello
 EOF
 	build_expect_fail
 	assert_out_grep "make setup"
+	# The markdown notice is gated on DATE_DIALECT so an
+	# unconfigured tree leads with the line that tells you
+	# what to do. Dropping that half of the gate passes
+	# every notice test, so this is where it is pinned.
+	assert_out_not_grep "grampa: markdown:"
 }
 
 #
@@ -1619,6 +1999,175 @@ EOF
 	# permanently disable it.
 	build
 	assert_file build/2026/01/31/endofmonth.html
+}
+
+#
+# Detection records field 2 -- the whole command line --
+# not the probe name. Recorded as field 1, cmark-gfm loses
+# -e table and renders tables as paragraphs at exit 0.
+#
+test_setup_records_the_full_argv() {
+	sandbox setup_full_argv
+	path_stub cmark-gfm 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark-gfm --unsafe -e table"
+}
+
+#
+# Preference order: the table's first working candidate
+# wins, not whichever happens to be installed.
+#
+test_setup_prefers_the_earlier_candidate() {
+	sandbox setup_order
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+	path_stub lowdown 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := lowdown --out-no-smarty"
+}
+
+#
+# The probe tests the flags, not just the binary: a
+# candidate that drops raw HTML is skipped, which is the
+# real behaviour of cmark/cmark-gfm/lowdown without their
+# --unsafe-family flags.
+#
+test_probe_skips_a_candidate_that_eats_raw_html() {
+	sandbox probe_raw_html
+	path_stub lowdown 'sed "s|<i>y</i>|RAWGONE|" "$f"'
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+}
+
+#
+# A candidate emitting a whole document is skipped: base.txt
+# would otherwise wrap it in a second <html> at exit 0.
+#
+test_probe_skips_a_whole_document_candidate() {
+	sandbox probe_document
+	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
+# One candidate truncating the probe file must not poison
+# the candidates behind it. The file is rewritten per
+# candidate for exactly this reason.
+#
+test_a_truncating_candidate_does_not_poison_the_walk() {
+	sandbox probe_truncate
+	path_stub lowdown ': > "$f"; exit 1'
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
+}
+
+#
+# Nothing installed is a legitimate state, not an error.
+#
+test_setup_with_no_processor_records_empty() {
+	sandbox setup_none
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
+# The cmp guard: a no-op setup must not bump the mtime, or
+# every setup re-stages every post once Task 4 lands.
+#
+test_noop_setup_leaves_config_mk_untouched() {
+	sandbox setup_noop
+	local before after
+	before=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
+	sleep 1
+	make setup >/dev/null 2>&1
+	after=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
+	assert_eq "config.mk mtime unchanged by a no-op setup" "$before" "$after"
+	assert_no_file config.mk.new
+}
+
+#
+# ---------------------------------------------------
+# The upgrade guard. An install set up before markdown
+# detection existed has a config.mk holding only
+# DATE_DIALECT. Left alone that install goes mixed --
+# already-staged posts keep rendered bodies while the
+# next edited post stages verbatim -- at exit 0.
+# ---------------------------------------------------
+#
+
+#
+# An install from before markdown detection must fail loud
+# rather than silently staging verbatim.
+#
+test_config_mk_without_detected_markdown_fails_the_build() {
+	sandbox old_config_mk
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build_expect_fail
+	assert_out_grep "config.mk predates markdown detection"
+}
+
+#
+# ...including for an explicit file goal. An allowlist of
+# all/build/deploy leaves this ungated, which reopens the
+# silent rot the guard exists to close.
+#
+test_old_config_mk_fails_for_an_explicit_page_goal() {
+	sandbox old_config_mk_explicit
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build_expect_fail build/2026/08/06/hello.html
+	assert_out_grep "config.mk predates markdown detection"
+}
+
+#
+# The guard must not deadlock: it tells you to run setup,
+# so setup has to parse and run.
+#
+test_setup_recovers_an_old_config_mk() {
+	sandbox old_config_mk_setup
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build setup
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+}
+
+#
+# A probed-empty config.mk is a legitimate state and must
+# not trip the guard. $(origin) is what tells the two
+# apart: undefined vs file, though both expand empty.
+#
+test_probed_empty_config_mk_builds_fine() {
+	sandbox empty_detected
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_file build/2026/08/06/hello.html
+}
+
+#
+# clean must stay usable on an unconverted tree.
+#
+test_clean_works_with_an_old_config_mk() {
+	sandbox old_config_mk_clean
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build clean
 }
 
 #
@@ -2371,6 +2920,22 @@ EOF
 	assert_file build/index.html
 }
 
+#
+# sandbox() must pin detection off regardless of what the
+# developer has installed, or the whole suite's output
+# depends on their laptop. Non-executable placeholders do
+# not shadow a real tool -- PATH lookup skips them -- so
+# the stubs must be executable and exit non-zero.
+#
+test_sandbox_hides_host_markdown_tools() {
+	sandbox sandbox_hides_tools
+	for t in lowdown cmark cmark-gfm md2html comrak multimarkdown markdown smu markdown_py markdown-it pandoc; do
+		if [ -x "bin/$t" ]; then ok; else fail "expected a stub for $t"; fi
+		if "./bin/$t" /dev/null >/dev/null 2>&1; then fail "stub $t must exit non-zero"; else ok; fi
+	done
+	assert_eq "PATH is prefixed with the sandbox bin" "$SBOX/bin" "${PATH%%:*}"
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -2382,6 +2947,19 @@ test_ampersands_are_not_mangled
 test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
 test_staged_files_persist
+test_detected_processor_stages_the_body
+test_no_processor_stages_verbatim
+test_config_markdown_overrides_detection
+test_changing_markdown_restages_posts
+test_missing_override_tool_fails_the_build
+test_multi_word_override_keeps_its_flags
+test_hash_in_markdown_value_fails_the_rebuild
+test_uninstalled_detected_processor_fails_the_build
+test_stub_list_matches_the_candidate_table
+test_build_announces_the_processor
+test_build_announces_no_processor
+test_notice_marks_a_config_override
+test_clean_and_setup_print_no_notice
 test_markdown_transforms_the_body_not_the_front_matter
 test_markdown_staged_file_has_no_blank_line_after_the_delimiter
 test_failing_markdown_fails_the_build
@@ -2443,6 +3021,7 @@ test_body_title_line_is_not_the_page_title
 test_clean_works_with_a_file_named_clean
 test_deploy_builds_first
 test_default_build_works_with_a_file_named_all
+test_sandbox_hides_host_markdown_tools
 test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
@@ -2463,5 +3042,17 @@ test_character_error_precedes_the_date_error
 test_setup_writes_the_host_date_dialect
 test_build_without_config_mk_fails
 test_setup_bootstraps_with_a_month_end_post
+test_setup_records_the_full_argv
+test_setup_prefers_the_earlier_candidate
+test_probe_skips_a_candidate_that_eats_raw_html
+test_probe_skips_a_whole_document_candidate
+test_a_truncating_candidate_does_not_poison_the_walk
+test_setup_with_no_processor_records_empty
+test_noop_setup_leaves_config_mk_untouched
+test_config_mk_without_detected_markdown_fails_the_build
+test_old_config_mk_fails_for_an_explicit_page_goal
+test_setup_recovers_an_old_config_mk
+test_probed_empty_config_mk_builds_fine
+test_clean_works_with_an_old_config_mk
 
 pass_fail_summary

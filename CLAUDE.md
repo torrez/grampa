@@ -10,7 +10,8 @@ change can't be expressed in make + awk + coreutils, it doesn't belong here.
 ## Commands
 
 ```sh
-make setup     # one-time: create build/ work/ posts/ templates/, copy templates + config + deploy.sh
+make setup     # one-time: create build/ work/ posts/ templates/, copy templates + config + deploy.sh,
+               #           and probe the host for its date dialect and a markdown processor
 make           # incremental build into build/  (= `make config build`)
 make clean     # wipe build/ and work/
 make build     # the build half of the default target (see below — it no longer skips anything)
@@ -144,12 +145,15 @@ Makefile, `.source/`, `README.md`, `CLAUDE.md`, `.gitignore`, `tests/`, `tools/`
 | `build/` | no | Publishable output, and nothing else — deploy this verbatim |
 | `work/` | no | Intermediates (`.staged`, `.tmp`, and `.rssitem` fragments) |
 | `config`, `deploy.sh` | no | Per-install, copied from `.source/*.example` |
-| `config.mk` | no | Per-install, **generated** by `make setup` probing `date(1)`: `DATE_DIALECT := bsd\|gnu`. No `.source` twin — it is derived, not copied |
+| `config.mk` | no | Per-install, **generated** by `make setup` probing the host: `DATE_DIALECT := bsd\|gnu` and `DETECTED_MARKDOWN := <argv>`. No `.source` twin — it is derived, not copied |
 
 `make setup` copies with `yes n | cp -i`, so it never clobbers existing files. It is safe
 to re-run. The one exception is `config.mk`, which is *generated* rather than copied: setup
-probes `date(1)` and unconditionally (re)writes it, which is also what re-fixes the dialect if
-a checkout ever moves between OSes.
+probes `date(1)` and the markdown candidates and rewrites it, which is what re-fixes the
+dialect if a checkout ever moves between OSes and what picks up a newly installed markdown
+processor. The rewrite is conditional on the content actually differing — setup writes
+`config.mk.new` and `cmp`s it — because `config.mk` is a prerequisite of `%.staged`, and an
+unconditional touch would re-stage every post on every setup.
 
 ## config
 
@@ -165,8 +169,34 @@ to `Grampa`.
 
 `url=` is the site's absolute base URL. Setting it is what turns `FEED_PAGES` non-empty and
 gets `build/rss.xml` built; leaving it unset or empty means no feed and no error. A trailing
-slash is stripped so `url=` with or without one produces identical links. These are the only
-two keys anything reads.
+slash is stripped so `url=` with or without one produces identical links.
+
+`markdown=` overrides the processor `make setup` detected. It is a shell **command line**,
+not a command name — flags are expected, and it is run as `<command> <file>` with the body
+file as its last argument. Like `deploy.sh`, it is executed, so it is exactly as trusted as
+the person who edits `config`. `MARKDOWN_CMD` is `$(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))`,
+so an override always beats detection, and a name that doesn't exist fails the build at
+exit 127 rather than falling back to verbatim.
+
+A `#` in the value does not start a *config* comment — the rest of the line goes to the shell,
+which has its own opinion about `#`. The whole `.staged` recipe is **one shell line**, so
+`markdown=cat #--flag` comments out the `> .mdbody` redirect and the `&& cat … > $@` that
+follows it, and the recipe exits 0 having never written its target. It is caught now, and the
+thing that catches it is the parentheses around `$(MARKDOWN_CMD)` in that recipe: the closing
+`)` is swallowed by the same comment, which makes it a shell syntax error and fails the build.
+
+That guard is there because the uncaught version was the worst failure this program has had.
+On a *first* build it at least died one rule later, at `awk: fatal: cannot open file
+'work/….staged'` — a missing-file error naming a file whose own rule had reported success. But
+on a **rebuild** the previous `.staged` was still on disk with its old mtime, so make judged
+every downstream page up to date, printed `Build completed.`, and exited **0** while silently
+dropping the edit the author had just made — and `make deploy` ships exactly that. It needs a
+processor that succeeds when handed no file, which is to say `cat` and every markdown CLI that
+falls back to stdin. Both halves verified before and after the fix, and guarded by
+`test_hash_in_markdown_value_fails_the_rebuild`, whose stub must exit 0 on no arguments or the
+test passes against the unfixed Makefile — checked by mutation.
+
+These three are the only keys anything reads.
 
 ## Post format
 
@@ -264,13 +294,14 @@ Body of your post.
 ```
 
 The delimiter line is matched by awk on the literal 35-hyphen string. Body content is
-copied through as-is (HTML), unless `Markdown.pl` is present.
+copied through as-is (HTML) unless a markdown processor was detected at `make setup` or
+named by `markdown=` in `config`.
 
 ## Build pipeline
 
 ```
 posts/2026-08-06-home_first-post.txt
-  └─ awk split + (optional) Markdown.pl on the body only → work/2026-08-06-home_first-post.staged
+  └─ awk split + (optional) markdown on the body only → work/2026-08-06-home_first-post.staged
         ├─ awk + templates/post.txt        → work/2026-08-06-home_first-post.tmp   (a post fragment)
         │     ├─ awk + templates/base.txt  → build/2026/08/06/first-post.html
         │     └─ cat 10 newest             → work/index.tmp
@@ -281,9 +312,35 @@ posts/2026-08-06-home_first-post.txt
 ```
 
 `.staged` is the shared staging step: it splits the front matter off the body, runs the body
-through `Markdown.pl` if present, and glues them back together. Both `.tmp` and `.rssitem`
-are built from the same `.staged` file, so `Markdown.pl` runs once per post no matter how
-many consumers read the result.
+through `$(MARKDOWN_CMD)` if there is one, and glues them back together. Both `.tmp` and
+`.rssitem` are built from the same `.staged` file, so the processor runs once per post no
+matter how many consumers read the result. Its prerequisites are the post, `config`, and
+`$(wildcard config.mk)` — the last two are what make a changed `markdown=` or a re-detected
+processor re-stage everything, instead of the old "looks like it did nothing" behaviour.
+
+### Markdown detection
+
+`MARKDOWN_CANDIDATES` is a `define` block of `probe|argv` lines — twelve of them, in
+preference order: tables first, runtime-free first, `Markdown.pl` last. Field 1 is what
+`setup` probes (a name found via `command -v`, or, if it contains a slash, a path tested with
+`[ -x ]`), field 2 is the whole command line recorded on success. Recording field 1 would
+lose the flags, and the flags are not decoration — see the raw-HTML gotcha below.
+
+`setup`'s recipe walks the table and writes the winner to `config.mk` as
+`DETECTED_MARKDOWN := <argv>`. It is one `; \`-continued logical line, because each recipe
+line is its own shell and `dialect` and `winner` have to survive to the write; the `while`
+loop runs in a subshell, so the winner is `echo`ed out of the pipeline and captured rather
+than assigned. The probe is a real render, not a `--version` check: each candidate is run
+against a freshly written `x <i>y</i>` and has to exit 0, keep the `<i>`, and *not* return a
+whole `<html>` document. That is what catches a flag that turns out to be wrong on the host —
+including for `comrak`, `multimarkdown` and `markdown-it`, whose rows were never executed
+during development and whose flags are inferred from family behaviour rather than observed.
+The probe file is rewritten **inside** the loop, per candidate: a candidate that truncates a
+shared file would make every candidate behind it fail the `<i>` check on empty input.
+
+`setup` writes `config.mk.new` and `mv`s it only when `cmp` says the content changed, so a
+no-op `make setup` does not bump the mtime — without that, every setup would re-stage every
+post, `config.mk` being a staging prerequisite.
 
 `.tmp` files are rendered post fragments and are the unit of reuse: the per-post page and
 the index are both just a `base.txt` wrapper around one or more `.tmp` files. `.rssitem`
@@ -409,7 +466,7 @@ title and a body into variables for a renderer, this one keeps no state but `see
 factoring the two together would couple the staging step to the renderers to save one regex.
 Only the *first* delimiter splits; later ones are body text. Its `END` block is load-bearing
 rather than tidy, and in both directions: awk creates a redirect's file on first write, so
-without it a post with no body leaves no body file for `Markdown.pl` to be handed, and a post
+without it a post with no body leaves no body file for the processor to be handed, and a post
 whose delimiter is on line 1 leaves no head file for the reassembly `cat`. It replaced `split -p` and a
 pair of globs, which is the subject of the two closed glob items in `docs/backlog.md`.
 
@@ -477,12 +534,13 @@ more than a format-string swap.
   install: pull the new Makefile → first `make` says "run `make setup` first" → `make setup`
   (which only *adds* `config.mk`, clobbering nothing else, and now never deadlocks) → builds
   resume.
-- **`config` is read lazily, not at parse time.** `CONFIG_NAME` and `CONFIG_URL` both use
-  `=`, not `:=`, because on a first-ever run the `config` target hasn't copied the file into
-  place yet when the Makefile is parsed. `config` is also a prerequisite of the HTML rules
-  and of `%.rssitem`, so changing `name=` or `url=` rebuilds every page or every feed item.
-  `name=` and `url=` are the only keys anything reads; the last of each wins, and an absent
-  or empty `name=` falls back to `Grampa`.
+- **`config` is read lazily, not at parse time.** `CONFIG_NAME`, `CONFIG_URL` and
+  `CONFIG_MARKDOWN` all use `=`, not `:=`, because on a first-ever run the `config` target
+  hasn't copied the file into place yet when the Makefile is parsed. `config` is also a
+  prerequisite of the HTML rules, of `%.rssitem`, and of `%.staged`, so changing `name=` or
+  `url=` rebuilds every page or every feed item, and changing `markdown=` re-stages every
+  post. `name=`, `url=` and `markdown=` are the only keys anything reads; the last of each
+  wins, and an absent or empty `name=` falls back to `Grampa`.
 - **A `url=` that only exists by the time `config`'s recipe runs is one build too late for
   the feed.** `FEED_PAGES` gates `build/rss.xml` and is expanded when `build`'s prerequisite
   list is read — during the initial parse, before any recipe (including `config`) has run.
@@ -523,12 +581,78 @@ more than a format-string swap.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
-- `Markdown.pl` is optional and gitignored — get it from
-  <https://daringfireball.net/projects/markdown/> and make it executable in the repo
-  root. Without it, the post is staged into `work/` verbatim and bodies stay HTML. Adding or
-  removing `Markdown.pl` does not invalidate `.staged`, whose only prerequisite is the post
-  itself — the same behaviour the old `.tmp` rule had before staging was split out, just more
-  visible now that `.staged` is a named, inspectable file instead of a step inside `.tmp`.
+- **A markdown processor is optional, and installing one needs a `make setup`.** Detection
+  runs once, at setup, and is recorded in `config.mk`; no build ever looks at `PATH` again.
+  So a newly installed processor does nothing until `make setup` re-probes — but once it has,
+  a plain `make` re-stages every post, because `config.mk` and `config` are prerequisites of
+  `%.staged`. That **closes** the old gotcha here, which was that adding `Markdown.pl` did not
+  invalidate `.staged` and the fix looked like it did nothing until `make clean`. Verified
+  both halves: a plain `make` after installing a processor still stages verbatim; `make setup`
+  then a plain `make` re-stages, with no `clean`. `Markdown.pl` itself is still optional and
+  gitignored, is still the last candidate in the table, and still has to be executable — it is
+  probed with `[ -x ]`, being the one row with a slash in it.
+- **The `--unsafe`-family flags in the candidate table are load-bearing, not tuning.**
+  `cmark`, `cmark-gfm`, `lowdown`, `comrak` and `markdown-it` all **refuse to pass raw HTML
+  through** by default — verified on this host, `lowdown` deletes it outright and
+  `cmark`/`cmark-gfm` replace it with `<!-- raw HTML omitted -->`; `markdown-it`'s CLI
+  escapes it into visible text instead, a different symptom of the same default — which would
+  silently drop, or expose the source of, an embedded `<iframe>` in a post. Grampa copies bodies through
+  as raw HTML when there is no processor at all, so these flags restore existing behaviour
+  rather than relaxing anything. `lowdown` and `discount` also smarten punctuation by default,
+  rewriting the author's quotes and dashes; hence `--out-no-smarty`, `-smarty`, and pandoc's
+  `-smart`. This is why the table records field 2 and not field 1, and why the probe checks
+  the `<i>` survives rather than just checking the exit status. An argv in the table must
+  contain no `#` or `$`, which would truncate or misparse the `config.mk` line it is written
+  into.
+- **An install that predates detection fails loud, and the guard is gated on `BUILD_GOAL`.**
+  Such a tree has a `config.mk` holding only `DATE_DIALECT`. Nothing else would notice:
+  `DATE_DIALECT` is set, so the loud date check is satisfied, and `DETECTED_MARKDOWN` is
+  merely *undefined* — markdown silently turns off, already-staged posts keep their rendered
+  bodies while the next edited post stages verbatim, and the site goes **mixed** at exit 0.
+  `$(origin DETECTED_MARKDOWN)` is what makes the check precise: an old `config.mk` gives
+  `undefined` while a new one where detection found nothing gives `file`, though both expand
+  empty — so a legitimately processor-less install never trips it. The `BUILD_GOAL` gate is
+  load-bearing rather than symmetry with the build notice: the error says to run `make setup`,
+  and `setup` parses this same Makefile, so without the gate it dies before its recipe can
+  rewrite `config.mk` — the same deadlock already documented for `BAD_POST_DATES` and
+  `date_select`. `BUILD_GOAL` is a **denylist** (`NONBUILD_GOALS := clean setup test config`),
+  not an allowlist: `make build/index.html` and `make work/X.staged` are ordinary builds that
+  an allowlist of `all`/`build`/`deploy` would score as non-builds, leaving both the guard and
+  the notice silent for exactly the targeted invocations someone debugging reaches for. A
+  denylist fails loud on an unlisted future goal; an allowlist fails silent. The combined
+  `make setup all` on such an install is the fifth state of the family documented at the top
+  of this file: it dies at this guard, during the parse, before `setup`'s recipe can rewrite
+  `config.mk` — so the answer there is the same as everywhere else, `make setup` on its own
+  and then `make`. Verified.
+- **`$(wildcard config.mk)` in `%.staged`'s prerequisites is the fifth member of the
+  parse-time-vs-recipe-time family.** `config.mk` has no rule that builds it, so a bare
+  prerequisite makes an unconfigured tree die with make's own
+  `No rule to make target 'config.mk', needed by 'work/….staged'` instead of the deliberate
+  `grampa: no DATE_DIALECT -- run make setup first`. Verified both messages. The cost is that
+  the prerequisite is only *there* when `config.mk` existed at parse time: in an invocation
+  that starts without one, staging carries no `config.mk` dependency at all. That shadow is
+  currently unreachable in a way that could produce wrong output — such an invocation either
+  has nothing to stage, or dies at `date_select` before any staging recipe runs (verified: a
+  virgin tree with a dated post fails `make setup all` exactly there, and one with an empty
+  `posts/` exits 0) — but it is the same lazy-parse-vs-recipe split as the `url=`/`FEED_PAGES`
+  and `-include config.mk` bullets, and it is worth knowing before someone relies on that
+  prerequisite for something new.
+- **The build notice is a parse-time `$(info)`, and it costs one `$(shell)`.** It prints
+  `grampa: markdown: …` as the first line of every build, above every `Building …` line, in
+  serial and under `-j` alike — a line in `build`'s recipe could not, since a recipe runs
+  *after* its prerequisites and phony-prerequisite ordering is not reliable under `-j`. It is
+  gated on `BUILD_GOAL` so `clean`/`setup`/`test`/`config` stay quiet and on `DATE_DIALECT` so an
+  unconfigured tree leads with the "run `make setup` first" error instead. Being parse-time,
+  it also prints under `-n`, `-q` and `-s`. It is written as an `ifneq` around two `:=`
+  snapshots rather than one `$(if)` naming `MARKDOWN_CMD` and `CONFIG_MARKDOWN`: that form
+  ran the `config` sed **three** times per parse (`$(or)`'s condition, the value, the suffix
+  test), measured at +48ms on a 60-post no-op rebuild. Counted 3 → 1 with a counting `sed`
+  wrapper. The `:=` is safe here precisely because a parse-time reading is what the note is
+  documented to be — and that documented wrinkle is the `url=`/`FEED_PAGES` one again: on a
+  first-ever run, where `config` does not exist yet, the printed line names the *detected*
+  tool even if the `config` about to be copied into place sets `markdown=`. Only the line is
+  wrong; the staging recipe expands `MARKDOWN_CMD` at recipe time and stages correctly.
+  Verified end to end, and it self-corrects on the next `make`.
 - **`rfc822_from_filename` runs under `LC_ALL=C`.** RFC 822 day and month names are literal
   English tokens (`Thu`, `Aug`), and `$(shell …)` inherits the user's locale; without pinning
   it, a non-English locale emits something like `jeu., 06 aout 2026`, which is silently
