@@ -830,7 +830,7 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   said only that `setup` is `.PHONY`, so an order-only `build: | setup` makes `setup` remake on
   **every** build — true, confirmed with `make --debug=b`, one "Must remake target `setup'" per
   no-op rebuild against zero without it. But that is the lesser objection, and stating it alone
-  implies the fix would work at that price. **It does not close the race at any price**: an
+  implies the fix would work at that price. **It does not close the failure at any price**: an
   order-only prerequisite sequences the target's *recipe* against `setup`, not make's walk of
   `build`'s other prerequisites, and the error fires during that walk. Verified — with it
   added, `make -j4 setup all` fails identically, 3 of 3, as does `make -j4 all` alone. Making
@@ -909,7 +909,7 @@ staleness to actually work as advice.
 
 **What is left is two items, and both are decisions rather than oversights.** A later pass took
 the last four small ones — the control character in a filename, `make deploy`'s missing
-prerequisite, the splitter's trailing blank line, and the `-j setup` race — leaving ranked
+prerequisite, the splitter's trailing blank line, and the `-j setup` failure — leaving ranked
 items 2 and 6 below: the feed's post-deletion self-heal, and the single-pass `fill()`. Neither
 is waiting on anyone to notice it. Both have their reasoning written down, both are real design
 rather than a fix, and both have a documented answer today (`make clean && make` for the first,
@@ -1019,7 +1019,18 @@ error was introduced by the fix rather than inherited from the finding.
    the one control character outside the `0x00`–`0x1F` run, so a class that stopped at `0x1F`
    would pass the first test and fail this one), and
    `test_ordinary_filenames_survive_the_control_check`. All watched failing first except the
-   last, which cannot fail and says so. Full suite: **271 passed, 0 failed.**
+   last, which cannot fail and says so.
+
+   A fifth, `test_control_check_ignores_non_post_files`, was added at the whole-branch review,
+   which found **the sharing argument itself unguarded**. `POST_LS` exists so the check and
+   `POST_NAMES` cannot drift about what counts as a post — and severing it, by giving the check
+   its own `ls posts` without the `.txt` filter, passed the entire suite at 274. `posts/` is the
+   author's directory, so an editor backup with an odd byte in its name is a thing that happens;
+   the mutant rejects it, the real Makefile builds. Only the harmless direction of the drift was
+   open — a listing that *misses* posts is already killed by the three rejection tests — which
+   is why it was a loud false positive rather than a reopened hole, and why it was still worth
+   closing: it is the same class as the `addprefix` mutant closed at 271, and this list's own
+   bar says surviving mutants get closed. Full suite: **275 passed, 0 failed.**
 
    Original finding follows.
 

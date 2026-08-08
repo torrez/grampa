@@ -48,7 +48,7 @@ taken as evidence of nondeterminism; they had different `posts/` directories.
 It is documented rather than fixed because the mechanical fix does not work — and it fails for
 a better reason than cost. An order-only `build: | setup` does make `setup` remake on *every*
 build, since `setup` is `.PHONY` (verified with `make --debug=b`), but that is the lesser
-problem: **it does not close the race either**, because an order-only prerequisite sequences
+problem: **it does not close the failure either**, because an order-only prerequisite sequences
 the target's *recipe* against `setup`, not make's walk of `build`'s other prerequisites — and
 the error fires during that walk. Verified: with it added, `make -j4 setup all` fails
 identically, 3 of 3. Making `setup` non-phony means inventing a stamp file for a step you run

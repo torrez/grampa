@@ -1991,6 +1991,38 @@ EOF
 }
 
 #
+# The control check and POST_NAMES share one listing,
+# POST_LS, and the whole argument for that sharing is that
+# the two cannot drift about which files count as posts.
+# Nothing tested it: severing the sharing -- giving the
+# check its own `ls posts` without the .txt filter -- passed
+# the entire suite at 274. Found by the whole-branch review,
+# and the same class as the addprefix mutant closed at 271.
+#
+# posts/ is the author's directory, not grampa's, so an
+# editor backup or a scratch file with an odd byte in its
+# name is a thing that happens. It is not a post, POST_NAMES
+# does not see it, and the check must not either.
+#
+# This guards the harmless direction of the drift. The
+# dangerous direction -- a listing that MISSES posts -- is
+# already covered by the three rejection tests above, which
+# is why this one is a false-positive guard rather than a
+# hole. Watched failing against the severed-listing mutant.
+#
+test_control_check_ignores_non_post_files() {
+	sandbox control_check_ignores_non_post_files
+	add_post '2026-01-02-home_ok.txt' <<'EOF'
+title: Fine
+-----------------------------------
+<p>FINE BODY</p>
+EOF
+	: > "posts/$(printf 'notes\001.bak')"
+	build || return
+	assert_grep 'build/2026/01/02/ok.html' 'FINE BODY'
+}
+
+#
 # ---------------------------------------------------
 # The date half. date -v already rejects every bad date
 # below and exits 1; nothing hears it, because
@@ -2346,6 +2378,7 @@ test_control_character_slug_is_rejected
 test_tab_in_filename_names_the_whole_file
 test_del_character_slug_is_rejected
 test_ordinary_filenames_survive_the_control_check
+test_control_check_ignores_non_post_files
 test_out_of_range_date_is_rejected
 test_non_numeric_date_is_rejected
 test_impossible_calendar_date_is_rejected
