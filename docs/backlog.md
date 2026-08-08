@@ -503,11 +503,32 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   `--delete` turns `make clean && make deploy` into unpublishing the site. Honesty about doing
   one thing is worth less than not doing that.
 
-  Two consequences recorded rather than discovered later. `deploy` builds first but does not
-  *set up* first — a directory where `make setup` has never run still fails on the missing
-  templates, unchanged and correct. And `deploy` is no longer a leaf target, so hand-edits to
-  `build/` are rebuilt over; `./deploy.sh build/` run directly is the escape hatch, and
-  CLAUDE.md says so.
+  Consequences recorded rather than discovered later. `deploy` builds first but does not *set
+  up* first — a directory where `make setup` has never run still fails on the missing
+  templates, unchanged and correct.
+
+  **The first write-up of this entry got the leaf-target consequence backwards, and the task
+  review caught it in all three places it had been asserted.** It said hand-edits to `build/`
+  are rebuilt over, with `./deploy.sh build/` offered as the escape hatch. The opposite is
+  true: a hand-edited page is *newer* than its prerequisites, so make considers it up to date
+  and `deploy` ships the edit — reproduced with a sentinel string, which arrived intact in the
+  shipped copy at exit 0. What is regenerated is a page you *deleted*, or one whose source is
+  newer. So `build/` is no safer a scratchpad than before, and the escape hatch had no premise:
+  both routes ship the same bytes. Worth recording as a finding rather than quietly correcting,
+  because it is this list's own recurring defect — a confident, checkable, false claim — landing
+  in a commit whose whole subject was making the build safer.
+
+  What the change really does have teeth for is that a **failing build now stops the ship**.
+  That reads as losing the old form's ability to re-ship the last good `build/`, but that last
+  good `build/` is mostly a myth: `.DELETE_ON_ERROR` removes a half-written page, so a build
+  failing partway leaves the site with a page *missing*, and the old `deploy` shipped exactly
+  that at exit 0 — verified both ways. Refusing is strictly better.
+
+  One interaction, found by the same review: `deploy: all` gives the first-ever-`make`
+  `FEED_PAGES` gotcha a one-command shape, so `make deploy` as a first invocation can *ship* a
+  feedless site with no skip note. It is the documented gotcha through a new front door — the
+  old `make && make deploy` shipped the same feedless output — and it needs a
+  `.source/config.example` customized with `url=`. Noted in that gotcha's bullet.
 
   Guarded by `test_deploy_builds_first`, watched failing first — `deployed.txt` present at
   **0 bytes**, which is the empty listing rather than a missing stub, and worth checking

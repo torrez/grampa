@@ -1222,13 +1222,29 @@ setup: config
 #
 # It builds first; it does not set up first. A directory
 # where make setup has never run still fails on the missing
-# templates, which is unchanged and correct.
+# templates, which is unchanged and correct. Where deploy
+# does now create config is the narrower case of setup
+# having been run and config deleted afterwards -- not a
+# fresh install, which has one already, since setup: config.
 #
-# Two consequences worth knowing. deploy is no longer a leaf
-# target, so hand-edits to build/ are rebuilt over -- run
-# ./deploy.sh build/ directly if that is ever what you want.
-# And on a fresh install make deploy now creates config and
-# builds rather than shipping nothing.
+# What being a non-leaf target does and does not change,
+# because the obvious guess is wrong. A page you DELETED
+# from build/ is regenerated before shipping, and a page
+# whose source is newer is rebuilt. A page you hand-EDITED
+# is not: your edit made it newer than its prerequisites, so
+# make considers it up to date and deploy ships the edit.
+# Make cannot tell an edit from a build. So ./deploy.sh
+# build/ and make deploy send the same bytes in that case,
+# and build/ is no safer a scratchpad than it was.
+#
+# A failing build now stops the ship, which is the change
+# with the most teeth. It sounds like a loss -- the old
+# form would have shipped the last good build/ -- but that
+# last good build/ is largely a myth: .DELETE_ON_ERROR
+# removes a half-written page, so a build that fails partway
+# leaves a site with a page MISSING, and the old deploy
+# shipped exactly that at exit 0. Verified. Refusing is
+# strictly better.
 #
 # Guarded by test_deploy_builds_first.
 #

@@ -26,10 +26,21 @@ anything and will otherwise linger in `build/`.
 `deploy` depends on `all`, so it builds before it ships. It used to not, and
 `make clean && make deploy` therefore handed `deploy.sh` an empty `build/` at exit 0 with no
 warning — which, given the example `deploy.sh` is an `rsync`, is one `--delete` away from
-unpublishing the site. The cost of the prerequisite is one quiet no-op build. Note it builds
-first but does not *set up* first: a directory where `make setup` has never run still fails on
-the missing templates. And since `deploy` is no longer a leaf target, hand-edits to `build/`
-are rebuilt over — run `./deploy.sh build/` yourself to ship exactly what is on disk.
+unpublishing the site. The cost of the prerequisite is one quiet no-op build. It builds first
+but does not *set up* first: a directory where `make setup` has never run still fails on the
+missing templates.
+
+**It does not sanitize `build/`, and the obvious guess about that is wrong.** A page you
+*deleted* is regenerated before shipping, and a page whose source is newer is rebuilt — but a
+page you hand-*edited* is now newer than its prerequisites, so make considers it up to date and
+`make deploy` ships your edit. Make cannot tell an edit from a build. `./deploy.sh build/` and
+`make deploy` send the same bytes in that case, and `build/` is no safer a scratchpad than it
+was before.
+
+A failing build now stops the ship. That sounds like a loss of the old form's ability to
+re-ship the last good `build/`, but that last good `build/` is mostly a myth:
+`.DELETE_ON_ERROR` takes away a half-written page, so a build that fails partway leaves a site
+with a page *missing*, and the old `deploy` shipped precisely that at exit 0.
 
 `make build` is what `make` runs after `config`; it is not a way to skip the config check.
 `config` is a prerequisite of every page rule, so `make build` recreates a missing `config`
@@ -420,6 +431,14 @@ more than a format-string swap.
   a message; the next `make` re-parses the Makefile with `config` already in place and picks
   it up. This is the same lazy-parse-time-vs-recipe-time split as the bullet above, just
   landing on a prerequisite list instead of a recipe body.
+
+  Since `deploy: all`, that first-ever invocation can now be `make deploy`, which **ships** the
+  feedless site — still at exit 0 and still with no skip note. It is the same gotcha through a
+  new front door rather than a new one: the old two-command `make && make deploy` shipped the
+  identical feedless output. It needs a `.source/config.example` customized with `url=`, so it
+  is narrow. The second `make deploy` re-parses with `config` present and ships the feed — and
+  that is an improvement on the old form, where a bare second `deploy` re-shipped the first
+  build's feedless output.
 - **Categories come from filenames, not front matter.** `CATEGORY_SLUGS` is
   `$(sort $(foreach …))` over `POST_NAMES`, so discovering them needs no shell and no
   reading of post contents. Renaming a category means renaming files — see
