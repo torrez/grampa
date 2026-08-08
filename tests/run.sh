@@ -1549,6 +1549,71 @@ EOF
 }
 
 #
+# make setup probes date(1) and writes the host's dialect to
+# a generated config.mk. sandbox() already ran setup, so the
+# file is there to inspect.
+#
+test_setup_writes_the_host_date_dialect() {
+	sandbox setup_writes_dialect
+	assert_file config.mk
+	assert_grep config.mk "DATE_DIALECT := "
+	local want
+	if date -v1d >/dev/null 2>&1; then want=bsd
+	elif date -d 2026-01-15 >/dev/null 2>&1; then want=gnu
+	else want=none; fi
+	assert_grep config.mk "DATE_DIALECT := $want"
+}
+
+#
+# With no config.mk, DATE_DIALECT is empty and any dated
+# build must die with "run make setup first". An ordinary
+# 1st-28th date keeps SUSPECT_POST_DATES empty, so the
+# failure comes at recipe time -- the representative path.
+# A month-end date would fail earlier at parse time on the
+# same message; this pins the recipe-time path deliberately.
+#
+test_build_without_config_mk_fails() {
+	sandbox build_without_config_mk
+	rm -f config.mk
+	add_post 2026-02-10-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build_expect_fail
+	assert_out_grep "make setup"
+}
+
+#
+# B1 regression: BAD_POST_DATES is := and expands at parse
+# time on EVERY invocation, make setup included. A month-end
+# post (a suspect date) on an unconfigured tree must NOT make
+# `make setup` itself die before it writes config.mk -- that
+# was a deadlock (can't build without config.mk, can't setup
+# to create it). The gate `$(if $(DATE_DIALECT),...)` on the
+# check is what keeps setup bootstrappable here.
+#
+test_setup_bootstraps_with_a_month_end_post() {
+	sandbox setup_bootstraps_month_end
+	rm -f config.mk
+	add_post 2026-01-31-home_endofmonth.txt <<'EOF'
+title: End of month
+-----------------------------------
+<p>Hi.</p>
+EOF
+	# setup must succeed and write config.mk despite the suspect
+	# date and the absent config.mk at parse time.
+	if make setup < /dev/null > setup.out 2>&1; then ok; else
+		fail "make setup deadlocked on a month-end post" "$(cat setup.out)"; fi
+	assert_file config.mk
+	# And once configured, the build works and the suspect date
+	# renders -- proving the gate skipped the check, it did not
+	# permanently disable it.
+	build
+	assert_file build/2026/01/31/endofmonth.html
+}
+
+#
 # ---------------------------------------------------
 # Unreadable templates. A template that is present but
 # cannot be read -- one chmod 000, or a cp/rsync that
@@ -2387,5 +2452,8 @@ test_absurdly_long_year_is_rejected
 test_unpadded_date_still_builds
 test_month_end_dates_still_build
 test_character_error_precedes_the_date_error
+test_setup_writes_the_host_date_dialect
+test_build_without_config_mk_fails
+test_setup_bootstraps_with_a_month_end_post
 
 pass_fail_summary

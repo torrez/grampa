@@ -9,6 +9,7 @@
 #
 /posts/
 /config
+/config.mk
 /build/
 /work/
 /deploy.sh

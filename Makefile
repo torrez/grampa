@@ -4,6 +4,17 @@
 SHELL := /bin/bash
 
 #
+# Per-install platform config, written by `make setup`:
+# DATE_DIALECT := bsd|gnu, chosen by probing date(1). The
+# leading - suppresses the "no such file" error on a tree
+# that has not been set up yet. include is processed at
+# parse time, so $(DATE_DIALECT) is in scope for both the
+# parse-time date check and the recipes. An unconfigured
+# build fails loud in date_select below.
+#
+-include config.mk
+
+#
 # build/ holds only publishable output. Everything
 # the build needs along the way lives in work/ so
 # deploy.sh never has to filter anything out.
@@ -177,9 +188,9 @@ export SITE_URL
 
 #
 # The three date fields of a post filename, as words, and
-# the date -v arguments they make. Three call sites share
-# these: the two date formatters below and the parse-time
-# date check further down. The check's whole correctness
+# the date(1) arguments they make. Three call sites share
+# date_select: the two date formatters below and the parse-
+# time date check further down. The check's whole correctness
 # rests on it running the same arguments the build will, so
 # this is factored rather than repeated -- a second,
 # independently written copy could drift, and a check that
@@ -187,12 +198,32 @@ export SITE_URL
 # is the same class of defect as no check.
 #
 date_words = $(wordlist 1, 3, $(subst -, , $(notdir $(1))))
-date_args = $(join $(addprefix -v, $(call date_words,$(1))), y m d)
+
+#
+# date_select: the arguments that name that day at midnight,
+# one twin per dialect, chosen by DATE_DIALECT from config.mk.
+#   bsd: -v2026y -v07m -v04d -v0H -v0M -v0S
+#   gnu: -d "2026-07-04 00:00:00"
+# The midnight pin is folded in for both: %B %d, %Y prints no
+# time, so it is output-preserving for the long form, and it
+# is what rfc822 and the check need (date with only y/m/d
+# keeps the current clock time). The else branch fails loud --
+# date_select is expanded only while building something dated,
+# never by setup's own recipe, so `make setup` still boots a
+# tree that has no config.mk yet.
+#
+ifeq ($(DATE_DIALECT),bsd)
+date_select = $(join $(addprefix -v,$(call date_words,$(1))),y m d) -v0H -v0M -v0S
+else ifeq ($(DATE_DIALECT),gnu)
+date_select = -d "$(subst $(space),-,$(call date_words,$(1))) 00:00:00"
+else
+date_select = $(error grampa: no DATE_DIALECT -- run `make setup` first)
+endif
 
 #
 # Creates a formatted date from a file name.
 #
-date_from_filename = $(shell date $(call date_args,$(1)) "+%B %d, %Y")
+date_from_filename = $(shell date $(call date_select,$(1)) "+%B %d, %Y")
 
 #
 # The same date in RFC-822, which is what RSS pubDate
@@ -203,12 +234,13 @@ date_from_filename = $(shell date $(call date_args,$(1)) "+%B %d, %Y")
 # Without it a French machine emits "jeu., 06 aout 2026",
 # which is silently invalid.
 #
-# -v0H -v0M -v0S -- date -v with only y/m/d keeps the
-# current clock time, so without pinning to midnight every
-# build would emit different pubDates and rss.xml would
-# look changed on every deploy.
+# The midnight pin lives in date_select now (bsd's -v0H -v0M
+# -v0S, gnu's literal 00:00:00): date with only y/m/d keeps
+# the current clock time, so without it every build would
+# stamp a different pubDate and rss.xml would look changed on
+# every deploy.
 #
-rfc822_from_filename = $(shell LC_ALL=C date $(call date_args,$(1)) -v0H -v0M -v0S "+%a, %d %b %Y %H:%M:%S %z")
+rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %b %Y %H:%M:%S %z")
 
 #
 # Post filenames are y-m-d-<category>_<title>.txt.
@@ -497,7 +529,18 @@ date_is_sound = $(strip \
 # nothing reads this $(shell)'s exit status.
 #
 SUSPECT_POST_DATES := $(foreach n,$(POST_NAMES),$(if $(call date_is_sound,$(n)),,$(n)))
-BAD_POST_DATES := $(if $(SUSPECT_POST_DATES),$(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_args,$(n)) -v0H -v0M -v0S >/dev/null 2>&1 || echo $(n);) true))
+#
+# Gated on DATE_DIALECT so it does not run -- and so does not
+# expand date_select -- on an unconfigured tree. Without the
+# gate, this := line expands date_select's $(error) at parse
+# time on a month-end post during `make setup` itself, before
+# the recipe can write config.mk: a deadlock. Gated, an
+# unconfigured build fails loud one step later, at recipe time
+# via date_from_filename, with the same message. When a
+# dialect IS set the check runs exactly as before -- the gate
+# skips validation, it does not weaken it.
+#
+BAD_POST_DATES := $(if $(DATE_DIALECT),$(if $(SUSPECT_POST_DATES),$(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_select,$(n)) >/dev/null 2>&1 || echo $(n);) true)))
 CHECKED_POST_DATES := $(if $(BAD_POST_DATES),$(error no such calendar date in: $(addprefix posts/,$(BAD_POST_DATES)); a post filename must begin with a real y-m-d date))
 
 #
@@ -1202,6 +1245,13 @@ $(BUILD_DIR)index.html: $(WORK_DIR)index.tmp templates/base.txt config
 config:
 	@yes n | cp -i .source/config.example config
 
+#
+# config.mk is generated, not copied: setup probes date(1)
+# and always (re)writes it, the one deliberate exception to
+# the non-clobbering cp -i above, because it is derived from
+# the machine rather than authored. Re-running setup is what
+# re-fixes the dialect if a checkout ever moves between OSes.
+#
 .PHONY: setup
 setup: config
 	@mkdir -p $(BUILD_DIR);
@@ -1210,6 +1260,11 @@ setup: config
 	@mkdir -p templates;
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
+	@if date -v1d >/dev/null 2>&1; then dialect=bsd; \
+	elif date -d 2026-01-15 >/dev/null 2>&1; then dialect=gnu; \
+	else echo "grampa: no supported date dialect (need BSD 'date -v' or GNU 'date -d')" >&2; exit 1; fi; \
+	echo "DATE_DIALECT := $$dialect" > config.mk; \
+	echo "Configured date dialect: $$dialect"
 
 #
 # deploy: all, and not a bare deploy, because
