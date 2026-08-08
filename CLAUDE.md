@@ -462,8 +462,9 @@ more than a format-string swap.
   year `0026` under BSD but `2026` under GNU; the URL is `/26/7/4/x.html` either way, since
   paths come from the raw filename, not `date`. Edge case, documented not fixed.
 - **An unconfigured build fails loud at recipe time, and `make setup` always bootstraps.** With
-  no `config.mk`, `$(DATE_DIALECT)` is empty and `date_select`'s else branch is
-  `$(error grampa: no DATE_DIALECT -- run 'make setup' first)`. Two things keep this loud
+  no `config.mk`, `$(DATE_DIALECT)` is empty and `date_select`'s else branch is an `$(error)`
+  whose message reads, backticks and all: grampa: no DATE_DIALECT -- run `make setup` first.
+  Two things keep this loud
   without deadlocking `setup`: `setup`'s own recipe writes `config.mk` without expanding any
   date helper, and the parse-time `BAD_POST_DATES` check is gated `$(if $(DATE_DIALECT),...)` so
   it does not run — and so does not expand `date_select` — while unconfigured. The `:=` check
