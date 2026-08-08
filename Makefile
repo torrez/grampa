@@ -273,6 +273,27 @@ SITE_URL = $(patsubst %/,%,$(strip $(CONFIG_URL)))
 export SITE_URL
 
 #
+# The markdown command line: the markdown= override from
+# config if set, otherwise whatever setup detected.
+#
+# Lazily expanded for the same reason as CONFIG_NAME and
+# CONFIG_URL -- config may not exist when this is parsed.
+# $(or) rather than $(if) because it short-circuits and
+# names CONFIG_MARKDOWN once instead of twice, which is 5
+# shell-outs instead of 9 on a one-post rebuild with
+# markdown= set.
+#
+# Do NOT memoize this with the $(eval) idiom to save the
+# remaining expansions. The build notice forces the first
+# expansion at parse time, which on a first-ever run is
+# before config exists, so the memo would freeze the empty
+# answer and stage the whole first build with the wrong
+# processor.
+#
+CONFIG_MARKDOWN = $(shell sed -n 's/^markdown=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
+MARKDOWN_CMD = $(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
+
+#
 # The three date fields of a post filename, as words, and
 # the date(1) arguments they make. Three call sites share
 # date_select: the two date formatters below and the parse-
@@ -1248,23 +1269,28 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # accumulate scratch, and because that truncation argument
 # holds only as long as nothing in the chain is reordered.
 #
-$(WORK_DIR)%.staged: posts/%.txt
+# config is a prerequisite because markdown= lives there, so
+# editing it must re-stage every post -- the same reasoning
+# that already makes config a prerequisite of every HTML
+# rule. $(wildcard config.mk) is NOT a bare prerequisite:
+# config.mk has no rule that builds it, so naming it directly
+# would die with make's own "No rule to make target
+# 'config.mk'" on an unconfigured tree, pre-empting the
+# deliberately-worded `no DATE_DIALECT -- run make setup
+# first` error. Wrapped in $(wildcard), the prerequisite is
+# simply absent when the file is.
+#
+$(WORK_DIR)%.staged: posts/%.txt config $(wildcard config.mk)
 	@mkdir -p $(WORK_DIR)
 
-	@if [ -x Markdown.pl ]; \
-		then \
+	@$(if $(strip $(MARKDOWN_CMD)),\
 		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
 		awk -v head=$(WORK_DIR)$*.head -v body=$(WORK_DIR)$*.body \
 			"$$SPLIT_STAGED" $< && \
-		./Markdown.pl $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
+		$(MARKDOWN_CMD) $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
 		cat $(WORK_DIR)$*.head .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
-		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody; \
-	fi;
-
-	@if [ ! -x Markdown.pl ]; \
-		then \
-		cp $< $@; \
-	fi;
+		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody,\
+		cp $< $@)
 
 #
 # This builds all the .tmp files used for

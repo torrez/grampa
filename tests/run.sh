@@ -87,15 +87,27 @@ add_post() {
 # markdown_stub <<'EOF' ... EOF
 # Writes an executable Markdown.pl into the sandbox from
 # stdin. The real Markdown.pl is optional and gitignored,
-# so a sandbox never has one and the whole
-# `if [ -x Markdown.pl ]` staging branch would otherwise
-# never be executed by this suite. The stub stands in for
-# it: same calling convention (one filename argument,
-# transformed body on stdout).
+# so a sandbox never has one and the Markdown staging branch
+# would otherwise never be executed by this suite. The stub
+# stands in for it: same calling convention (one filename
+# argument, transformed body on stdout).
+#
+# Re-runs setup after chmod +x: staging is now driven by
+# DETECTED_MARKDOWN, recorded in config.mk at setup time, not
+# by a hardcoded `[ -x Markdown.pl ]` probe in the recipe.
+# sandbox() already ran setup once, before this file existed,
+# so without a second run here config.mk would still say
+# there is no processor and every markdown_stub caller would
+# silently stage verbatim.
 #
 markdown_stub() {
 	cat > Markdown.pl
 	chmod +x Markdown.pl
+	local setup_out
+	setup_out=$(make setup 2>&1)
+	if [ $? -ne 0 ]; then
+		fail "markdown_stub's make setup failed" "$setup_out"
+	fi
 }
 
 #
@@ -385,6 +397,38 @@ EOF
 }
 
 #
+# A detected processor is what stages the body now, not
+# a hardcoded ./Markdown.pl.
+#
+test_detected_processor_stages_the_body() {
+	sandbox detected_stages
+	path_stub cmark 'sed "s/HELLO/RENDERED/" "$f"'
+	make setup >/dev/null 2>&1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "RENDERED"
+}
+
+#
+# With nothing detected the body is copied verbatim --
+# today's behaviour when Markdown.pl is absent.
+#
+test_no_processor_stages_verbatim() {
+	sandbox none_verbatim
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hello *world*
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "Hello *world*"
+}
+
+#
 # The staging branch runs Markdown.pl over the body and
 # nothing else. A title is front matter, so asterisks in
 # it must survive to the page untouched -- if the whole
@@ -465,8 +509,20 @@ EOF
 #
 test_failing_markdown_fails_the_build() {
 	sandbox markdown_failure
+	# Unconditional exit 1 would fail setup's own probe --
+	# which runs this exact stub against a synthetic
+	# "x <i>y</i>" file -- so detection would reject the
+	# candidate and DETECTED_MARKDOWN would come back empty,
+	# and the build below would then stage verbatim and
+	# succeed instead of failing. Passing the probe and only
+	# then failing is what exercises a processor that was
+	# detected and breaks for real, which is the case this
+	# test is about.
 	markdown_stub <<'EOF'
 #!/bin/sh
+case "$(cat "$1")" in
+	*'<i>y</i>'*) cat "$1"; exit 0 ;;
+esac
 echo "Markdown.pl: broken" >&2
 exit 1
 EOF
@@ -508,8 +564,16 @@ EOF
 #
 test_failed_markdown_leaves_no_stale_chunks() {
 	sandbox markdown_stale_chunks
+	# Same reasoning as test_failing_markdown_fails_the_build:
+	# an unconditional exit 1 fails setup's own probe, so
+	# nothing would be detected and this build would succeed
+	# verbatim instead of failing. Pass the probe, fail on the
+	# real post.
 	markdown_stub <<'EOF'
 #!/bin/sh
+case "$(cat "$1")" in
+	*'<i>y</i>'*) cat "$1"; exit 0 ;;
+esac
 exit 1
 EOF
 	# The second delimiter gives the post a section the
@@ -608,21 +672,42 @@ EOF
 }
 
 #
-# The Makefile tests [ -x Markdown.pl ], not [ -f ], so a
-# copy that was never chmod +x is skipped and the body
-# stays verbatim HTML. That is a silent fallback with no
-# warning, which makes it worth pinning: README.md now
-# tells people to check the execute bit precisely because
-# nothing else will tell them. Relax the test to [ -f ] and
-# this fails.
+# A Markdown.pl that was never chmod +x is invisible to
+# setup's detection, so DETECTED_MARKDOWN stays empty and the
+# body stays verbatim HTML. That is a silent fallback with no
+# warning, which makes it worth pinning: README.md now tells
+# people to check the execute bit precisely because nothing
+# else will tell them.
+#
+# Two things independently reject the candidate, so this
+# holds even if one of them is weakened: the case guard
+# `[ -x "$probe" ] || continue` for a slash-bearing candidate,
+# and, redundant with it, the probe's own attempt to run the
+# candidate against its scratch file, whose nonzero exit
+# (EACCES) is caught by `[ $rc -eq 0 ] || continue` either
+# way. Verified directly -- relaxing the case guard alone to
+# [ -f ] does not make this test fail, precisely because that
+# second check still catches it.
+#
+# This does not use markdown_stub: that helper chmod +x's
+# before re-running setup, so if it ran here setup would
+# detect the (then executable) stub and record it in
+# config.mk before the chmod 644 below ever ran -- and a
+# later build would try to exec a now-unreadable
+# ./Markdown.pl and fail loudly instead of falling back,
+# which is a different bug from the one this test is
+# guarding. Writing the file and chmodding it before setup
+# runs is what actually exercises detection rejecting the
+# candidate.
 #
 test_non_executable_markdown_falls_back_to_verbatim() {
 	sandbox markdown_not_executable
-	markdown_stub <<'EOF'
+	cat > Markdown.pl <<'EOF'
 #!/bin/sh
 sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
 EOF
 	chmod 644 Markdown.pl
+	make setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -2611,6 +2696,8 @@ test_ampersands_are_not_mangled
 test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
 test_staged_files_persist
+test_detected_processor_stages_the_body
+test_no_processor_stages_verbatim
 test_markdown_transforms_the_body_not_the_front_matter
 test_markdown_staged_file_has_no_blank_line_after_the_delimiter
 test_failing_markdown_fails_the_build
