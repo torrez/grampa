@@ -219,8 +219,17 @@ four states verified.
 immediately after `-include config.mk`:
 
 ```make
-BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter all build deploy,$(MAKECMDGOALS)),default)
+NONBUILD_GOALS := clean setup test config
+BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter-out $(NONBUILD_GOALS),$(MAKECMDGOALS)),default)
 ```
+
+**Deny-list, not allow-list.** An allow-list of `all build deploy` was tried first and is
+wrong: `make build/index.html` and `make work/2026-01-02-home_x.staged` are perfectly ordinary
+builds that it scores as non-builds, so the upgrade guard and the notice would both go missing
+for exactly the targeted invocations someone debugging would reach for. Verified across ten
+goal forms; the two differ only on those explicit-target cases, and `filter-out` gets them
+right. `make setup all` resolves to `all` and so does fire the guard on an unconverted install
+— consistent with CLAUDE.md's existing advice that `setup` wants its own invocation.
 
 ### 3. The `config` override
 
@@ -267,8 +276,12 @@ breaks outright on a `markdown=` value containing an unbalanced quote — verifi
 `` bash: syntax error near unexpected token `fi' `` naming the *recipe*, so the failure is loud
 but points at grampa rather than at the config line that caused it. And `MARKDOWN_CMD` is lazy
 and shells out through `sed | sed | tail` every time it expands: the two-branch shell form
-expands it three times per staged post, this form once, saving roughly nine forks per changed
-post. This repo counts forks — see the `POST_NAMES` bullet in CLAUDE.md's gotchas.
+expands it three times per staged post (both `[` tests plus the exec site), this form twice
+(the `$(if)` condition plus the exec site). Three forks saved per changed post, not the nine an
+earlier revision of this spec claimed — the condition still costs one expansion, and getting to
+one would need either a `:=` (which breaks the lazy-`config` requirement) or an `$(eval)`
+memoization idiom too clever for this Makefile. This repo counts forks — see the `POST_NAMES`
+bullet in CLAUDE.md's gotchas.
 
 The *exec* site stays interpolated unquoted, which is the settled trust decision. There is no
 path by which a post filename or the blog name reaches that command line: `BAD_CHARS` rejects
@@ -340,6 +353,29 @@ reworded but **closed**, since §4 makes the invalidation real.
 All new tests use stub processors written into a sandbox `bin/` prepended to `PATH`, so
 nothing in the suite depends on what is installed on the machine running it. The existing
 `markdown_stub` helper stays for the `Markdown.pl` cases and gains a sibling for PATH tools.
+
+**The suite must first be made deterministic, or this change makes every existing test
+machine-dependent.** `sandbox()` runs `make setup` with the developer's real `PATH`, so on the
+machine this spec was written on — which now has eight markdown tools installed — detection
+would find `lowdown` and quietly start running *every* test's post body through it. Tests that
+assert on rendered bodies would then pass or fail according to what the developer happened to
+have installed, which is the exact property the paragraph above claims for the new tests and
+which the suite currently gets for free by there being nothing to detect.
+
+Non-executable placeholder files do not solve this: `PATH` lookup skips them, so a real
+`/usr/bin/lowdown` still wins. What does work is an **executable stub that exits 1** — the
+probe runs it, it fails, and the candidate is skipped. So:
+
+- A `hide_markdown_tools()` helper writes an `exit 1` stub into the sandbox's `bin/` for all
+  eleven PATH candidate names, and prepends `bin/` to `PATH`.
+- `sandbox()` calls it **before** `make setup`, so the default state of every test is "no
+  processor found" — today's behavior, host-independent.
+- A test wanting a particular processor overwrites just that one stub with a working one and
+  re-runs `make setup`.
+
+This also makes the ordering tests honest: asserting "`cmark` wins when it is the only one
+installed" is meaningless on a host that has the higher-ranked `lowdown`, and becomes exact
+once the higher rows are stubbed to fail.
 
 **Every markdown test needs a `make setup` re-run after its stub is installed, and the stub
 helpers should do it themselves rather than leaving it to each test.** `sandbox()` runs
