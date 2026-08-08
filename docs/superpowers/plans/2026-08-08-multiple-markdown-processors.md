@@ -85,6 +85,24 @@ hide_markdown_tools() {
 	PATH="$SBOX/bin:$PATH"
 	export PATH
 }
+
+#
+# path_stub <name> <shell-body>
+#
+# Writes an executable stub onto the sandbox PATH, with $f
+# preset to the stub's LAST argument.
+#
+# $f, not $1: every candidate's argv puts flags before the
+# filename -- `cmark --unsafe <file>`, `lowdown --out-no-smarty
+# --html-no-skiphtml --html-no-escapehtml <file>` -- so a stub
+# reading "$1" reads a flag and silently passes on the wrong
+# input. The last argument is the file in every row of the
+# table.
+#
+path_stub() {
+	printf '#!/bin/sh\nfor f; do :; done\n%s\n' "$2" > "$SBOX/bin/$1"
+	chmod +x "$SBOX/bin/$1"
+}
 ```
 
 Then in `sandbox()`, insert the call between the `cd` and the `make setup`:
@@ -145,7 +163,7 @@ git commit -m "Pin markdown detection off in the test sandbox."
 #
 test_setup_records_the_full_argv() {
 	sandbox setup_full_argv
-	printf '#!/bin/sh\ncat "$2"\n' > bin/cmark-gfm; chmod +x bin/cmark-gfm
+	path_stub cmark-gfm 'cat "$f"'
 	make setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark-gfm --unsafe -e table"
 }
@@ -156,10 +174,10 @@ test_setup_records_the_full_argv() {
 #
 test_setup_prefers_the_earlier_candidate() {
 	sandbox setup_order
-	printf '#!/bin/sh\ncat "$1"\n' > bin/cmark; chmod +x bin/cmark
+	path_stub cmark 'cat "$f"'
 	make setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
-	printf '#!/bin/sh\ncat "$4"\n' > bin/lowdown; chmod +x bin/lowdown
+	path_stub lowdown 'cat "$f"'
 	make setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := lowdown --out-no-smarty"
 }
@@ -172,8 +190,8 @@ test_setup_prefers_the_earlier_candidate() {
 #
 test_probe_skips_a_candidate_that_eats_raw_html() {
 	sandbox probe_raw_html
-	printf '#!/bin/sh\nsed "s/<i>y<\\/i>/RAWGONE/" "$4"\n' > bin/lowdown; chmod +x bin/lowdown
-	printf '#!/bin/sh\ncat "$1"\n' > bin/cmark; chmod +x bin/cmark
+	path_stub lowdown 'sed "s|<i>y</i>|RAWGONE|" "$f"'
+	path_stub cmark 'cat "$f"'
 	make setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
@@ -185,7 +203,7 @@ test_probe_skips_a_candidate_that_eats_raw_html() {
 #
 test_probe_skips_a_whole_document_candidate() {
 	sandbox probe_document
-	printf '#!/bin/sh\necho "<html><body>x <i>y</i></body></html>"\n' > bin/lowdown; chmod +x bin/lowdown
+	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
 	make setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 }
@@ -197,8 +215,8 @@ test_probe_skips_a_whole_document_candidate() {
 #
 test_a_truncating_candidate_does_not_poison_the_walk() {
 	sandbox probe_truncate
-	printf '#!/bin/sh\n: > "$4"\nexit 1\n' > bin/lowdown; chmod +x bin/lowdown
-	printf '#!/bin/sh\ncat "$1"\n' > bin/cmark; chmod +x bin/cmark
+	path_stub lowdown ': > "$f"; exit 1'
+	path_stub cmark 'cat "$f"'
 	make setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
 }
@@ -519,7 +537,7 @@ git commit -m "Fail loud on a config.mk that predates markdown detection."
 #
 test_detected_processor_stages_the_body() {
 	sandbox detected_stages
-	printf '#!/bin/sh\nsed "s/HELLO/RENDERED/" "$1"\n' > bin/cmark; chmod +x bin/cmark
+	path_stub cmark 'sed "s/HELLO/RENDERED/" "$f"'
 	make setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
@@ -641,8 +659,8 @@ git commit -m "Stage post bodies with the detected processor."
 #
 test_config_markdown_overrides_detection() {
 	sandbox override_wins
-	printf '#!/bin/sh\nsed "s/HELLO/DETECTED/" "$1"\n' > bin/cmark; chmod +x bin/cmark
-	printf '#!/bin/sh\nsed "s/HELLO/OVERRIDDEN/" "$1"\n' > bin/mytool; chmod +x bin/mytool
+	path_stub cmark 'sed "s/HELLO/DETECTED/" "$f"'
+	path_stub mytool 'sed "s/HELLO/OVERRIDDEN/" "$f"'
 	make setup >/dev/null 2>&1
 	printf 'name=T\nmarkdown=mytool\n' > config
 	add_post 2026-08-06-home_hello.txt <<'EOF'
@@ -660,8 +678,8 @@ EOF
 #
 test_changing_markdown_restages_posts() {
 	sandbox override_restage
-	printf '#!/bin/sh\nsed "s/HELLO/FIRST/" "$1"\n' > bin/one; chmod +x bin/one
-	printf '#!/bin/sh\nsed "s/HELLO/SECOND/" "$1"\n' > bin/two; chmod +x bin/two
+	path_stub one 'sed "s/HELLO/FIRST/" "$f"'
+	path_stub two 'sed "s/HELLO/SECOND/" "$f"'
 	printf 'name=T\nmarkdown=one\n' > config
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
@@ -752,7 +770,7 @@ git commit -m "Document the markdown= override in config.example."
 #
 test_build_announces_the_processor() {
 	sandbox notice_detected
-	printf '#!/bin/sh\ncat "$1"\n' > bin/cmark; chmod +x bin/cmark
+	path_stub cmark 'cat "$f"'
 	make setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
@@ -776,7 +794,7 @@ EOF
 
 test_notice_marks_a_config_override() {
 	sandbox notice_override
-	printf '#!/bin/sh\ncat "$1"\n' > bin/mytool; chmod +x bin/mytool
+	path_stub mytool 'cat "$f"'
 	printf 'name=T\nmarkdown=mytool\n' > config
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
