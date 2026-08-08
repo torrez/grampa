@@ -13,9 +13,51 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TMPROOT="$REPO/tests/tmp"
+ORIGINAL_PATH="$PATH"
 PASSED=0
 FAILED=0
 CURRENT=""
+
+#
+# Executable stubs that exit 1 for every PATH candidate in
+# the Makefile's table, so `make setup` finds nothing and
+# staging stays verbatim -- today's behaviour, and the same
+# on every machine. An `exit 1` stub is what it takes: a
+# non-executable placeholder does not shadow /usr/bin/x,
+# because PATH lookup skips files it cannot execute, and a
+# plain `exit` would be ACCEPTED by the probe.
+#
+# A test wanting a real processor overwrites one stub and
+# re-runs `make setup`.
+#
+hide_markdown_tools() {
+	mkdir -p "$SBOX/bin"
+	for t in lowdown cmark cmark-gfm md2html comrak multimarkdown \
+		markdown smu markdown_py markdown-it pandoc; do
+		printf '#!/bin/sh\nexit 1\n' > "$SBOX/bin/$t"
+		chmod +x "$SBOX/bin/$t"
+	done
+	PATH="$SBOX/bin:$PATH"
+	export PATH
+}
+
+#
+# path_stub <name> <shell-body>
+#
+# Writes an executable stub onto the sandbox PATH, with $f
+# preset to the stub's LAST argument.
+#
+# $f, not $1: every candidate's argv puts flags before the
+# filename -- `cmark --unsafe <file>`, `lowdown --out-no-smarty
+# --html-no-skiphtml --html-no-escapehtml <file>` -- so a stub
+# reading "$1" reads a flag and silently passes on the wrong
+# input. The last argument is the file in every row of the
+# table.
+#
+path_stub() {
+	printf '#!/bin/sh\nfor f; do :; done\n%s\n' "$2" > "$SBOX/bin/$1"
+	chmod +x "$SBOX/bin/$1"
+}
 
 #
 # Fresh sandbox for the test named in $1. cds into it.
@@ -23,11 +65,13 @@ CURRENT=""
 sandbox() {
 	CURRENT="$1"
 	SBOX="$TMPROOT/$1"
+	PATH="$ORIGINAL_PATH"
 	rm -rf "$SBOX"
 	mkdir -p "$SBOX"
 	cp "$REPO/Makefile" "$SBOX/"
 	cp -R "$REPO/.source" "$SBOX/"
 	cd "$SBOX" || exit 1
+	hide_markdown_tools
 	make setup >/dev/null 2>&1
 }
 
@@ -2371,6 +2415,22 @@ EOF
 	assert_file build/index.html
 }
 
+#
+# sandbox() must pin detection off regardless of what the
+# developer has installed, or the whole suite's output
+# depends on their laptop. Non-executable placeholders do
+# not shadow a real tool -- PATH lookup skips them -- so
+# the stubs must be executable and exit non-zero.
+#
+test_sandbox_hides_host_markdown_tools() {
+	sandbox sandbox_hides_tools
+	for t in lowdown cmark cmark-gfm md2html comrak multimarkdown markdown smu markdown_py markdown-it pandoc; do
+		if [ -x "bin/$t" ]; then ok; else fail "expected a stub for $t"; fi
+		if "./bin/$t" /dev/null >/dev/null 2>&1; then fail "stub $t must exit non-zero"; else ok; fi
+	done
+	assert_eq "PATH is prefixed with the sandbox bin" "$SBOX/bin" "${PATH%%:*}"
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -2443,6 +2503,7 @@ test_body_title_line_is_not_the_page_title
 test_clean_works_with_a_file_named_clean
 test_deploy_builds_first
 test_default_build_works_with_a_file_named_all
+test_sandbox_hides_host_markdown_tools
 test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
