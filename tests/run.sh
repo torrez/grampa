@@ -1757,6 +1757,85 @@ test_noop_setup_leaves_config_mk_untouched() {
 
 #
 # ---------------------------------------------------
+# The upgrade guard. An install set up before markdown
+# detection existed has a config.mk holding only
+# DATE_DIALECT. Left alone that install goes mixed --
+# already-staged posts keep rendered bodies while the
+# next edited post stages verbatim -- at exit 0.
+# ---------------------------------------------------
+#
+
+#
+# An install from before markdown detection must fail loud
+# rather than silently staging verbatim.
+#
+test_config_mk_without_detected_markdown_fails_the_build() {
+	sandbox old_config_mk
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build_expect_fail
+	assert_out_grep "config.mk predates markdown detection"
+}
+
+#
+# ...including for an explicit file goal. An allowlist of
+# all/build/deploy leaves this ungated, which reopens the
+# silent rot the guard exists to close.
+#
+test_old_config_mk_fails_for_an_explicit_page_goal() {
+	sandbox old_config_mk_explicit
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build_expect_fail build/2026/08/06/hello.html
+	assert_out_grep "config.mk predates markdown detection"
+}
+
+#
+# The guard must not deadlock: it tells you to run setup,
+# so setup has to parse and run.
+#
+test_setup_recovers_an_old_config_mk() {
+	sandbox old_config_mk_setup
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build setup
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+}
+
+#
+# A probed-empty config.mk is a legitimate state and must
+# not trip the guard. $(origin) is what tells the two
+# apart: undefined vs file, though both expand empty.
+#
+test_probed_empty_config_mk_builds_fine() {
+	sandbox empty_detected
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_file build/2026/08/06/hello.html
+}
+
+#
+# clean must stay usable on an unconverted tree.
+#
+test_clean_works_with_an_old_config_mk() {
+	sandbox old_config_mk_clean
+	printf 'DATE_DIALECT := gnu\n' > config.mk
+	build clean
+}
+
+#
+# ---------------------------------------------------
 # Unreadable templates. A template that is present but
 # cannot be read -- one chmod 000, or a cp/rsync that
 # dropped the mode -- satisfies make's prerequisite, so
@@ -2621,5 +2700,10 @@ test_probe_skips_a_whole_document_candidate
 test_a_truncating_candidate_does_not_poison_the_walk
 test_setup_with_no_processor_records_empty
 test_noop_setup_leaves_config_mk_untouched
+test_config_mk_without_detected_markdown_fails_the_build
+test_old_config_mk_fails_for_an_explicit_page_goal
+test_setup_recovers_an_old_config_mk
+test_probed_empty_config_mk_builds_fine
+test_clean_works_with_an_old_config_mk
 
 pass_fail_summary

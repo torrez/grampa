@@ -15,6 +15,46 @@ SHELL := /bin/bash
 -include config.mk
 
 #
+# Which goals count as "a build is happening". A denylist,
+# not an allowlist: make build/index.html and
+# make work/X.staged are ordinary builds that an allowlist
+# of all/build/deploy scores as non-builds, which would
+# leave the guard below and the notice further down silent
+# for exactly the targeted invocations someone debugging
+# reaches for. A denylist fails loud on an unlisted future
+# goal; an allowlist fails silent. It must be kept in sync
+# with the phony non-build targets.
+#
+NONBUILD_GOALS := clean setup test config
+BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter-out $(NONBUILD_GOALS),$(MAKECMDGOALS)),default)
+
+#
+# An install set up before markdown detection has a
+# config.mk holding only DATE_DIALECT. Nothing else would
+# notice: DATE_DIALECT is set so the loud date check is
+# satisfied, DETECTED_MARKDOWN is merely undefined, and
+# markdown silently turns off -- already-staged posts keep
+# their rendered bodies while the next edited post stages
+# verbatim, so the site goes mixed at exit 0 and deploy
+# ships it.
+#
+# $(origin) is what makes this precise: an old config.mk
+# gives "undefined", while a new one where detection found
+# nothing gives "file", even though both expand empty. So a
+# legitimately processor-less install never trips it.
+#
+# The BUILD_GOAL gate is load-bearing, not symmetry with
+# the notice below. Without it this deadlocks: the error
+# says to run `make setup`, and make setup parses this same
+# Makefile and dies here before its recipe can rewrite
+# config.mk -- the same trap already documented for
+# BAD_POST_DATES and date_select.
+#
+ifeq ($(if $(BUILD_GOAL),$(if $(DATE_DIALECT),$(filter undefined,$(origin DETECTED_MARKDOWN)))),undefined)
+$(error grampa: config.mk predates markdown detection -- run `make setup`)
+endif
+
+#
 # The markdown processors grampa knows how to drive, in
 # preference order: tables first, runtime-free first, and
 # Markdown.pl last. Field 1 is what setup probes, field 2
