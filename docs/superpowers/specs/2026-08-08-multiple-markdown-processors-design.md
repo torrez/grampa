@@ -133,11 +133,21 @@ gets `markdown -f +tables` recorded and then **fails every build**, with a worki
 one row down. So:
 
 ```sh
-printf 'x <i>y</i>\n' > "$$probefile"
-out=$$($$cmd "$$probefile" 2>/dev/null </dev/null) || continue
+probefile=$$(mktemp); printf 'x <i>y</i>\n' > "$$probefile"   # inside the loop, per candidate
+out=$$($$cmd "$$probefile" 2>/dev/null </dev/null); rc=$$?
+rm -f "$$probefile"
+[ $$rc -eq 0 ] || continue
 case "$$out" in *'<html'*|*'<HTML'*|*'DOCTYPE'*) continue;; esac
 case "$$out" in *'<i>'*) ;; *) continue;; esac
 ```
+
+**The probe file is written fresh for each candidate, not once before the walk.** A candidate
+that treats its filename argument as an *output* — a squatting tool, or a buggy in-place
+converter — truncates a shared probe file, and then every candidate behind it fails the `<i>`
+check on empty input. Reproduced with a truncating `lowdown` stub: all seven working processors
+behind it were skipped, detection ended empty, and bodies went out verbatim at exit 0. That is
+a case where skipping-to-the-next-candidate degrades into exactly the silent wrong output this
+design is trying to remove, and rewriting the file per candidate costs nothing.
 
 Exit zero means the candidate runs; the `case` is what holds it to the *fragment* half of the
 contract. A candidate that emits a complete `<html><head>` document exits 0 perfectly happily,
@@ -177,7 +187,9 @@ would make every `make setup` re-stage every post. The current recipe's uncondit
 
 `config.mk.new` goes in `.gitignore` beside `/config.mk`. `setup` is `.PHONY`, so
 `.DELETE_ON_ERROR` will not reap the temp if setup is killed mid-write, and an untracked
-temp showing up in `git status` is exactly the kind of litter this repo doesn't leave.
+temp showing up in `git status` is exactly the kind of litter this repo doesn't leave. Two
+concurrent `make setup` runs can race on that fixed name and the loser's `mv` can fail on
+ENOENT — rare, loud, and self-healing on a re-run, so it is noted rather than locked.
 
 The dialect probe, the candidate walk, and the `cmp`/`mv` are one `; \`-continued logical
 line: each recipe line is its own shell, so `dialect` and the walk's winner do not otherwise
@@ -212,8 +224,14 @@ deadlock, and this was verified rather than reasoned about: the error instructs 
 and dies before its recipe can rewrite `config.mk`. That is the identical trap CLAUDE.md
 documents for `BAD_POST_DATES` and `date_select` — can't build without it, can't setup to make
 it — arriving through a different door. Gated on the goal, `make setup` parses clean and
-bootstraps, `make clean` stays quiet, and a build on an unconverted install fails loud. All
-four states verified.
+bootstraps, `make clean` stays quiet, and a build on an unconverted install fails loud.
+
+**A fifth state, for completeness, since this repo documents this family obsessively:**
+`make setup all` on an unconverted install dies at the parse-time error before `setup`'s recipe
+runs, because the goal list still contains `all`. It is not a deadlock — `make setup` alone
+bootstraps, and that is exactly what the message tells you to run — and it is consistent with
+CLAUDE.md's existing "setup wants its own invocation" doctrine and with the documented
+`make -j setup all` failure. All five states verified.
 
 `BUILD_GOAL` is therefore shared by the guard and §5's notice and should be defined once,
 immediately after `-include config.mk`:
@@ -243,8 +261,12 @@ Read lazily, exactly as the other two are and for the same first-ever-run reason
 
 ```make
 CONFIG_MARKDOWN = $(shell sed -n 's/^markdown=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
-MARKDOWN_CMD = $(if $(strip $(CONFIG_MARKDOWN)),$(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
+MARKDOWN_CMD = $(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
 ```
+
+`$(or)` rather than `$(if)`, because it short-circuits and names `CONFIG_MARKDOWN` once instead
+of twice — measured at 5 shell-outs versus 9 for a one-post rebuild with `markdown=` set. It
+has been in GNU make since 3.81, so it costs no portability.
 
 The override has to live in `config` and not in `config.mk`: setup rewrites `config.mk`
 unconditionally by design, so a hand-edit there would evaporate at the next `make setup`.
@@ -271,17 +293,26 @@ choosing it at run time:
 $(if $(strip $(MARKDOWN_CMD)),<split, run $(MARKDOWN_CMD), reassemble>,cp $< $@)
 ```
 
-Two reasons, and the second is the one that matters. A shell `[ -n "$(MARKDOWN_CMD)" ]` test
-breaks outright on a `markdown=` value containing an unbalanced quote — verified, it produces
-`` bash: syntax error near unexpected token `fi' `` naming the *recipe*, so the failure is loud
-but points at grampa rather than at the config line that caused it. And `MARKDOWN_CMD` is lazy
+Two reasons. A shell `[ -n "$(MARKDOWN_CMD)" ]` test breaks outright on a `markdown=` value
+containing an unbalanced quote — verified, `bash: unexpected EOF while looking for matching '"'`
+naming the *recipe* rather than the config line. That is a weaker argument than an earlier
+revision of this spec claimed: §5's notice prints the offending value with `(from config)`
+immediately above the error, so the diagnosis is available either way. The failure is loud in
+both forms and nothing downstream runs. And `MARKDOWN_CMD` is lazy
 and shells out through `sed | sed | tail` every time it expands: the two-branch shell form
 expands it three times per staged post (both `[` tests plus the exec site), this form twice
-(the `$(if)` condition plus the exec site). Three forks saved per changed post, not the nine an
-earlier revision of this spec claimed — the condition still costs one expansion, and getting to
-one would need either a `:=` (which breaks the lazy-`config` requirement) or an `$(eval)`
-memoization idiom too clever for this Makefile. This repo counts forks — see the `POST_NAMES`
-bullet in CLAUDE.md's gotchas.
+(the `$(if)` condition plus the exec site), and with `$(or)` in §3 each of those expansions
+costs one shell-out rather than two. Measured: 5 shell-outs against 9 for a one-post rebuild
+with `markdown=` set. Not the "nine saved, down to one" an earlier revision of this spec
+claimed. This repo counts forks — see the `POST_NAMES` bullet in CLAUDE.md's gotchas.
+
+**Do not reach for the `$(eval)` memoization idiom to get it to one.** It is the obvious next
+move for anyone who reads that bullet, and it introduces a real bug rather than a saving:
+§5's notice forces the first expansion at *parse* time, which on a first-ever run is before
+`config` exists, so the memo freezes the empty answer and the whole first build stages with the
+wrong processor. That converts §5's stale-*notice* wrinkle — cosmetic, self-correcting — into
+stale *behavior*. The two remaining expansions are the price of `config` being read lazily, and
+that is a settled requirement.
 
 The *exec* site stays interpolated unquoted, which is the settled trust decision. There is no
 path by which a post filename or the blog name reaches that command line: `BAD_CHARS` rejects
@@ -319,10 +350,14 @@ So: a parse-time `$(info)`, which runs before any recipe and is therefore genuin
 serial or `-j`.
 
 ```
-grampa: markdown: lowdown
-grampa: markdown: cmark-gfm -e table -e footnotes (from config)
+grampa: markdown: lowdown --out-no-smarty --html-no-skiphtml --html-no-escapehtml
+grampa: markdown: cmark-gfm --unsafe -e table -e footnotes (from config)
 grampa: markdown: none -- post bodies stay HTML
 ```
+
+The lines are long because §2 records the full argv, and that is the right trade: the flags are
+the part that silently changes output, so a notice naming only `lowdown` would hide exactly
+what a reader needs when a build starts eating iframes.
 
 Gated twice. On `$(DATE_DIALECT)` being non-empty, so an unconfigured tree leads with the
 `run make setup first` error instead of a markdown note. And on `$(BUILD_GOAL)` from §2a — the
@@ -443,9 +478,12 @@ of the family finding above rather than from documentation, which makes them bet
 than they were but still unexecuted. They stay marked unverified.
 
 The probe reduces the blast radius of a wrong flag from "every build fails" or "output is
-silently mangled" to "that candidate is skipped and a visible different one wins". It does not
-make a wrong flag correct: a switch that is accepted yet does nothing — a tables flag that
-silently isn't — still passes.
+silently mangled" to "that candidate is skipped and a visible different one wins". Three limits
+are known and accepted: a switch that is accepted yet does nothing — a tables flag that silently
+isn't — still passes; a `cat`-like passthrough squatting on a candidate name also passes, though
+its output then equals the verbatim-HTML fallback, so the harm is nil; and a candidate that
+reads `/dev/tty` directly would hang `make setup` despite the `</dev/null`, with no portable fix
+available since macOS ships no `timeout(1)`.
 
 A comment above the table warns that a future candidate's argv must not contain `#` or `$`,
 which would truncate or misparse the `config.mk` line it gets written into. None of the twelve
