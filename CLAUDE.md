@@ -14,7 +14,7 @@ make setup     # one-time: create build/ work/ posts/ templates/, copy templates
 make           # incremental build into build/  (= `make config build`)
 make clean     # wipe build/ and work/
 make build     # the build half of the default target (see below — it no longer skips anything)
-make deploy    # runs ./deploy.sh build/
+make deploy    # builds, then runs ./deploy.sh build/
 make test      # run tests/run.sh in throwaway sandboxes
 ```
 
@@ -22,6 +22,14 @@ Builds are incremental: `make` only reprocesses posts whose `.txt` changed, plus
 downstream of a touched template. `make -j` is safe. Use `make clean` when you want to be
 sure nothing stale survives — e.g. after deleting a post, whose old HTML is not tracked by
 anything and will otherwise linger in `build/`.
+
+`deploy` depends on `all`, so it builds before it ships. It used to not, and
+`make clean && make deploy` therefore handed `deploy.sh` an empty `build/` at exit 0 with no
+warning — which, given the example `deploy.sh` is an `rsync`, is one `--delete` away from
+unpublishing the site. The cost of the prerequisite is one quiet no-op build. Note it builds
+first but does not *set up* first: a directory where `make setup` has never run still fails on
+the missing templates. And since `deploy` is no longer a leaf target, hand-edits to `build/`
+are rebuilt over — run `./deploy.sh build/` yourself to ship exactly what is on disk.
 
 `make build` is what `make` runs after `config`; it is not a way to skip the config check.
 `config` is a prerequisite of every page rule, so `make build` recreates a missing `config`

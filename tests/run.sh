@@ -2177,6 +2177,38 @@ EOF
 	assert_no_file work/2026-08-06-home_hello.tmp
 }
 
+#
+# make clean && make deploy handed deploy.sh an empty
+# build/ -- 0 entries, exit 0, no warning. deploy.sh is
+# user-supplied and the example is an rsync; a --delete in
+# it turns that sequence into "unpublish the site".
+#
+# The stub records what it was handed rather than asserting
+# inside itself, so a failure shows the real listing. make's
+# own output goes to files rather than /dev/null for the
+# same reason: if the green path ever regresses before
+# deploy.sh runs, an empty deployed.txt and nothing else is
+# a FAIL nobody can diagnose.
+#
+test_deploy_builds_first() {
+	sandbox deploy_builds_first
+	add_post '2026-01-02-home_d.txt' <<'EOF'
+title: Deployed
+-----------------------------------
+<p>DEPLOY BODY</p>
+EOF
+	cat > deploy.sh <<'EOF'
+#!/bin/sh
+ls "$1" > deployed.txt
+EOF
+	chmod +x deploy.sh
+	build || return
+	make clean > deploy-clean.out 2>&1
+	make deploy > deploy-make.out 2>&1
+	assert_file deployed.txt
+	assert_grep deployed.txt 'index.html'
+}
+
 test_default_build_works_with_a_file_named_all() {
 	sandbox file_named_all
 	add_post 2026-08-06-home_hello.txt <<'EOF'
@@ -2259,6 +2291,7 @@ test_deleted_post_template_fails_the_build
 test_deleted_rss_item_template_fails_the_build
 test_body_title_line_is_not_the_page_title
 test_clean_works_with_a_file_named_clean
+test_deploy_builds_first
 test_default_build_works_with_a_file_named_all
 test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected

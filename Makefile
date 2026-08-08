@@ -1211,8 +1211,29 @@ setup: config
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
 
+#
+# deploy: all, and not a bare deploy, because
+# make clean && make deploy handed deploy.sh an empty
+# build/ at exit 0 with no warning -- and deploy.sh is
+# user-supplied, with an rsync in the example. A --delete
+# in it makes that sequence unpublish the site. The cost is
+# one incremental no-op build, which is quiet and measured
+# in tenths of a second.
+#
+# It builds first; it does not set up first. A directory
+# where make setup has never run still fails on the missing
+# templates, which is unchanged and correct.
+#
+# Two consequences worth knowing. deploy is no longer a leaf
+# target, so hand-edits to build/ are rebuilt over -- run
+# ./deploy.sh build/ directly if that is ever what you want.
+# And on a fresh install make deploy now creates config and
+# builds rather than shipping nothing.
+#
+# Guarded by test_deploy_builds_first.
+#
 .PHONY: deploy
-deploy:
+deploy: all
 	@./deploy.sh $(BUILD_DIR)
 
 #

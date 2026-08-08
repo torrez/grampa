@@ -492,6 +492,30 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   is not restaged when `Markdown.pl` turns up. The README now says to
   `make clean && make` after fixing the bit.
 
+- **`make deploy` does not depend on `build` — DONE**, exactly as predicted and for the price
+  predicted: one line, one incremental no-op build. Upgraded from **read** to **verified** on
+  the way in — a recording stub `deploy.sh` confirmed it was handed a `build/` with **0
+  entries** and no warning.
+
+  The item's own counter-argument, that the current form "is more honest about doing exactly
+  what it says", deserves an answer rather than a silent overrule. It loses to what the
+  dishonesty costs: `deploy.sh` is user-supplied and the shipped example is an `rsync`, so one
+  `--delete` turns `make clean && make deploy` into unpublishing the site. Honesty about doing
+  one thing is worth less than not doing that.
+
+  Two consequences recorded rather than discovered later. `deploy` builds first but does not
+  *set up* first — a directory where `make setup` has never run still fails on the missing
+  templates, unchanged and correct. And `deploy` is no longer a leaf target, so hand-edits to
+  `build/` are rebuilt over; `./deploy.sh build/` run directly is the escape hatch, and
+  CLAUDE.md says so.
+
+  Guarded by `test_deploy_builds_first`, watched failing first — `deployed.txt` present at
+  **0 bytes**, which is the empty listing rather than a missing stub, and worth checking
+  because those two failures look identical in the assertion. Verified also under `-j8` and on
+  a fresh install with `config` and `build/` removed.
+
+  Original finding follows.
+
 - **`make deploy` does not depend on `build`** — `Makefile:708-710`, **read**. So
   `make clean && make deploy` ships an empty directory. `deploy: all` would make it safe at
   the cost of an incremental no-op build. Arguably the current form is more honest about
@@ -873,7 +897,9 @@ staleness to actually work as advice.
    or moving the test into the date check's shell stage. Deliberately left: a control byte in a
    filename takes effort to produce, and it is not the class of mistake — a mistyped date —
    that motivated these checks.
-5. **`make deploy` does not depend on `build`** — arguably more honest as it is.
+5. ~~**`make deploy` does not depend on `build`** — arguably more honest as it is.~~ **DONE**,
+   one line. The "more honest" reading lost to the cost: the example `deploy.sh` is an `rsync`,
+   so an empty `build/` plus one `--delete` unpublishes the site.
 6. **The residual half of the placeholder fix** — a *title* containing a literal `{{body}}`
    or `{{main}}`, or a `url=` containing `{{title}}`; see the full entry above for all four
    reproduced cases. Silently wrong output on a strange post, same as item 1, but this one is
