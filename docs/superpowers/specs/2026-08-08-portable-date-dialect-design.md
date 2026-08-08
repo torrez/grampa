@@ -152,12 +152,38 @@ generated `config.mk`) writes `DATE_DIALECT := bsd` → builds resume, byte-iden
   two tests:
   - `test_setup_writes_the_host_date_dialect` — after `make setup`, `config.mk` exists and its
     `DATE_DIALECT` is one of `bsd`/`gnu` and matches a direct probe of the host's `date`.
-  - `test_build_without_config_mk_fails` — remove `config.mk` after setup, add a dated post,
-    build, and assert non-zero exit and the "run `make setup` first" message.
+  - `test_build_without_config_mk_fails` — remove `config.mk` after setup, add an **ordinary
+    1st–28th-dated post** (so `SUSPECT_POST_DATES` is empty and the failure comes at recipe
+    time, the representative case), build, and assert non-zero exit and the "run `make setup`
+    first" message. A month-end post would fail earlier at parse time on the same message; the
+    test pins the recipe-time path deliberately rather than leaving which path fires incidental.
+  - `test_migration_reports_error_when_rm_fails` (an **existing** BSD-only test) must be guarded
+    to skip cleanly where its `chflags uchg` immutability trick is unavailable — see the ripple
+    item below. Without the guard `make test` cannot be green on the GNU target, which defeats
+    the port's own premise.
 - **`CLAUDE.md`:** rewrite the **BSD-only** gotcha into a "portable, dialect chosen at `make
   setup`" note; add `config.mk` to the Layout table as a per-install generated file (no
   `.source` twin); document the parse-vs-recipe timing of the unconfigured-build guard; update
-  the `date_args`→`date_select` helper description and the helper list.
+  the `date_args`→`date_select` helper description and the helper list. **Also correct the
+  "Serial `make setup all` is fine" claim in the setup section:** after this change it is fine
+  only when `config.mk` already exists or `posts/` is empty. On a tree that already has dated
+  posts, `make setup all` in one process fails — `-include config.mk` runs once at parse time
+  (empty on a virgin tree), setup's recipe then writes `config.mk`, but make does not re-include
+  a fileless-rule include mid-run, so the `build` half of the *same* process still has
+  `DATE_DIALECT` empty and fires the `$(error)` (recipe time for an ordinary post, parse time if
+  a month-end suspect is present — in which case `config.mk` is never even written). A second
+  `make` succeeds. This is loud, self-correcting, and consistent with the existing "setup wants
+  its own invocation" guidance — the same lazy-parse-vs-recipe split already documented for
+  `config`/`FEED_PAGES`, reaching an `-include` this time — but it must be written down rather
+  than left contradicting the current "is fine" sentence.
+- **`tests/run.sh` — guard the BSD-only migration test:** `test_migration_reports_error_when_rm_fails`
+  makes a file un-removable with `chflags uchg` (BSD/macOS only). On GNU that is a no-op or
+  `command not found`, so `rm` succeeds and the test's 4 assertions fail — 4 red on the very
+  platform this branch ports *to*. Guard the test to detect immutability support (e.g. `command
+  -v chflags`) and skip with a printed note where it is unavailable, so `make test` is green on
+  both platforms. Pre-existing and unrelated to `date`, but a port whose acceptance criterion is
+  "`make test` passes on Linux" cannot leave it red; it is in scope as the code a good developer
+  fixes in the file they are already porting.
 
 ### 5. One behavioral difference: documented, not fixed
 
@@ -178,8 +204,16 @@ documented in CLAUDE.md's dialect note, not blocked.
 
 ## Test plan
 
-Run `make test` on this GNU host; the suite must stay green, now exercising the `gnu` twin
-end-to-end. The two new tests above cover detection and the unconfigured-build failure. The
+Run `make test` on this GNU host. It must reach **green once the `chflags` migration test is
+guarded** (§4) — the date port itself fixes the 7 previously-BSD-only failures unrelated to
+`chflags`; without the guard the suite stays red at 4 (`test_migration_reports_error_when_rm_fails`),
+which is why that guard is in scope rather than deferred. The suite then exercises the `gnu`
+twin end-to-end. The two new tests above cover detection and the unconfigured-build failure. The
 existing date-rendering, RSS-`pubDate`, and parse-time date-check tests re-verify that legal
-dates render and illegal ones are rejected under the detected dialect. `tools/probe-platform.sh`
-remains the artifact for confirming a *new* target platform before trusting it.
+dates render and illegal ones are rejected under the detected dialect.
+
+A live run of the **`bsd` twin** cannot happen on this GNU host — its `date` string is today's
+production BSD args plus the already-in-production `-v0H -v0M -v0S` fold, so it is output-preserving
+by the reasoning verified for the `gnu` twin, but it wants a BSD/macOS smoke test at the
+branch-review checkpoint before merge. `tools/probe-platform.sh` remains the artifact for
+confirming a *new* target platform before trusting it.
