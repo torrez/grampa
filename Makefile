@@ -1030,7 +1030,8 @@ endef
 # Splits a post into its front matter and its body, one
 # file each, for the staging step below. This is the only
 # awk program here that writes files rather than stdout,
-# because Markdown.pl has to be handed the body alone and
+# because the markdown processor has to be handed the body
+# alone and
 # the pieces glued back together afterwards.
 #
 # It shares nothing with PARSE_FRONT_MATTER even though the
@@ -1047,7 +1048,7 @@ endef
 # The END block is load-bearing, and in both directions.
 # awk creates a redirect's file on first write, so a post
 # with no body would leave no body file at all and
-# Markdown.pl would be handed a missing argument, while a
+# the processor would be handed a missing argument, while a
 # post whose delimiter is on line 1 would leave no head file
 # and the reassembly cat would fail on it. Both were
 # confirmed by deleting this block: exit 2 either way.
@@ -1264,7 +1265,8 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 
 #
 # The staging step: split the front matter off the body,
-# run just the body through Markdown.pl, then put it back
+# run just the body through the markdown processor, then
+# put it back
 # together. Every intermediate is named after the post so
 # that make -j can't have two posts clobber each other.
 #
@@ -1272,13 +1274,13 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # below because the RSS items need the same rendered body
 # *and* the post's individual fields -- title, body, date
 # -- which the .tmp fragment has already dissolved into
-# HTML. Kept by .SECONDARY, so Markdown.pl runs once per
+# HTML. Kept by .SECONDARY, so the processor runs once per
 # post rather than once per consumer.
 #
 # The steps below are chained with && rather than ;, and
 # that is load-bearing. With ; the compound's exit status
 # is the last command's -- rm -f, which essentially always
-# succeeds -- so a failing Markdown.pl was invisible: make
+# succeeds -- so a failing processor was invisible: make
 # exited 0, .DELETE_ON_ERROR never fired, and a .staged
 # file holding front matter and nothing else was trusted
 # by every downstream consumer, publishing a fully
@@ -1309,7 +1311,7 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # truncated before they are read -- awk's `print >`
 # truncates on first write, the END block's printf truncates
 # even when nothing else is written, and the shell's `>`
-# truncates .mdbody before Markdown.pl starts -- so no stale
+# truncates .mdbody before the processor starts -- so no stale
 # byte survives into $@. Verified by neutering this rm: the
 # failing-stub test and the parallel test both still pass.
 # It stays because a persistently failing install should not
@@ -1327,6 +1329,23 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES)
 # first` error. Wrapped in $(wildcard), the prerequisite is
 # simply absent when the file is.
 #
+# The parentheses around $(MARKDOWN_CMD) are not style. This
+# whole recipe is ONE shell line, so a `#` anywhere in a
+# markdown= value comments out everything after it --
+# including the `> .mdbody` redirect and the `&& cat ... >
+# $@` that follows. With a processor that succeeds when
+# handed no file (cat, and every markdown CLI that reads
+# stdin), the line then exits 0 having never written $@: on
+# a first build that surfaces as an awk fatal one rule
+# later, but on a REBUILD the previous .staged survives with
+# its old mtime, so make considers the page up to date and
+# the build reports success while silently dropping the
+# author's edit -- which make deploy then ships. Verified,
+# exit 0 and all. The `)` is swallowed by that same comment,
+# which turns the whole thing into a shell syntax error and
+# makes the build fail loud instead. Guarded by
+# test_hash_in_markdown_value_fails_the_rebuild.
+#
 $(WORK_DIR)%.staged: posts/%.txt config $(wildcard config.mk)
 	@mkdir -p $(WORK_DIR)
 
@@ -1334,7 +1353,7 @@ $(WORK_DIR)%.staged: posts/%.txt config $(wildcard config.mk)
 		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody && \
 		awk -v head=$(WORK_DIR)$*.head -v body=$(WORK_DIR)$*.body \
 			"$$SPLIT_STAGED" $< && \
-		$(MARKDOWN_CMD) $(WORK_DIR)$*.body > $(WORK_DIR)$*.mdbody && \
+		( $(MARKDOWN_CMD) $(WORK_DIR)$*.body ) > $(WORK_DIR)$*.mdbody && \
 		cat $(WORK_DIR)$*.head .source/splitter.txt $(WORK_DIR)$*.mdbody > $@ && \
 		rm -f $(WORK_DIR)$*.head $(WORK_DIR)$*.body $(WORK_DIR)$*.mdbody,\
 		cp $< $@)

@@ -154,7 +154,8 @@ lists a ready-made line for each supported processor.
 Blank lines and lines starting with `#` are ignored, and if you set a key twice the last one
 wins. A `#` *after* `markdown=` is not a comment, though — the rest of the line is part of the
 command, and the shell will treat the `#` as starting a comment of its own, which truncates
-the build step and produces a confusing error about a missing file in `work/`.
+the build step. That is caught deliberately and fails the build with a shell syntax error, so
+don't be alarmed by the wording: move the `#` and whatever follows it out of the value.
 
 These are the only three keys anything reads.
 

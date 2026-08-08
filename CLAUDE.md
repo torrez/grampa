@@ -179,11 +179,22 @@ so an override always beats detection, and a name that doesn't exist fails the b
 exit 127 rather than falling back to verbatim.
 
 A `#` in the value does not start a *config* comment — the rest of the line goes to the shell,
-which has its own opinion about `#`, and the failure is one of action at a distance.
-`markdown=cat #--flag` comments out the remainder of the `.staged` recipe line, redirect and
-`&&` chain included, so the recipe **exits 0 without creating its target** and the build dies
-one rule later at `awk: fatal: cannot open file 'work/….staged'` — a missing-file error naming
-a file whose own rule reported success. Verified.
+which has its own opinion about `#`. The whole `.staged` recipe is **one shell line**, so
+`markdown=cat #--flag` comments out the `> .mdbody` redirect and the `&& cat … > $@` that
+follows it, and the recipe exits 0 having never written its target. It is caught now, and the
+thing that catches it is the parentheses around `$(MARKDOWN_CMD)` in that recipe: the closing
+`)` is swallowed by the same comment, which makes it a shell syntax error and fails the build.
+
+That guard is there because the uncaught version was the worst failure this program has had.
+On a *first* build it at least died one rule later, at `awk: fatal: cannot open file
+'work/….staged'` — a missing-file error naming a file whose own rule had reported success. But
+on a **rebuild** the previous `.staged` was still on disk with its old mtime, so make judged
+every downstream page up to date, printed `Build completed.`, and exited **0** while silently
+dropping the edit the author had just made — and `make deploy` ships exactly that. It needs a
+processor that succeeds when handed no file, which is to say `cat` and every markdown CLI that
+falls back to stdin. Both halves verified before and after the fix, and guarded by
+`test_hash_in_markdown_value_fails_the_rebuild`, whose stub must exit 0 on no arguments or the
+test passes against the unfixed Makefile — checked by mutation.
 
 These three are the only keys anything reads.
 
@@ -608,7 +619,11 @@ more than a format-string swap.
   not an allowlist: `make build/index.html` and `make work/X.staged` are ordinary builds that
   an allowlist of `all`/`build`/`deploy` would score as non-builds, leaving both the guard and
   the notice silent for exactly the targeted invocations someone debugging reaches for. A
-  denylist fails loud on an unlisted future goal; an allowlist fails silent.
+  denylist fails loud on an unlisted future goal; an allowlist fails silent. The combined
+  `make setup all` on such an install is the fifth state of the family documented at the top
+  of this file: it dies at this guard, during the parse, before `setup`'s recipe can rewrite
+  `config.mk` — so the answer there is the same as everywhere else, `make setup` on its own
+  and then `make`. Verified.
 - **`$(wildcard config.mk)` in `%.staged`'s prerequisites is the fifth member of the
   parse-time-vs-recipe-time family.** `config.mk` has no rule that builds it, so a bare
   prerequisite makes an unconfigured tree die with make's own

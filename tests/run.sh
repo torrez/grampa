@@ -518,6 +518,95 @@ EOF
 }
 
 #
+# A # in a markdown= value comments out the rest of the
+# staging recipe -- it is all ONE shell line -- taking the
+# redirect and the && chain with it. The dangerous case is
+# not the first build but the REBUILD: with a processor
+# that succeeds given no file (cat, and every markdown CLI
+# that reads stdin), the truncated line exits 0 without
+# writing .staged, the previous .staged survives with its
+# old mtime, and make calls the page up to date. That
+# shipped the author's edit into the bin at exit 0 with
+# "Build completed." on stdout. The parens around
+# $(MARKDOWN_CMD) turn it into a shell syntax error.
+#
+test_hash_in_markdown_value_fails_the_rebuild() {
+	sandbox hash_value_rebuild
+	# Exits 0 when handed no file at all, which is what
+	# every stdin-reading markdown CLI does and what makes
+	# the truncated line silent rather than loud. A stub
+	# that errored on no arguments would fail the build for
+	# the wrong reason and pass this test even unfixed --
+	# checked by mutation.
+	path_stub mytool '[ $# -gt 0 ] || exit 0; cat "$f"'
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "HELLO"
+	printf 'name=T\nmarkdown=mytool #note\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+EDITED
+EOF
+	build_expect_fail
+	assert_not_grep build/2026/08/06/hello.html "EDITED"
+}
+
+#
+# A processor detected at setup and uninstalled afterwards
+# must fail loud, not fall back to verbatim -- otherwise a
+# site quietly goes half-rendered. Markdown.pl is the
+# candidate to test it with: it is probed by path rather
+# than through PATH, so deleting it is host-independent in
+# a way that removing a PATH stub is not.
+#
+test_uninstalled_detected_processor_fails_the_build() {
+	sandbox detected_uninstalled
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's/HELLO/RENDERED/' "$1"
+EOF
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+HELLO
+EOF
+	build
+	assert_grep build/2026/08/06/hello.html "RENDERED"
+	rm -f Markdown.pl
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+EDITED
+EOF
+	build_expect_fail
+	assert_out_grep "Error 127"
+}
+
+#
+# hide_markdown_tools' list is a hand-copy of the table's
+# field 1. A thirteenth candidate added to the Makefile
+# without updating it would silently restore the host
+# dependence the helper exists to remove -- invisible on
+# any machine that does not have the new tool. So derive
+# the expected list from the Makefile and compare.
+#
+test_stub_list_matches_the_candidate_table() {
+	sandbox stub_list_sync
+	local expected actual
+	expected=$(sed -n '/^define MARKDOWN_CANDIDATES/,/^endef/p' Makefile \
+		| sed -n 's/|.*//p' | grep -v / | sort | tr '\n' ' ')
+	actual=$(ls bin | sort | tr '\n' ' ')
+	assert_eq "sandbox stubs cover every PATH candidate in the table" \
+		"$expected" "$actual"
+}
+
+#
 # The notice says which processor a build is using, once,
 # before any page is built.
 #
@@ -543,6 +632,11 @@ EOF
 	# parse and print the notice twice, silently.
 	assert_eq "notice printed exactly once" 1 \
 		"$(printf '%s\n' "$BUILD_OUT" | grep -c 'grampa: markdown:')"
+	# Position is the whole reason it is a parse-time
+	# $(info) and not a line in build's recipe.
+	assert_eq "notice is the first line of the build" \
+		"grampa: markdown: cmark --unsafe" \
+		"$(printf '%s\n' "$BUILD_OUT" | head -1)"
 }
 
 test_build_announces_no_processor() {
@@ -2859,6 +2953,9 @@ test_config_markdown_overrides_detection
 test_changing_markdown_restages_posts
 test_missing_override_tool_fails_the_build
 test_multi_word_override_keeps_its_flags
+test_hash_in_markdown_value_fails_the_rebuild
+test_uninstalled_detected_processor_fails_the_build
+test_stub_list_matches_the_candidate_table
 test_build_announces_the_processor
 test_build_announces_no_processor
 test_notice_marks_a_config_override
