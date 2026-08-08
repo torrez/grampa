@@ -284,14 +284,59 @@ export SITE_URL
 # markdown= set.
 #
 # Do NOT memoize this with the $(eval) idiom to save the
-# remaining expansions. The build notice forces the first
-# expansion at parse time, which on a first-ever run is
-# before config exists, so the memo would freeze the empty
-# answer and stage the whole first build with the wrong
-# processor.
+# remaining expansions. A memo freezes whatever the first
+# expansion saw, and what this reads -- config -- is a file
+# another rule in this same build creates. The notice below
+# does snapshot at parse time, but into its own variables
+# and only to print; nothing that stages a post reads them.
 #
 CONFIG_MARKDOWN = $(shell sed -n 's/^markdown=[[:space:]]*//p' config 2>/dev/null | sed 's/[[:space:]]*$$//' | tail -1)
 MARKDOWN_CMD = $(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
+
+#
+# Announce the processor once, at the top of a build.
+#
+# A parse-time $(info) rather than a line in build's
+# recipe, because build's recipe runs AFTER its
+# prerequisites -- the note would land below every page --
+# and because a phony prerequisite ordered first is not
+# ordering you can rely on under -j. Parse time runs before
+# any recipe, serial or parallel.
+#
+# Gated on DATE_DIALECT so an unconfigured tree leads with
+# the "run make setup first" error rather than a markdown
+# note, and on BUILD_GOAL so clean/setup/test stay quiet.
+#
+# Known wrinkle, same family as the url=/FEED_PAGES gotcha:
+# reading markdown= here reads config at parse time, so on
+# a first-ever run -- where config does not exist yet --
+# this line names the detected tool even if the config
+# about to be copied into place sets markdown=. It affects
+# only the printed line; the staging recipe expands
+# MARKDOWN_CMD lazily at recipe time and gets the right
+# answer. Verified end to end. Self-corrects on the next
+# make.
+#
+# It prints under -n, -q and -s too, since a parse-time
+# $(info) runs before make decides what it is going to do.
+# That is the one place a script parsing make's stdout
+# would see it.
+#
+# The gate is an ifneq around a := snapshot rather than one
+# $(if) wrapping everything, purely to shell out once. A
+# single $(if) naming MARKDOWN_CMD and CONFIG_MARKDOWN ran
+# the config sed THREE times per parse -- once for $(or)'s
+# condition, once for the value, once for the suffix test
+# -- measured at +48ms on a 60-post no-op rebuild. The
+# snapshot is safe to := precisely because the note is
+# documented as a parse-time reading; MARKDOWN_CMD itself
+# stays lazy. Both names are used only by the line below.
+#
+ifneq ($(and $(BUILD_GOAL),$(DATE_DIALECT)),)
+NOTICE_CONFIG_CMD := $(strip $(CONFIG_MARKDOWN))
+NOTICE_CMD := $(or $(NOTICE_CONFIG_CMD),$(DETECTED_MARKDOWN))
+$(info grampa: markdown: $(if $(NOTICE_CMD),$(NOTICE_CMD)$(if $(NOTICE_CONFIG_CMD), (from config)),none -- post bodies stay HTML))
+endif
 
 #
 # The three date fields of a post filename, as words, and

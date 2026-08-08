@@ -518,6 +518,69 @@ EOF
 }
 
 #
+# The notice says which processor a build is using, once,
+# before any page is built.
+#
+test_build_announces_the_processor() {
+	sandbox notice_detected
+	path_stub cmark 'cat "$f"'
+	make setup >/dev/null 2>&1
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: cmark --unsafe"
+	# assert_out_grep is a substring match, so the line
+	# above is equally happy with "cmark --unsafe (from
+	# config)". Without this, dropping the $(if) that makes
+	# the suffix conditional passes the whole suite while
+	# every build falsely credits config for the choice.
+	assert_out_not_grep "(from config)"
+	# Nothing re-executes make today, but a rule that
+	# remade config.mk or the Makefile would re-run the
+	# parse and print the notice twice, silently.
+	assert_eq "notice printed exactly once" 1 \
+		"$(printf '%s\n' "$BUILD_OUT" | grep -c 'grampa: markdown:')"
+}
+
+test_build_announces_no_processor() {
+	sandbox notice_none
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: none -- post bodies stay HTML"
+}
+
+test_notice_marks_a_config_override() {
+	sandbox notice_override
+	path_stub mytool 'cat "$f"'
+	printf 'name=T\nmarkdown=mytool\n' > config
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+Hi.
+EOF
+	build
+	assert_out_grep "grampa: markdown: mytool (from config)"
+}
+
+#
+# Non-build goals stay quiet.
+#
+test_clean_and_setup_print_no_notice() {
+	sandbox notice_quiet
+	build clean
+	assert_out_not_grep "grampa: markdown:"
+	build setup
+	assert_out_not_grep "grampa: markdown:"
+}
+
+#
 # The staging branch runs Markdown.pl over the body and
 # nothing else. A title is front matter, so asterisks in
 # it must survive to the page untouched -- if the whole
@@ -1808,6 +1871,11 @@ title: Hello
 EOF
 	build_expect_fail
 	assert_out_grep "make setup"
+	# The markdown notice is gated on DATE_DIALECT so an
+	# unconfigured tree leads with the line that tells you
+	# what to do. Dropping that half of the gate passes
+	# every notice test, so this is where it is pinned.
+	assert_out_not_grep "grampa: markdown:"
 }
 
 #
@@ -2791,6 +2859,10 @@ test_config_markdown_overrides_detection
 test_changing_markdown_restages_posts
 test_missing_override_tool_fails_the_build
 test_multi_word_override_keeps_its_flags
+test_build_announces_the_processor
+test_build_announces_no_processor
+test_notice_marks_a_config_override
+test_clean_and_setup_print_no_notice
 test_markdown_transforms_the_body_not_the_front_matter
 test_markdown_staged_file_has_no_blank_line_after_the_delimiter
 test_failing_markdown_fails_the_build
