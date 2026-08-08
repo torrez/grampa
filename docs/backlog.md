@@ -702,6 +702,30 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   asserted a Markdown-staged body reaches `rss.xml` (all three stub sandboxes left `url=`
   unset); and the "present but not executable → verbatim" path was untested.
 
+- **`.source/splitter.txt` ends with a blank line — DONE**, and the finding's own description
+  of it was wrong in a way worth recording. "Markdown-staged bodies gain a leading blank line"
+  reads as an output difference. There is none: `PARSE_FRONT_MATTER` accumulates with
+  `body = (body == "" ? $0 : body "\n" $0)`, so a leading empty line leaves `body` empty and is
+  swallowed by the next line. Verified `diff -r` **byte-identical over `build/`, `rss.xml`
+  included**, against an 11-post corpus built to break it — leading-blank body, double-blank,
+  no body, delimiter on line 1, no delimiter, delimiter as the first body line, no trailing
+  newline, blank-only body, whitespace-only first line, and an empty file. The only difference
+  anywhere was one deleted blank line in each of the 11 `.staged` files.
+
+  So the item is not cosmetic-output, it is a one-byte disagreement between the two staging
+  branches in an intermediate — the Markdown branch's `.staged` differed from the verbatim
+  branch's for the same input. What closing it buys is that `.staged` files are now diffable
+  across branches, and that the file named "the delimiter" holds only the delimiter.
+
+  Existing installs need nothing: `.source/splitter.txt` is read directly by the `%.staged`
+  recipe and `make setup` never copies it, so there is no stale-copy problem of the kind item
+  7's deleted `index.txt` had.
+
+  Guarded by `test_markdown_staged_file_has_no_blank_line_after_the_delimiter`, watched failing
+  first — `expected [MD:<p>STAGED BODY</p>] got []`. Full suite: **274 passed, 0 failed.**
+
+  Original finding follows.
+
 - **`.source/splitter.txt` ends with a blank line** — **verified harmless**. Markdown-staged
   bodies gain a leading blank line that the verbatim branch does not have. Cosmetic.
   Re-confirmed with `od -c`: 35 hyphens, `\n`, `\n`.
@@ -925,7 +949,9 @@ staleness to actually work as advice.
    or `{{main}}`, or a `url=` containing `{{title}}`; see the full entry above for all four
    reproduced cases. Silently wrong output on a strange post, same as item 1, but this one is
    a decision rather than an oversight: it needs the single-pass fill, deliberately deferred.
-7. **The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.
+7. ~~**The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.~~
+   **DONE**, and "cosmetic" was the wrong word: the blank line never reached `build/` at all,
+   so it was a one-byte disagreement between the two staging branches in an intermediate.
 8. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
    option is a line in the Commands section.
 

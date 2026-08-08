@@ -367,6 +367,43 @@ EOF
 }
 
 #
+# The Markdown branch reassembles head + splitter + body, so
+# .source/splitter.txt's trailing blank line put an extra
+# empty line at the top of every Markdown-staged body -- a
+# one-byte disagreement with the verbatim branch, which cp's
+# the post through untouched.
+#
+# It reached no output, which is why this is about the
+# intermediate rather than about a page. PARSE_FRONT_MATTER
+# accumulates with body = (body == "" ? $0 : body "\n" $0),
+# so a leading empty line leaves body empty and the next
+# line swallows it. Verified byte-identical over build/,
+# rss.xml included, against a corpus built to break it.
+#
+# What closing it buys is that the two staging branches
+# produce the same intermediate for the same input, so
+# .staged files are diffable across branches. This test
+# pins that agreement so a future edit to splitter.txt
+# cannot quietly restore the blank line.
+#
+test_markdown_staged_file_has_no_blank_line_after_the_delimiter() {
+	sandbox markdown_staged_no_blank_line
+	markdown_stub <<'EOF'
+#!/bin/sh
+sed 's/^/MD:/' "$1"
+EOF
+	add_post 2026-01-02-home_s.txt <<'EOF'
+title: Staged
+-----------------------------------
+<p>STAGED BODY</p>
+EOF
+	build || return
+	assert_eq "line after the delimiter" \
+		'MD:<p>STAGED BODY</p>' \
+		"$(sed -n '3p' work/2026-01-02-home_s.staged)"
+}
+
+#
 # The staging branch used to chain its steps with `;`, so
 # the recipe's exit status was `rm -f`'s and a failing
 # Markdown.pl was invisible: make exited 0, .staged held
@@ -2234,6 +2271,7 @@ test_no_op_rebuild_is_quiet
 test_parallel_build_is_clean
 test_staged_files_persist
 test_markdown_transforms_the_body_not_the_front_matter
+test_markdown_staged_file_has_no_blank_line_after_the_delimiter
 test_failing_markdown_fails_the_build
 test_failed_markdown_leaves_no_stale_chunks
 test_markdown_branch_is_parallel_safe
