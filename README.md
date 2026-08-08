@@ -10,6 +10,8 @@ The answer is: I think? Yeah.
 
 Check out this repo and run `make setup`. See `## config` below for what the `config` file does. If you have files in the `posts/` directory you’re good to go. See below for post file format. It’s super fragile and won’t work unless it’s exactly as specified. Just run `make` and get excited!
 
+`make setup` is a one-time step and wants to be its own command. Run it, *then* run `make`. Don’t combine the two into one parallel invocation — `make -j setup all` races the template copying against the build and dies with `No rule to make target 'templates/…'`. Serial is fine; it’s only `-j` that bites.
+
 ## config
 
 Two keys, both optional:

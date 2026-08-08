@@ -778,6 +778,25 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   above `RENDER_POST` and the other three programs point at it, so there is one place to
   keep true instead of three.
 
+- **NEW — `make -j setup all` in a fresh directory fails — DONE**, by documentation, which is
+  what this entry itself proposed as the cheapest honest option. CLAUDE.md's Commands section
+  and README.md both now say `setup` is a one-time step that wants its own invocation.
+
+  Two things the entry did not have. First, **`make -j setup deploy` inherits it**, now that
+  `deploy: all` makes `deploy` a build goal — verified, 5/5 runs, same error. Second, **the
+  message names whichever template loses the race, and that varies**: ten runs here all named
+  `base.txt`, while the checkpoint-2 review's run of the same command named `post.txt`. So the
+  documentation deliberately does *not* quote a filename, and says so, since this repo's stated
+  identity is documentation checkable against the code and a reader who checks a specific string
+  would half the time find it false.
+
+  The mechanical fix stays rejected on evidence rather than on taste: `setup` is `.PHONY`, so
+  an order-only `build: | setup` makes `setup` remake on **every** build — confirmed with
+  `make --debug=b`, one "Must remake target `setup'" per no-op rebuild against zero without it.
+  Making it non-phony means inventing a stamp file for a step run once.
+
+  Original finding follows.
+
 - **NEW — `make -j setup all` in a fresh directory fails** — **verified**, and
   **pre-existing**: found by the review of the `.PHONY`/`:=`/`.gitignore` commit, reproduced
   identically against that commit's Makefile and against `HEAD`'s, so it is not a
@@ -847,7 +866,26 @@ those four grew on contact with the code, which is the recurring lesson of this 
 and the README's missing "must be executable" note needed a second sentence about `.staged`
 staleness to actually work as advice.
 
-**What is left, in rough order of how much a reader would care:**
+**What is left is two items, and both are decisions rather than oversights.** A later pass took
+the last four small ones — the control character in a filename, `make deploy`'s missing
+prerequisite, the splitter's trailing blank line, and the `-j setup` race — leaving ranked
+items 2 and 6 below: the feed's post-deletion self-heal, and the single-pass `fill()`. Neither
+is waiting on anyone to notice it. Both have their reasoning written down, both are real design
+rather than a fix, and both have a documented answer today (`make clean && make` for the first,
+a closed body case for the second). **This list has stopped being a pile of small things and
+become two open questions**, which is worth knowing before reading the rest of it.
+
+The four that closed did what everything on this list does: three of the four turned out to be
+described wrongly by their own entries. The control-character item was one item short — a
+**tab** already failed, but named a fragment of the filename for the wrong reason, and fixing
+that came free with choosing where to put the new check. The splitter item called itself
+cosmetic output; the blank line reached no output at all, and the real defect was a one-byte
+disagreement between the two staging branches in an intermediate. And `make deploy`'s entry was
+right, but the commit closing it asserted something backwards in three places — that hand-edits
+to `build/` get rebuilt over, when a hand-edited page is newer than its sources and ships as-is.
+That last one was caught by review, in the commit whose whole subject was making deploys safer.
+
+**The ranked list, in rough order of how much a reader would care:**
 
 1. ~~**The two staging-branch glob items** — the `az` ceiling and the same-date sibling
    over-match.~~ Done, in one commit, and they did want doing together. The prediction that
@@ -952,8 +990,10 @@ staleness to actually work as advice.
 7. ~~**The trailing blank line in `.source/splitter.txt`** — verified harmless, cosmetic.~~
    **DONE**, and "cosmetic" was the wrong word: the blank line never reached `build/` at all,
    so it was a one-byte disagreement between the two staging branches in an intermediate.
-8. **`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
-   option is a line in the Commands section.
+8. ~~**`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
+   option is a line in the Commands section.~~ **DONE**, by exactly that line, in CLAUDE.md and
+   README.md. `make -j setup deploy` inherits it now that `deploy: all`, and the docs
+   deliberately quote no filename, because which template loses the race varies between runs.
 
 ---
 

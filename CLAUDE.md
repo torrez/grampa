@@ -23,6 +23,22 @@ downstream of a touched template. `make -j` is safe. Use `make clean` when you w
 sure nothing stale survives — e.g. after deleting a post, whose old HTML is not tracked by
 anything and will otherwise linger in `build/`.
 
+**`setup` is a one-time step, and wants its own invocation.** Do not combine it with a build
+goal under `-j`: in a directory that has no `templates/` yet, `make -j setup all` races the
+template copying against the build rules and stops with `No rule to make target
+'templates/…'`. `make -j setup deploy` does the same, since `deploy` became a build goal.
+Serial `make setup all` is fine, and so is the documented `make setup` then `make`.
+
+The message names whichever template loses the race, and **that varies between runs and
+machines** — reproductions of this have named both `base.txt` and `post.txt` from the same
+command. So do not go looking for a specific filename here, and do not helpfully make this
+paragraph specific later.
+
+It is documented rather than fixed because the mechanical fix does not work: `setup` is
+`.PHONY`, so an order-only `build: | setup` makes `setup` remake on *every* build — verified
+with `make --debug=b` — and making it non-phony means inventing a stamp file for a step you
+run once.
+
 `deploy` depends on `all`, so it builds before it ships. It used to not, and
 `make clean && make deploy` therefore handed `deploy.sh` an empty `build/` at exit 0 with no
 warning — which, given the example `deploy.sh` is an `rsync`, is one `--delete` away from
