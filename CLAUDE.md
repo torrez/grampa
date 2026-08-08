@@ -26,8 +26,16 @@ anything and will otherwise linger in `build/`.
 **`setup` is a one-time step, and wants its own invocation.** Do not combine it with a build
 goal under `-j`: in a directory that has no `templates/` yet, `make -j setup all` stops with
 `No rule to make target 'templates/…'`. `make -j setup deploy` does the same, since `deploy`
-became a build goal. Serial `make setup all` is fine, and so is the documented `make setup`
-then `make`.
+became a build goal. Serial `make setup all` is fine **only when `config.mk` already exists or
+`posts/` is empty**; on a tree that already has dated posts it fails, because `-include
+config.mk` runs once at parse time (empty on a virgin tree) and make does not re-include a
+fileless-rule include after `setup`'s recipe writes it, so the `build` half of the same process
+still has `DATE_DIALECT` empty and fires `date_select`'s `$(error)` at recipe time. But `make
+setup` alone always succeeds and writes `config.mk` — the parse-time date check is gated on
+`$(DATE_DIALECT)` (see the portable-date gotcha) precisely so an unconfigured `setup` never
+trips the error before writing the file — so a second `make` then succeeds. This is the same
+lazy-parse-vs-recipe split already documented for `config`/`FEED_PAGES`, reaching an `-include`
+this time. The documented `make setup` then `make` is unaffected and remains the primary flow.
 
 **It is not actually a race, which is worth knowing because the name suggests a fix that does
 not work.** Make resolves the whole prerequisite graph before running any recipe, so
@@ -136,9 +144,12 @@ Makefile, `.source/`, `README.md`, `CLAUDE.md`, `.gitignore`, `tests/`, `tools/`
 | `build/` | no | Publishable output, and nothing else — deploy this verbatim |
 | `work/` | no | Intermediates (`.staged`, `.tmp`, and `.rssitem` fragments) |
 | `config`, `deploy.sh` | no | Per-install, copied from `.source/*.example` |
+| `config.mk` | no | Per-install, **generated** by `make setup` probing `date(1)`: `DATE_DIALECT := bsd\|gnu`. No `.source` twin — it is derived, not copied |
 
 `make setup` copies with `yes n | cp -i`, so it never clobbers existing files. It is safe
-to re-run.
+to re-run. The one exception is `config.mk`, which is *generated* rather than copied: setup
+probes `date(1)` and unconditionally (re)writes it, which is also what re-fixes the dialect if
+a checkout ever moves between OSes.
 
 ## config
 
@@ -213,7 +224,8 @@ ruleset as a whole still has these two. Third, a **`:`** dies earlier and less h
 `.SECONDARY`'s prerequisite list, with make's own `target pattern contains no '%'`.
 
 **The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
-`2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit, and `2028-02-29` build.
+`2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit (rendered year `0026`
+under BSD, `2026` under GNU — see the portable-date gotcha), and `2028-02-29` build.
 `date` already rejected these dates and exited 1 — nothing heard it, because
 `date_from_filename` is a `$(shell)` call, which keeps the output and discards the status, and
 make 3.81 has no `.SHELLSTATUS`. The result was a page with an empty posted-on line and an
@@ -411,7 +423,8 @@ feed's `<link>` elements.
 ### Make helper functions
 
 The top of the Makefile defines string helpers because make has no real string library:
-`reverse`, `space`, `date_from_filename`, `rfc822_from_filename`, `underscore_split`,
+`reverse`, `space`, `date_words`, `date_select`, `date_from_filename`,
+`rfc822_from_filename`, `underscore_split`,
 `date_and_category`, `title_slug`, `post_slug`, `dc_words`, `category_slug`,
 `category_display`, `category_url`, `check_post_name`, `path_from_filename`, `page_for`,
 `files_for_page`, `check_page_collisions`, `tmp_for_page`, `post_for_page`,
@@ -438,13 +451,31 @@ more than a format-string swap.
   The lazy-`config` reasoning in the bullet below does *not* apply to it: a missing
   `posts/` is already handled by `2>/dev/null`. Measured on a 60-post no-op rebuild:
   0.79s → 0.12s, with `build/` and `work/` byte-identical either way.
-- **BSD-only.** `date_from_filename` uses `date -v` (BSD/macOS). It fails on GNU
-  coreutils, so builds are macOS-only as written. Since the parse-time date check calls the
-  same `date -v`, GNU is now also where a *legal* filename gets rejected: posts dated the
-  1st–28th are cleared by the pure-make stage and build, while a post dated the 31st becomes
-  a suspect, `date -v` fails for the wrong reason, and the post is rejected as having a bad
-  date. A confusing error on a platform this repo does not claim to support, and arguably an
-  improvement on GNU's behaviour before, which was to publish empty date fields silently.
+- **Portable across BSD and GNU, chosen at `make setup`.** `date_select` has one twin per
+  dialect — BSD's `-v<y>y -v<m>m -v<d>d` selectors, GNU's `-d "<y-m-d> 00:00:00"` — and `make
+  setup` probes `date(1)` once and writes the winner to a generated `config.mk` (`DATE_DIALECT
+  := bsd|gnu`) that the Makefile `-include`s. All three date sites (`date_from_filename`,
+  `rfc822_from_filename`, the parse-time `BAD_POST_DATES` check) share `date_select`, so the
+  check still runs the exact args the build runs. A build on a tree with no `config.mk` fails
+  loud — see the "unconfigured build" bullet below. The one behavioural difference between
+  dialects: a two-digit-year filename like `26-7-4-home_x.txt` renders its *displayed* date as
+  year `0026` under BSD but `2026` under GNU; the URL is `/26/7/4/x.html` either way, since
+  paths come from the raw filename, not `date`. Edge case, documented not fixed.
+- **An unconfigured build fails loud at recipe time, and `make setup` always bootstraps.** With
+  no `config.mk`, `$(DATE_DIALECT)` is empty and `date_select`'s else branch is
+  `$(error grampa: no DATE_DIALECT -- run 'make setup' first)`. Two things keep this loud
+  without deadlocking `setup`: `setup`'s own recipe writes `config.mk` without expanding any
+  date helper, and the parse-time `BAD_POST_DATES` check is gated `$(if $(DATE_DIALECT),...)` so
+  it does not run — and so does not expand `date_select` — while unconfigured. The `:=` check
+  would otherwise expand `date_select` at parse time on a month-end post during `make setup`
+  itself, `$(error)`ing before the recipe writes `config.mk`: a deadlock (can't build without
+  it, can't `setup` to make it). Gated, the failure is uniform — every unconfigured build dies
+  at recipe time on the first dated page's `date_from_filename`, before any page is written —
+  and `make setup` succeeds for any corpus. The gate skips the check, it does not disable it: a
+  configured build runs it exactly as before. This is the upgrade path for an existing BSD
+  install: pull the new Makefile → first `make` says "run `make setup` first" → `make setup`
+  (which only *adds* `config.mk`, clobbering nothing else, and now never deadlocks) → builds
+  resume.
 - **`config` is read lazily, not at parse time.** `CONFIG_NAME` and `CONFIG_URL` both use
   `=`, not `:=`, because on a first-ever run the `config` target hasn't copied the file into
   place yet when the Makefile is parsed. `config` is also a prerequisite of the HTML rules
@@ -501,10 +532,12 @@ more than a format-string swap.
   English tokens (`Thu`, `Aug`), and `$(shell …)` inherits the user's locale; without pinning
   it, a non-English locale emits something like `jeu., 06 aout 2026`, which is silently
   invalid RSS.
-- **`rfc822_from_filename` pins the time to midnight with `-v0H -v0M -v0S`.** `date -v` with
-  only `y`/`m`/`d` keeps the current wall-clock time, so without pinning, every build would
-  stamp a different `<pubDate>` on the same post and `rss.xml` would look changed on every
-  deploy even when no post did.
+- **`date_select` pins the time to midnight** — BSD's `-v0H -v0M -v0S`, GNU's literal `00:00:00`
+  in the `-d` string. `date` with only `y`/`m`/`d` keeps the current wall-clock time, so without
+  the pin every build would stamp a different `<pubDate>` on the same post and `rss.xml` would
+  look changed on every deploy even when no post did. The long form `%B %d, %Y` prints no time,
+  so the pin is invisible there; it is `rfc822_from_filename` and the parse-time check that need
+  it.
 - **An install set up before the stub was removed (2026-08-07) has a leftover
   `templates/index.txt`.** It was a
   0-byte stub for a feature the index does not need — `build/index.html` is fragments wrapped

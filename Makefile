@@ -60,7 +60,7 @@ WORK_DIR := work/
 # shell fragment, not a command that runs: the $$ escapes
 # to a single $ once, here, and the stored value is
 # substituted verbatim into both $(shell) calls rather than
-# rescanned. Same argument as date_args -- a check that
+# rescanned. Same argument as date_select -- a check that
 # answers a slightly different question than the build asks
 # is the same class of defect as no check.
 #
