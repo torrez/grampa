@@ -71,13 +71,43 @@ EOF
 	build_expect_fail
 	assert_out_grep "make setup"
 }
+
+#
+# B1 regression: BAD_POST_DATES is := and expands at parse
+# time on EVERY invocation, make setup included. A month-end
+# post (a suspect date) on an unconfigured tree must NOT make
+# `make setup` itself die before it writes config.mk -- that
+# was a deadlock (can't build without config.mk, can't setup
+# to create it). The gate `$(if $(DATE_DIALECT),...)` on the
+# check is what keeps setup bootstrappable here.
+#
+test_setup_bootstraps_with_a_month_end_post() {
+	sandbox setup_bootstraps_month_end
+	rm -f config.mk
+	add_post 2026-01-31-home_endofmonth.txt <<'EOF'
+title: End of month
+-----------------------------------
+<p>Hi.</p>
+EOF
+	# setup must succeed and write config.mk despite the suspect
+	# date and the absent config.mk at parse time.
+	if make setup < /dev/null > setup.out 2>&1; then ok; else
+		fail "make setup deadlocked on a month-end post" "$(cat setup.out)"; fi
+	assert_file config.mk
+	# And once configured, the build works and the suspect date
+	# renders -- proving the gate skipped the check, it did not
+	# permanently disable it.
+	build
+	assert_file build/2026/01/31/endofmonth.html
+}
 ```
 
-Register them at the bottom of the file, beside the other `test_migration_*` / setup calls (near line 2360):
+Register all three at the bottom of the file, beside the other `test_migration_*` / setup calls (near line 2360):
 
 ```bash
 test_setup_writes_the_host_date_dialect
 test_build_without_config_mk_fails
+test_setup_bootstraps_with_a_month_end_post
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -168,11 +198,19 @@ In the comment block just above `rfc822_from_filename` (lines 206–210), replac
 # names are literal English tokens in either dialect.
 ```
 
-`BAD_POST_DATES` (was line 500) — swap `date_args` for `date_select` and drop the trailing `-v0H -v0M -v0S`:
+`BAD_POST_DATES` (was line 500) — swap `date_args` for `date_select`, drop the trailing `-v0H -v0M -v0S`, **and gate the whole check on `$(DATE_DIALECT)`** so it never runs (and so never expands `date_select`) on an unconfigured tree:
 
 ```make
-BAD_POST_DATES := $(if $(SUSPECT_POST_DATES),$(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_select,$(n)) >/dev/null 2>&1 || echo $(n);) true))
+BAD_POST_DATES := $(if $(DATE_DIALECT),$(if $(SUSPECT_POST_DATES),$(shell $(foreach n,$(SUSPECT_POST_DATES),LC_ALL=C date $(call date_select,$(n)) >/dev/null 2>&1 || echo $(n);) true)))
 ```
+
+The `$(if $(DATE_DIALECT),...)` gate is **load-bearing, not cosmetic** (spec §3): without it, a
+month-end post on an unconfigured tree makes this `:=` line expand `date_select`'s `$(error)` at
+parse time — which kills `make setup` itself before it can write `config.mk`, a deadlock. Gated,
+an unconfigured build instead fails one step later at recipe time via `date_from_filename`, with
+the same message, and `make setup` always succeeds. Add a short comment above the line noting the
+gate exists to keep `make setup` bootstrappable, not to skip validation (a configured build runs
+the check exactly as before).
 
 - [ ] **Step 6: Make `setup` write `config.mk`**
 
@@ -199,8 +237,11 @@ In the anchored per-install group, add the line directly after `/config`:
 
 - [ ] **Step 8: Run the two new tests — verify they pass**
 
-Run: `bash tests/run.sh 2>&1 | grep -E "setup_writes_dialect|build_without_config_mk|passed:"`
-Expected: no FAIL lines for either new test. The `passed:`/`failed:` tally should read **4 failed**, all of them `migration_rm_fails` (the BSD-only `chflags` test, fixed in Task 2). This is exactly the state Fable verified at the spec checkpoint: 271 passed, 4 failed.
+Run: `bash tests/run.sh 2>&1 | grep -E "FAIL:|passed:"`
+Expected: the only FAIL lines are the four under `migration_rm_fails` (the BSD-only `chflags`
+test, fixed in Task 2); none of the three new tests appear in a FAIL line. The tally reads
+**`failed: 4`** — the load-bearing half. The `passed:` count is ~276 on this GNU host, but do
+not gate on the exact number; gate on `failed: 4` and all four being `migration_rm_fails`.
 
 - [ ] **Step 9: Verify the build actually works end-to-end on this GNU host**
 
@@ -274,7 +315,7 @@ git commit -m "Skip the chflags migration test where chflags is absent."
 
 **Interfaces:**
 - Consumes: the shipped Task 1/2 code. Produces: docs that match it.
-- Note for the reviewer: CLAUDE.md's `date_args`→`date_select` inconsistency across Tasks 1–2 is *deliberately* deferred to this task (settled), so do not flag it as a Task 1 defect.
+- Note for the reviewer: CLAUDE.md's date-helper wording lagging the ported code across Tasks 1–2 is *deliberately* deferred to this task (settled), so do not flag it as a Task 1 defect. (CLAUDE.md names no `date_args`, so this is an insert of `date_words`/`date_select`, not a rename.)
 
 - [ ] **Step 1: Rewrite the BSD-only gotcha**
 
@@ -298,30 +339,39 @@ Replace the bullet beginning `**BSD-only.** \`date_from_filename\` uses \`date -
 Add a new bullet just after the one above:
 
 ```markdown
-- **An unconfigured build fails loud, and its timing is parse-vs-recipe.** With no `config.mk`,
-  `$(DATE_DIALECT)` is empty and `date_select`'s else branch is `$(error grampa: no DATE_DIALECT
-  -- run `make setup` first)`. Because `date_select` is expanded only while building something
-  dated — never by `setup`'s own recipe — `make setup` still bootstraps a virgin tree. The error
-  fires at **recipe time** on a corpus dated only the 1st–28th (`SUSPECT_POST_DATES` empty, so
-  `BAD_POST_DATES` never expands `date_select`), and at **parse time** if any month-end suspect
-  is present. Either way it fires before a page is written. This is the upgrade path for an
-  existing BSD install: pull the new Makefile → first `make` says "run `make setup` first" →
-  `make setup` (which only *adds* `config.mk`, clobbering nothing else) → builds resume.
+- **An unconfigured build fails loud at recipe time, and `make setup` always bootstraps.** With
+  no `config.mk`, `$(DATE_DIALECT)` is empty and `date_select`'s else branch is `$(error grampa:
+  no DATE_DIALECT -- run `make setup` first)`. Two things keep this loud without deadlocking
+  `setup`: `setup`'s own recipe writes `config.mk` without expanding any date helper, and the
+  parse-time `BAD_POST_DATES` check is gated `$(if $(DATE_DIALECT),...)` so it does not run — and
+  so does not expand `date_select` — while unconfigured. The `:=` check would otherwise expand
+  `date_select` at parse time on a month-end post during `make setup` itself, `$(error)`ing
+  before the recipe writes `config.mk`: a deadlock (can't build without it, can't `setup` to make
+  it). Gated, the failure is uniform — every unconfigured build dies at **recipe time** on the
+  first dated page's `date_from_filename`, before any page is written — and `make setup` succeeds
+  for any corpus. The gate skips the check, it does not disable it: a configured build runs it
+  exactly as before. This is the upgrade path for an existing BSD install: pull the new Makefile →
+  first `make` says "run `make setup` first" → `make setup` (which only *adds* `config.mk`,
+  clobbering nothing else, and now never deadlocks) → builds resume.
 ```
 
 - [ ] **Step 3: Qualify the "Serial `make setup all` is fine" claim**
 
-In the setup paragraph that currently reads `Serial \`make setup all\` is fine, and so is the documented \`make setup\` then \`make\`.`, replace that sentence with:
+The sentence is wrapped across lines 29–30 of CLAUDE.md: `... Serial \`make setup all\` is fine,
+and so is the documented \`make setup\`` / `then \`make\`.`. Match it across the wrap (or reflow
+the paragraph) and replace the whole sentence — from `Serial` through `then \`make\`.` — with:
 
 ```markdown
 Serial `make setup all` is fine **only when `config.mk` already exists or `posts/` is empty**;
-on a tree that already has dated posts it now fails, because `-include config.mk` runs once at
-parse time (empty on a virgin tree) and make does not re-include a fileless-rule include after
-`setup`'s recipe writes it, so the `build` half of the same process still has `DATE_DIALECT`
-empty and fires the `$(error)` (recipe time for an ordinary post; parse time, before `config.mk`
-is even written, if a month-end suspect is present). A second `make` succeeds. This is the same
-lazy-parse-vs-recipe split already documented for `config`/`FEED_PAGES`, reaching an `-include`
-this time. The documented `make setup` then `make` is unaffected and remains the primary flow.
+on a tree that already has dated posts it fails, because `-include config.mk` runs once at parse
+time (empty on a virgin tree) and make does not re-include a fileless-rule include after `setup`'s
+recipe writes it, so the `build` half of the same process still has `DATE_DIALECT` empty and
+fires `date_select`'s `$(error)` at recipe time. But `make setup` alone always succeeds and
+writes `config.mk` — the parse-time date check is gated on `$(DATE_DIALECT)` (see the portable-date
+gotcha) precisely so an unconfigured `setup` never trips the error before writing the file — so a
+second `make` then succeeds. This is the same lazy-parse-vs-recipe split already documented for
+`config`/`FEED_PAGES`, reaching an `-include` this time. The documented `make setup` then `make`
+is unaffected and remains the primary flow.
 ```
 
 - [ ] **Step 4: Add `config.mk` to the Layout table and the config section**
@@ -334,9 +384,34 @@ In the Layout table, add a row after the `config`, `deploy.sh` row (or as its ow
 
 And note in the paragraph about `make setup` copying with `yes n | cp -i`: `config.mk` is the exception — it is generated and unconditionally (re)written, which is also what re-fixes the dialect if a checkout ever moves between OSes.
 
-- [ ] **Step 5: Update the make-helper list and the date-helper descriptions**
+- [ ] **Step 5: Insert `date_words`/`date_select` into the make-helper list**
 
-In the "Make helper functions" paragraph, the list of helper names, replace `date_from_filename`, `rfc822_from_filename`, ... and the `date_args` reference so it reads `date_words`, `date_select`, `date_from_filename`, `rfc822_from_filename`, ... (i.e. `date_args` → `date_select`). If `rfc822_from_filename`'s description mentions the `-v0H -v0M -v0S` pin as living on that helper, move that mention to `date_select`.
+CLAUDE.md's helper list (line 414) reads `` `reverse`, `space`, `date_from_filename`,
+`rfc822_from_filename`, `underscore_split`, ... `` — it names **no** `date_args` (there is nothing
+to rename). Insert `` `date_words`, `date_select`, `` immediately before `date_from_filename`, so
+it becomes `` ... `space`, `date_words`, `date_select`, `date_from_filename`, ... ``. Nothing else
+in that paragraph mentions the pin, so there is no pin-location edit here — that lives in Step 5b.
+
+- [ ] **Step 5b: Fix the now-stale `rfc822_from_filename` midnight-pin Gotchas bullet**
+
+CLAUDE.md line 504 is a standalone Gotchas bullet: `` **`rfc822_from_filename` pins the time to
+midnight with `-v0H -v0M -v0S`.** `date -v` with only y/m/d ... ``. After Task 1 the pin lives in
+`date_select` and `rfc822_from_filename` no longer carries `-v0H`. Replace that bullet with:
+
+```markdown
+- **`date_select` pins the time to midnight** — BSD's `-v0H -v0M -v0S`, GNU's literal `00:00:00`
+  in the `-d` string. `date` with only y/m/d keeps the current wall-clock time, so without the pin
+  every build would stamp a different `<pubDate>` on the same post and `rss.xml` would look
+  changed on every deploy. The long form `%B %d, %Y` prints no time, so the pin is invisible
+  there; it is `rfc822_from_filename` and the parse-time check that need it.
+```
+
+- [ ] **Step 5c: Update the stale `date_args` reference in the Makefile comment**
+
+`Makefile:52` reads `# Same argument as date_args -- a check that`. `date_args` no longer exists;
+change it to `# Same argument as date_select -- a check that`. (This is a code-comment edit that
+rode along in Task 1's file; correcting it here keeps the doc pass self-contained. Re-`git add
+Makefile` in Step 9.)
 
 - [ ] **Step 6: Update the Post-format date paragraph**
 
@@ -344,7 +419,7 @@ Where CLAUDE.md's Post-format section says `\`2026-7-4\` unpadded, \`26-7-4\` tw
 
 - [ ] **Step 7: Re-read CLAUDE.md against the shipped code**
 
-Read the edited sections back and confirm: no surviving `date -v`-only claim, no `date_args` reference, the Layout table lists `config.mk`, and the two-digit-year note is consistent between the gotcha and the Post-format section.
+Read the edited sections back and confirm: no surviving `date -v`-only claim (BSD-only bullet, midnight-pin bullet), no `date_args` reference in CLAUDE.md **or** at `Makefile:52`, the helper list names `date_words`/`date_select`, the Layout table lists `config.mk`, the "setup all" sentence matches the gated (no-deadlock) behavior, and the two-digit-year note is consistent between the gotcha and the Post-format section.
 
 - [ ] **Step 8: Verify the suite is still green (docs-only change must not move it)**
 
@@ -354,7 +429,7 @@ Expected: `passed: N  failed: 0`.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add CLAUDE.md
+git add CLAUDE.md Makefile
 git commit -m "Document the portable date dialect and its setup-time detection."
 ```
 
@@ -366,13 +441,14 @@ git commit -m "Document the portable date dialect and its setup-time detection."
 - Configure mechanism (`config.mk` + `-include`) → Task 1 Steps 3, 6, 7. ✓
 - `date_select` twins + three call sites → Task 1 Steps 4, 5. ✓
 - Fail-loud else branch → Task 1 Step 4; tested Step 1 (`test_build_without_config_mk_fails`). ✓
+- **B1 gate** (`BAD_POST_DATES` gated on `$(DATE_DIALECT)`, no `make setup` deadlock) → Task 1 Step 5; regression-tested Step 1 (`test_setup_bootstraps_with_a_month_end_post`); documented Task 3 Steps 2, 3. ✓
 - Setup probe order (bsd then gnu) → Task 1 Step 6, mirrors `probe-platform.sh`. ✓
 - `.gitignore` / `make clean` leaves `config.mk` → Task 1 Step 7; `clean` untouched (unchanged target = leaves it). ✓
-- Two new tests → Task 1 Step 1. ✓
+- Three new tests → Task 1 Step 1. ✓
 - chflags guard (spec §4 ripple) → Task 2. ✓
-- CLAUDE.md ripple (BSD-only gotcha, Layout, setup-all claim, helper list, two-digit-year) → Task 3. ✓
+- CLAUDE.md ripple (BSD-only gotcha, unconfigured-build/B1 gotcha, Layout, setup-all claim, helper-list insert, midnight-pin bullet, two-digit-year) + `Makefile:52` comment → Task 3. ✓
 - `bsd` twin BSD smoke test deferred to branch checkpoint → Global Constraints + spec Test plan. ✓
 
 **Placeholder scan:** No TBD/TODO; every code and test step carries actual content.
 
-**Type consistency:** `date_select` (not `date_args`) named consistently across Task 1 Steps 4/5 and Task 3. `DATE_DIALECT` values `bsd`/`gnu` consistent across setup write (Task 1 Step 6), tests (Step 1), and docs (Task 3). `build_expect_fail` and `assert_out_grep` match the helpers actually defined in `tests/run.sh`.
+**Type consistency:** `date_select` (not `date_args`) named consistently across Task 1 Steps 4/5 and Task 3, and CLAUDE.md is confirmed to contain no `date_args` (Step 5 is an insert, not a rename). `DATE_DIALECT` values `bsd`/`gnu` consistent across setup write (Task 1 Step 6), the `BAD_POST_DATES` gate (Step 5), tests (Step 1), and docs (Task 3). `build`, `build_expect_fail`, `assert_out_grep`, `assert_file`, `ok`, `fail` all match helpers defined in `tests/run.sh`.

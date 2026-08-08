@@ -119,27 +119,43 @@ The GNU `-d` argument quotes the date string, so the embedded space survives the
 
 ### 3. Failing loud when unconfigured
 
-The `else` branch of `date_select` is `$(error ...)`. `date_select` is expanded only while
-building something dated — a page recipe, a feed-item recipe, or the parse-time suspect-date
-check — and **never by `setup`'s own recipe**, which copies files and writes `config.mk` without
-touching a date helper. So:
+The `else` branch of `date_select` is `$(error ...)`. The failure must fire on a real build but
+**never during `make setup` itself**, or `setup` could not create the `config.mk` that resolves
+it. Two things together guarantee that:
 
-- `make setup` on a virgin tree bootstraps cleanly: it writes `config.mk` without ever
-  expanding `date_select`.
-- Any real build on a tree with no `config.mk` dies with
-  `grampa: no DATE_DIALECT -- run 'make setup' first`.
+1. `setup`'s own recipe copies files and writes `config.mk` without ever expanding a date
+   helper, so it never reaches `date_select`.
+2. **The parse-time check `BAD_POST_DATES` is gated on `$(DATE_DIALECT)`** — it only runs when a
+   dialect is configured:
 
-Timing detail, in the spirit of the existing parse-vs-recipe gotchas: on a corpus whose posts
-are all dated the 1st–28th, `SUSPECT_POST_DATES` is empty, so `BAD_POST_DATES` never expands
-`date_select` and the error fires at **recipe time** (the first dated page), not parse time. On
-a corpus with any month-end suspect, it fires at **parse time**. Either way it fires before any
-page is written, and the message is the same. A tree with no posts at all needs no date and so
-raises nothing — correct, since there is nothing to date, and such a tree fails earlier on the
-missing `templates/` anyway.
+   ```make
+   BAD_POST_DATES := $(if $(DATE_DIALECT),$(if $(SUSPECT_POST_DATES),$(shell ...date_select...)))
+   ```
 
-This doubles as the upgrade path for an existing BSD install: pull the new Makefile → the first
-`make` reports "run `make setup` first" → `make setup` (non-clobbering for everything but the
-generated `config.mk`) writes `DATE_DIALECT := bsd` → builds resume, byte-identical to before.
+   Without this gate the check is a latent deadlock: `BAD_POST_DATES` is `:=`, so it expands at
+   parse time on *every* invocation, `make setup` included. On an existing install with a
+   month-end post (`SUSPECT_POST_DATES` non-empty) and no `config.mk` yet, that parse-time
+   `$(shell)` would expand `date_select`, whose `else` branch `$(error)`s — killing `make setup`
+   *before its recipe runs*, so `config.mk` is never written and the next `make setup` dies
+   identically. You could neither build nor configure. The gate closes it: unconfigured, the
+   check is simply skipped.
+
+The result is a **uniform** failure story rather than the parse-vs-recipe split an earlier draft
+described:
+
+- `make setup` **always succeeds** and writes `config.mk`, for any corpus — virgin, 1st–28th,
+  or month-end. No deadlock.
+- Any real build on a tree with no `config.mk` dies at **recipe time**, when the first dated
+  page's `date_from_filename` expands `date_select`, with
+  `grampa: no DATE_DIALECT -- run 'make setup' first`. (The check no longer contributes a
+  parse-time variant, because it is gated off when unconfigured.) A tree with no posts needs no
+  date and raises nothing — and fails earlier on the missing `templates/` anyway.
+
+Gating the check costs no date validation: when a dialect *is* configured the check runs exactly
+as before, and an unconfigured build still fails loud one step later at the recipe. This is the
+clean upgrade path for an existing BSD install: pull the new Makefile → `make setup` (which now
+always succeeds, non-clobbering for everything but the generated `config.mk`) writes
+`DATE_DIALECT := bsd` → builds resume, byte-identical to before.
 
 ### 4. Ripple
 
@@ -163,19 +179,23 @@ generated `config.mk`) writes `DATE_DIALECT := bsd` → builds resume, byte-iden
     the port's own premise.
 - **`CLAUDE.md`:** rewrite the **BSD-only** gotcha into a "portable, dialect chosen at `make
   setup`" note; add `config.mk` to the Layout table as a per-install generated file (no
-  `.source` twin); document the parse-vs-recipe timing of the unconfigured-build guard; update
-  the `date_args`→`date_select` helper description and the helper list. **Also correct the
-  "Serial `make setup all` is fine" claim in the setup section:** after this change it is fine
-  only when `config.mk` already exists or `posts/` is empty. On a tree that already has dated
-  posts, `make setup all` in one process fails — `-include config.mk` runs once at parse time
-  (empty on a virgin tree), setup's recipe then writes `config.mk`, but make does not re-include
-  a fileless-rule include mid-run, so the `build` half of the *same* process still has
-  `DATE_DIALECT` empty and fires the `$(error)` (recipe time for an ordinary post, parse time if
-  a month-end suspect is present — in which case `config.mk` is never even written). A second
-  `make` succeeds. This is loud, self-correcting, and consistent with the existing "setup wants
-  its own invocation" guidance — the same lazy-parse-vs-recipe split already documented for
-  `config`/`FEED_PAGES`, reaching an `-include` this time — but it must be written down rather
-  than left contradicting the current "is fine" sentence.
+  `.source` twin); document the recipe-time unconfigured-build failure and the `BAD_POST_DATES`
+  gate; insert `date_words`/`date_select` into the helper list (there is no `date_args` reference
+  in CLAUDE.md to rename — it names `date_from_filename`/`rfc822_from_filename` only); fix the
+  now-stale standalone Gotchas bullet that says `rfc822_from_filename` pins midnight with
+  `-v0H -v0M -v0S` (the pin lives in `date_select` now). **Also correct the "Serial `make setup
+  all` is fine" claim in the setup section:** after this change it is fine only when `config.mk`
+  already exists or `posts/` is empty. On a tree that already has dated posts, `make setup all`
+  in one process still fails — `-include config.mk` runs once at parse time (empty on a virgin
+  tree), setup's recipe then writes `config.mk`, but make does not re-include a fileless-rule
+  include mid-run, so the `build` half of the *same* process still has `DATE_DIALECT` empty and
+  fires the `$(error)` at recipe time (uniformly now, since the parse-time check is gated off
+  when unconfigured). The difference from before the B1 gate: `make setup`'s recipe *does* run
+  and write `config.mk`, so **a second `make` succeeds** — no deadlock. This is loud,
+  self-correcting, and consistent with the existing "setup wants its own invocation" guidance —
+  the same lazy-parse-vs-recipe split already documented for `config`/`FEED_PAGES`, reaching an
+  `-include` this time — but it must be written down rather than left contradicting the current
+  "is fine" sentence.
 - **`tests/run.sh` — guard the BSD-only migration test:** `test_migration_reports_error_when_rm_fails`
   makes a file un-removable with `chflags uchg` (BSD/macOS only). On GNU that is a no-op or
   `command not found`, so `rm` succeeds and the test's 4 assertions fail — 4 red on the very
