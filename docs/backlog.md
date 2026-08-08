@@ -1,10 +1,15 @@
 # Backlog
 
-Findings from full-repo reviews. Two sweeps so far, both on 2026-08-06:
+Findings from full-repo reviews. Two full sweeps and one branch review so far:
 
-- **First sweep**, after the RSS feed landed (`2c0c57d`).
-- **Second sweep**, after the Markdown failure fix (`b0971a2`). Every item from the first
-  sweep was re-checked. New items are numbered from 6.
+- **First sweep**, 2026-08-06, after the RSS feed landed (`2c0c57d`).
+- **Second sweep**, 2026-08-06, after the Markdown failure fix (`b0971a2`). Every item from
+  the first sweep was re-checked. New items are numbered from 6.
+- **Branch review**, 2026-08-08, of markdown processor detection (`4072a31`) — the four
+  CLAUDE.md checkpoints rather than a full-repo sweep, so it carries no verdict on anything
+  the branch did not touch. Its residuals are items 9 and 10 and the four NEW Minor bullets
+  at the end of that list. Everything it found blocking was fixed on the branch; what is
+  recorded here is what shipped knowingly unresolved.
 
 Statuses below are current as of **this commit**, not as of the sweep: the sweep's CLAUDE.md
 findings were fixed in the same commit that records them, so several items read "CLAUDE.md
@@ -360,6 +365,61 @@ holding `RECENT_ITEMS`, rewritten only when the list changes, then made a prereq
 is real design, and it overlaps the deleted-post and deleted-category gotchas, which have the
 same shape and no fix either. **Cost:** ~10 lines of make plus a test; not obviously worth it
 against `make clean && make`, which is already the documented answer for its two siblings.
+
+---
+
+### 9. Three of the twelve markdown candidates ship with flags nobody has run — STILL OPEN
+
+From the branch review, 2026-08-08. **read** — established from each tool's documentation
+and from the behaviour of its family, not by executing it.
+
+`multimarkdown`, `comrak` and `markdown-it` are the three rows of `MARKDOWN_CANDIDATES` that
+were never executed during development, because installing them was disproportionate
+(`multimarkdown` wants `cmake`, the other two want their language toolchains). Their argv
+came from documentation. This is a deliberate, recorded decision — the spec's Flag
+Verification section is the authority on which three — and it is not the same as shipping
+them untested in the dangerous sense, because **the probe is what keeps it honest**: setup
+runs each candidate against `x <i>y</i>` and rejects any that exits non-zero, eats the raw
+HTML, or emits a whole document. A wrong flag on the user's machine means the candidate is
+skipped, not that posts are silently mangled.
+
+**The gap the probe does not close is punctuation.** It checks raw-HTML survival and
+document-vs-fragment; it does not check that quotes and dashes came through unsmartened. So
+a candidate whose smartypants flag is wrong passes detection and quietly rewrites the
+author's punctuation. `multimarkdown --snippet` is the specific suspect: `--snippet` controls
+document-vs-fragment output and says nothing about typography, and MultiMarkdown 6 enables
+smart typography by default, so the row may well need a `--nosmart` it does not have. Nobody
+has run it either way.
+
+**Two ways to close it, and they are independent.** Extend the probe to assert that a `"`
+and a `--` survive the round trip, which fixes the whole class for every present and future
+row and costs a longer probe string; or install the three tools once and correct their rows,
+which fixes today's table and leaves the class open. The probe extension is the better buy.
+**Cost:** a few lines in setup's walk plus a test; the risk is a probe so strict that a
+perfectly good processor gets skipped, which argues for asserting punctuation and *not*
+asserting anything about the rendered markdown itself.
+
+---
+
+### 10. Nothing serialises two concurrent `make setup` runs against `config.mk.new` — STILL OPEN
+
+From the branch review, 2026-08-08. **read** — the interleaving was reasoned from the recipe,
+not reproduced.
+
+Setup writes its probe results to a fixed filename, `config.mk.new`, and then `mv`s it over
+`config.mk` if `cmp` says the content differs. Two setups running at once in the same
+directory share that one scratch name, so one can truncate the file the other is midway
+through writing, and the `mv` can promote a half-written `config.mk` — which is `-include`d
+by every subsequent parse. `mv` is atomic, so the failure needs the interleaving to land
+inside the write rather than inside the rename.
+
+It is a narrow window and an odd thing to do: `setup` is documented as a one-time step, and
+the two-invocation case that *is* documented (`make -j setup all`) fails for an unrelated
+reason before it gets here. `make -j4 setup` was exercised on the branch and was clean — but
+that is one make process, not two, so it does not test this. The fix is a PID-suffixed temp
+name, `config.mk.$$$$`, which is two characters of recipe and no new failure mode; it was
+left alone only because nothing on the branch needed it. **Cost:** one line, no test worth
+writing for it.
 
 ---
 
@@ -865,6 +925,34 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   `post.txt`; the identical trap existed for `base.txt` in three rules and nothing guarded
   it.
 
+- **The markdown branch's new make constructs have never run under make 3.81 — NEW.**
+  **read.** `README.md` puts the floor at 3.81 and the branch added `$(or)`, `$(and)`,
+  `$(origin)`, a parse-time `$(info)`, an `ifneq` around `:=` snapshots, and `$(wildcard)`
+  inside a prerequisite list. All of those exist in 3.81 — `$(or)` and `$(and)` were
+  *introduced* in it, which puts the branch exactly on the boundary rather than safely above
+  it — but every review, and the whole suite, ran on GNU make 4.4.1. Nothing here is
+  suspected broken; it is simply an unexercised claim in a repo that does not otherwise make
+  those. The cheap version is one CI-less manual run of `tests/run.sh` against a 3.81 build;
+  the real question behind it is whether 3.81 is still a floor worth keeping, which is a
+  decision, not a bug.
+
+- **The no-op-setup test asserts `config.mk`'s mtime, not the `.staged` mtimes the spec named
+  — NEW.** **verified** (the test passes and was watched failing). A recorded deviation
+  rather than a gap: the spec asked to prove that a second `make setup` re-stages nothing,
+  and the test proves the one link in that chain that can break — `config.mk`'s mtime not
+  moving — while `.staged` mtimes are downstream of it through an ordinary prerequisite the
+  suite already covers elsewhere. Asserting the `.staged` mtimes directly would need the
+  `sleep 1` the APFS bullet above explains, in a test that currently needs one anyway. Worth
+  knowing the wording drifted from the spec, not worth rewriting.
+
+- **`make setup` is quiet about a candidate it rejected — NEW.** **verified** as behaviour;
+  the judgement is a judgement. If you have `lowdown` installed but a version whose flags the
+  probe does not accept, setup skips it, silently falls through to the next candidate, and
+  reports only the winner. The build notice then names a processor you did not expect and
+  gives no hint why. A `--debug`-ish escape hatch, or one line per rejection on stderr, would
+  turn a confusing outcome into an obvious one. Left out deliberately: the recipe is already
+  the longest in the file, and nobody has hit this yet.
+
 ---
 
 ## If only three get done
@@ -1060,6 +1148,15 @@ error was introduced by the fix rather than inherited from the finding.
    deliberately quote no filename, because which template is named depends on the reader's
    `posts/` directory. It is also not a race, and the order-only fix does not close it.
 
+**Of what the 2026-08-08 branch review added, one is worth doing and one is worth doing
+cheaply.** Item 9's *probe extension* — assert a quote and a dash survive, not just the raw
+HTML — is the buy: it closes the punctuation class for every present and future row, including
+the three nobody has run, and it does it without installing anything. Correcting the three
+rows by hand fixes today's table and leaves the class open, so it is the worse half of the
+same item. Item 10 is two characters (`config.mk.$$$$`) and needs no test; it is only unranked
+because nothing has ever hit it. The 3.81 bullet is not work, it is a decision — whether that
+floor is still real — and it should be answered before anyone spends a day making it true.
+
 ---
 
 ## What has been verified by running it
@@ -1092,3 +1189,44 @@ Second sweep, all **verified** by execution:
 Taken from reading or the first sweep, **not** re-executed in the second: the same-date
 sibling-glob over-match, the first-ever-`make`-with-`url=` gotcha, `deploy`'s missing
 prerequisite, and `POST_NAMES`' re-expansion cost.
+
+### Branch review, 2026-08-08 (markdown processor detection)
+
+Same method — scratch copies of `Makefile`, `.source/`, `tests/` and `tools/`, never the real
+tree. All **verified** by execution unless marked otherwise:
+
+1. Full suite: **335 passed, 0 failed** (one environmental SKIP: no `chflags` on Linux).
+2. A `#` in `markdown=` drops an author's edit at exit 0 on a *rebuild* — reproduced against
+   the unfixed recipe, with `Build completed.` on stdout — and fails loudly with the parens.
+   Both directions confirmed by mutation.
+3. Installing a processor and running a plain `make` still stages verbatim; `make setup` then
+   a plain `make` re-stages, with no `make clean`. The old `Markdown.pl` gotcha is genuinely
+   closed rather than reworded.
+4. A detected processor that is later uninstalled fails at `Error 127` on the next re-stage —
+   never a silent fall back to verbatim — and `make setup` heals it.
+5. Notice is line 1, exactly once, serial and under `-j4`; silent for `clean`/`setup`/`config`;
+   prints under `-n`, `-q`, `-s`.
+6. Notice costs one `$(shell)` per parse, not three — counted with a `sed` wrapper against both
+   forms.
+7. The upgrade guard fires on a `config.mk` holding only `DATE_DIALECT`, for the default goal,
+   an explicit page goal, and `-j4`; `clean` still works; `setup` recovers without deadlock;
+   `make setup all` on such a tree dies at the guard.
+8. The probe rejects a candidate that eats raw HTML, one that emits a whole document, and one
+   that truncates its input without poisoning the candidates behind it; the first working row
+   in table order wins.
+9. An installed-but-rejected candidate is never named in setup's output — the Minor bullet's
+   claim, checked with a deliberately wrong-flagged `lowdown` stub.
+10. Interaction check across the seven tasks: reverting `markdown_stub`'s setup re-run fails 11
+    assertions across 6 pre-existing tests, and removing `hide_markdown_tools` from `sandbox()`
+    fails 44 on a machine with real processors — so neither change left an older test passing
+    for a changed reason.
+
+**The BSD `date` dialect was exercised by hand on a Mac by the repo owner and worked** —
+reported 2026-08-08, not reproduced here and not covered by any automated run, since every
+review host has been GNU. That is the only evidence the `bsd` half of `DATE_DIALECT` has, and
+it is worth more than the nothing it had before; it is recorded here so the next reviewer
+does not re-open it as unverified, and so nobody mistakes it for something the suite checks.
+
+Not executed in this review: the three unrun candidates' flags (item 9), the concurrent-setup
+interleaving (item 10), make 3.81 (Minor), and the `stat -f %m` fallback in the mtime test,
+which only runs on BSD.
