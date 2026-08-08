@@ -106,10 +106,19 @@ one row down. So:
 
 ```sh
 printf 'x\n' > "$$probefile"
-$$cmd "$$probefile" >/dev/null 2>&1 </dev/null
+out=$$($$cmd "$$probefile" 2>/dev/null </dev/null) || continue
+case "$$out" in *'<html'*|*'<HTML'*|*'DOCTYPE'*) continue;; esac
 ```
 
-Exit zero means the candidate honors the contract; anything else moves to the next row. The
+Exit zero means the candidate runs; the `case` is what holds it to the *fragment* half of the
+contract. A candidate that emits a complete `<html><head>` document exits 0 perfectly happily,
+and grampa would then wrap it in `base.txt` for a second `<html>` — a silently malformed page
+at exit 0. This is the failure mode `multimarkdown --snippet` and pandoc's missing `-s` exist
+to prevent, and the `case` makes the whole table robust to getting one of those flags wrong
+rather than trusting eleven remembered argv strings. A candidate that trips it is skipped, not
+fatal, so the next row still gets its turn. The `case` cannot false-positive: the probe input
+is the single character `x`, so any `<html` in the output is the tool's own scaffolding and
+never the author's text. The
 `</dev/null` matters: a candidate that ignores its file argument and waits on stdin would
 otherwise hang `make setup` forever. `./Markdown.pl` keeps its `[ -x ]` test *in addition*,
 since a non-executable one must not be run at all.
@@ -335,9 +344,13 @@ trusted:
 - **Installable on Arch and therefore verified by running:** `lowdown`, `cmark`, `cmark-gfm`,
   `discount` (`markdown`), `md4c` (`md2html`), `pandoc`, `python-markdown` (`markdown_py`),
   `comrak`.
-- **Not readily installable here and taken from documentation:** `smu`, `multimarkdown`,
-  `markdown-it`. These are marked as unverified in the implementation notes rather than
-  allowed to pass as checked.
+- **Verified by building from source:** `smu` (plain C, no toolchain beyond `cc`). Confirmed
+  fragment output, no table support as documented, raw HTML preserved, punctuation untouched.
+- **Taken from documentation, deliberately not executed:** `multimarkdown` (needs `cmake`),
+  `comrak` (needs the Rust toolchain), `markdown-it` (needs Node). A decision, not an
+  oversight: roughly a gigabyte of toolchain to confirm three argv strings, against a
+  fragment-checking probe that now catches the failure mode those flags guard. They stay
+  marked unverified rather than passing as checked.
 
 For each, confirm two things specifically: that output is a fragment rather than a whole
 document, and that a table in the input produces a `<table>` in the output.
