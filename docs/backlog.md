@@ -798,18 +798,43 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   what this entry itself proposed as the cheapest honest option. CLAUDE.md's Commands section
   and README.md both now say `setup` is a one-time step that wants its own invocation.
 
-  Two things the entry did not have. First, **`make -j setup deploy` inherits it**, now that
-  `deploy: all` makes `deploy` a build goal — verified, 5/5 runs, same error. Second, **the
-  message names whichever template loses the race, and that varies**: ten runs here all named
-  `base.txt`, while the checkpoint-2 review's run of the same command named `post.txt`. So the
-  documentation deliberately does *not* quote a filename, and says so, since this repo's stated
-  identity is documentation checkable against the code and a reader who checks a specific string
-  would half the time find it false.
+  Three things the entry did not have, and **two of them are corrections to the first version
+  of this very entry**, caught at the Task 4 review.
 
-  The mechanical fix stays rejected on evidence rather than on taste: `setup` is `.PHONY`, so
-  an order-only `build: | setup` makes `setup` remake on **every** build — confirmed with
-  `make --debug=b`, one "Must remake target `setup'" per no-op rebuild against zero without it.
-  Making it non-phony means inventing a stamp file for a step run once.
+  First, **`make -j setup deploy` inherits it**, now that `deploy: all` makes `deploy` a build
+  goal — verified, 5/5 runs, same error. Closing ranked item 5 quietly widened this one.
+
+  Second, **it is not a race**, and the first draft of both this entry and the CLAUDE.md
+  paragraph called it one. Make resolves the whole prerequisite graph before running any
+  recipe, so `build`'s prerequisites are looked up while `setup`'s recipe has copied nothing.
+  On a first run `templates/` is still empty when make dies — verified — so no template lost
+  anything. The word mattered because it suggests a sequencing fix.
+
+  Third, **which template is named is deterministic**, and the first draft claimed it "varies
+  between runs and machines". It does not vary at all: make names the first missing template in
+  its dependency walk, which is fixed by the directory's contents. With posts present it is
+  `templates/post.txt` needed by the first fragment; with `posts/` empty it is
+  `templates/base.txt` needed by `build/index.html`. Verified across `-j2`, `-j4`, `-j8`, both
+  goals, no within-state variation.
+
+  The evidence that produced the wrong claim is worth recording, because it looked conclusive:
+  ten runs here named `base.txt` and the checkpoint-2 review's run of the *same command* named
+  `post.txt`. Same command, different `posts/` — the runs here never created one. Two
+  observations that differ are evidence of a hidden variable, not of randomness, and the entry
+  reached for the weaker conclusion. The documentation still quotes no filename, but now for a
+  provable reason: the name is predictable from something the reader has and the document does
+  not. The first draft's "a reader who checks would half the time find it false" also had the
+  wrong quantifier — a reader with posts will *always* find `base.txt` false.
+
+  The mechanical fix stays rejected, and on a stronger ground than first written. The entry
+  said only that `setup` is `.PHONY`, so an order-only `build: | setup` makes `setup` remake on
+  **every** build — true, confirmed with `make --debug=b`, one "Must remake target `setup'" per
+  no-op rebuild against zero without it. But that is the lesser objection, and stating it alone
+  implies the fix would work at that price. **It does not close the race at any price**: an
+  order-only prerequisite sequences the target's *recipe* against `setup`, not make's walk of
+  `build`'s other prerequisites, and the error fires during that walk. Verified — with it
+  added, `make -j4 setup all` fails identically, 3 of 3, as does `make -j4 all` alone. Making
+  `setup` non-phony means inventing a stamp file for a step run once.
 
   Original finding follows.
 
@@ -891,15 +916,27 @@ rather than a fix, and both have a documented answer today (`make clean && make`
 a closed body case for the second). **This list has stopped being a pile of small things and
 become two open questions**, which is worth knowing before reading the rest of it.
 
-The four that closed did what everything on this list does: three of the four turned out to be
-described wrongly by their own entries. The control-character item was one item short — a
-**tab** already failed, but named a fragment of the filename for the wrong reason, and fixing
-that came free with choosing where to put the new check. The splitter item called itself
-cosmetic output; the blank line reached no output at all, and the real defect was a one-byte
-disagreement between the two staging branches in an intermediate. And `make deploy`'s entry was
-right, but the commit closing it asserted something backwards in three places — that hand-edits
-to `build/` get rebuilt over, when a hand-edited page is newer than its sources and ships as-is.
-That last one was caught by review, in the commit whose whole subject was making deploys safer.
+The four that closed did what everything on this list does: **three of the four were described
+wrongly by their own entries**, and the fourth was described rightly and then closed by a commit
+that got something backwards. Enumerated, because a count nobody can check is exactly the kind
+of claim this file exists to stop:
+
+1. **The control-character item was one item short.** A **tab** already failed, but named a
+   fragment of the filename for a reason that was not the reason. Fixing it came free with
+   choosing where to put the new check.
+2. **The splitter item called itself cosmetic output.** The blank line reached no output at
+   all; the real defect was a one-byte disagreement between the two staging branches in an
+   intermediate.
+3. **The `-j setup` item proposed an order-only prerequisite as a viable fix.** It is not one —
+   it does not close the problem at all, for the reason recorded in that entry. The same entry
+   then described the failure as a race with a varying error message, and it is neither.
+4. **`make deploy`'s entry was right** — and the commit closing it asserted the opposite of the
+   truth in three places, that hand-edits to `build/` get rebuilt over. Caught by review, in the
+   commit whose whole subject was making deploys safer.
+
+Three of the four went the same way the rest of this list has: the entry was a sketch made from
+reading, and contact with the code moved it. The fourth is the more uncomfortable one, since the
+error was introduced by the fix rather than inherited from the finding.
 
 **The ranked list, in rough order of how much a reader would care:**
 
@@ -1009,7 +1046,8 @@ That last one was caught by review, in the commit whose whole subject was making
 8. ~~**`make -j setup all` in a fresh directory** — close to a non-problem; the cheapest honest
    option is a line in the Commands section.~~ **DONE**, by exactly that line, in CLAUDE.md and
    README.md. `make -j setup deploy` inherits it now that `deploy: all`, and the docs
-   deliberately quote no filename, because which template loses the race varies between runs.
+   deliberately quote no filename, because which template is named depends on the reader's
+   `posts/` directory. It is also not a race, and the order-only fix does not close it.
 
 ---
 

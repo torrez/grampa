@@ -545,13 +545,13 @@ In a fresh scratch directory with `Makefile` and `.source/` copied in and **no**
 make -j4 setup all 2>&1 | tail -3
 ```
 
-Expected: `No rule to make target 'templates/…', needed by …`. **Note which template it names.** It is race-dependent — the backlog's reproduction got `base.txt`, the spec review's got `post.txt`. Then confirm serial `make setup all` exits 0.
+Expected: `No rule to make target 'templates/…', needed by …`. **Note which template it names, and note whether `posts/` is populated** — the two determine each other. The backlog's reproduction got `base.txt` and the spec review's got `post.txt`; that was read as race-dependence and is not (see the correction below). Then confirm serial `make setup all` exits 0.
 
 - [ ] **Step 2: Add the line to `CLAUDE.md`**
 
 In the Commands section, below the command list, add a short paragraph: `setup` is a one-time step and should not be combined with a build goal under `-j`, because the template copying races the build rules and stops with `No rule to make target 'templates/…'`. Serial `make setup all` is fine, and so is the documented `make setup` then `make`.
 
-**Do not name a specific template.** Which one loses the race varies between runs, and this document's stated identity is that it is checkable against the code — a reader who checks a specific string will half the time find it false. Say so in the paragraph, briefly: it is the kind of detail a later contributor would otherwise "helpfully" make specific.
+**Do not name a specific template.** This step originally said the name "varies between runs" — **wrong, corrected at the Task 4 review**: it is a deterministic function of the directory, since make names the first missing template in its dependency walk, so a populated `posts/` gives `post.txt` and an empty one gives `base.txt`. The instruction stands on a better reason: the name is predictable from something the reader has and the document does not. Say that in the paragraph, briefly — it is the kind of detail a later contributor would otherwise "helpfully" make specific.
 
 Say also why it is not fixed in the Makefile: `setup` is `.PHONY`, so an order-only `build: | setup` would run the copying on every build — verified with `make --debug=b` — and making it non-phony means inventing a stamp file for a one-time step.
 

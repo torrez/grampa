@@ -24,20 +24,35 @@ sure nothing stale survives — e.g. after deleting a post, whose old HTML is no
 anything and will otherwise linger in `build/`.
 
 **`setup` is a one-time step, and wants its own invocation.** Do not combine it with a build
-goal under `-j`: in a directory that has no `templates/` yet, `make -j setup all` races the
-template copying against the build rules and stops with `No rule to make target
-'templates/…'`. `make -j setup deploy` does the same, since `deploy` became a build goal.
-Serial `make setup all` is fine, and so is the documented `make setup` then `make`.
+goal under `-j`: in a directory that has no `templates/` yet, `make -j setup all` stops with
+`No rule to make target 'templates/…'`. `make -j setup deploy` does the same, since `deploy`
+became a build goal. Serial `make setup all` is fine, and so is the documented `make setup`
+then `make`.
 
-The message names whichever template loses the race, and **that varies between runs and
-machines** — reproductions of this have named both `base.txt` and `post.txt` from the same
-command. So do not go looking for a specific filename here, and do not helpfully make this
-paragraph specific later.
+**It is not actually a race, which is worth knowing because the name suggests a fix that does
+not work.** Make resolves the whole prerequisite graph before running any recipe, so
+`build`'s prerequisites are looked up while `setup`'s recipe has not copied anything yet — on
+a first run `templates/` is still *empty* when make dies, so no template lost anything.
+Verified: after a failed `make -j4 setup all`, `config` exists and `templates/` has zero
+entries.
 
-It is documented rather than fixed because the mechanical fix does not work: `setup` is
-`.PHONY`, so an order-only `build: | setup` makes `setup` remake on *every* build — verified
-with `make --debug=b` — and making it non-phony means inventing a stamp file for a step you
-run once.
+**Which template the message names is deterministic, and is a function of your directory, not
+of luck.** Make names the first missing template in its dependency walk. With posts present
+that is `templates/post.txt`, needed by the first post's fragment; with `posts/` empty it is
+`templates/base.txt`, needed by `build/index.html`. Verified across `-j2`, `-j4`, and `-j8`,
+both goals — no within-state variation at all. This is why the paragraph quotes no filename:
+not because the name is unpredictable, but because it is predictable *from something the
+reader has and this document does not*. Two reproductions of this once disagreed and were
+taken as evidence of nondeterminism; they had different `posts/` directories.
+
+It is documented rather than fixed because the mechanical fix does not work — and it fails for
+a better reason than cost. An order-only `build: | setup` does make `setup` remake on *every*
+build, since `setup` is `.PHONY` (verified with `make --debug=b`), but that is the lesser
+problem: **it does not close the race either**, because an order-only prerequisite sequences
+the target's *recipe* against `setup`, not make's walk of `build`'s other prerequisites — and
+the error fires during that walk. Verified: with it added, `make -j4 setup all` fails
+identically, 3 of 3. Making `setup` non-phony means inventing a stamp file for a step you run
+once.
 
 `deploy` depends on `all`, so it builds before it ships. It used to not, and
 `make clean && make deploy` therefore handed `deploy.sh` an empty `build/` at exit 0 with no

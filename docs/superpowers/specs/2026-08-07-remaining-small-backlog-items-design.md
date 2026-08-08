@@ -227,11 +227,14 @@ Prose only, in two places:
   and stops with `No rule to make target 'templates/…'`. Serial `make setup all` is fine, and
   so is the documented `make setup` then `make`.
 
-  **Do not name a specific template in that message.** Which one loses the race is
-  race-dependent: the backlog's reproduction got `base.txt` and the spec review's got
-  `post.txt`, same command in the same shape of directory. A document whose stated identity is
-  checkable against the code must not print a specific string here, because a reader who
-  checks it will half the time find it false.
+  **Do not name a specific template in that message.** The backlog's reproduction got
+  `base.txt` and this spec's review got `post.txt` from the same command, which this paragraph
+  originally read as nondeterminism — **wrong, and corrected at the Task 4 review**. The name is
+  a deterministic function of the directory: make names the first missing template in its
+  dependency walk, so a populated `posts/` gives `post.txt` and an empty one gives `base.txt`.
+  The two reproductions differed in their `posts/`, not in luck. The instruction stands, on a
+  better reason — the name is predictable from something the reader has and this document does
+  not. Mechanism recorded in the `-j setup` entry of `docs/backlog.md`.
 - `README.md`, in the sentence that already tells people to run `make setup` first.
 
 Not fixed in the Makefile. An order-only prerequisite is the obvious mechanical fix and does
