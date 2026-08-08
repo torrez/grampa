@@ -1525,6 +1525,14 @@ EOF
 #
 test_migration_reports_error_when_rm_fails() {
 	sandbox migration_rm_fails
+	# chflags uchg is the only realistic way to make a file
+	# un-removable without root, and it is BSD/macOS-only. On
+	# a host without it (GNU/Linux) there is nothing to test
+	# -- rm would just succeed -- so skip rather than fail.
+	if ! command -v chflags >/dev/null 2>&1; then
+		echo "SKIP: $CURRENT (no chflags on this host)"
+		return 0
+	fi
 	cp -R "$REPO/tools" .
 	local status
 	cat > posts/2026-02-02-rmtest.txt <<'EOF'
