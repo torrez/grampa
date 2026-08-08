@@ -296,7 +296,7 @@ Keep the `<i>` and whole-document checks. The dash check does **not** subsume th
 - [ ] **Step 7: Run both tests and the full suite**
 
 Run: `cd /home/andre/Code/grampa && make test`
-Expected: 337 passed, 0 failed. Both new tests pass.
+Expected: 338 passed, 0 failed. Both new tests pass. (The suite counts **assertions**, not tests: these two contribute 2 + 1.)
 
 - [ ] **Step 8: Confirm the check does not reject a real processor**
 
@@ -395,7 +395,9 @@ Register it in the runner list.
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `cd /home/andre/Code/grampa && make test 2>&1 | grep -A3 names_a_rejected`
-Expected: FAIL — `expected 'grampa: setup: lowdown: smartens punctuation' in make output`, with the captured output showing only the two `Configured …` lines.
+Expected: FAIL — `expected 'grampa: setup: lowdown: smartens punctuation' in make output`.
+
+The captured output will also carry two `make: [Makefile:144x: setup] Error 1 (ignored)` lines. Those are **not** a symptom: they come from the `-@yes n | cp -i` template copies, which exit non-zero when the files already exist, and `-@` is what makes make ignore them. Any re-run `make setup` in an existing sandbox shows them in a `2>&1` capture. They appear in Task 1 Step 5's second and third setups and in Task 3 Step 5 too.
 
 - [ ] **Step 3: Attach a reason to each rejection**
 
@@ -426,7 +428,7 @@ Three constraints, all load-bearing:
 - [ ] **Step 4: Run the test and the full suite**
 
 Run: `cd /home/andre/Code/grampa && make test`
-Expected: 338 passed, 0 failed. In particular `test_clean_and_setup_print_no_notice` still passes — that is the constraint the prefix exists to satisfy.
+Expected: 339 passed, 0 failed. In particular `test_clean_and_setup_print_no_notice` still passes — that is the constraint the prefix exists to satisfy.
 
 - [ ] **Step 5: Confirm stderr separation under `-s` and `-j`**
 
@@ -625,7 +627,7 @@ Register it and run it. Expected: FAIL — `did NOT expect '<title>Post 12</titl
 
 - [ ] **Step 4: Write the missing-directory test**
 
-This one guards the `posts:` rule, and it fails with a *bare* prerequisite rather than without the change — so write it now and it will go red in Step 6 if the rule is forgotten.
+This one guards the `posts:` rule, and it **is** red-first — on its second assertion. `mkdir -p posts` exists only inside `setup`'s recipe (`Makefile:1444`), so once the sandbox deletes the directory nothing recreates it. `assert_file build/index.html` passes today; `posts/ recreated` does not, and stays red until *both* Step 5's prerequisite and Step 6's rule exist.
 
 ```bash
 #
@@ -644,7 +646,7 @@ test_build_works_without_a_posts_directory() {
 }
 ```
 
-Register it and run it. Expected: PASS today (nothing references `posts` yet). It is a regression guard for Step 6, not a red-first test — say so when reporting.
+Register it and run it. Expected: FAIL — `posts/ recreated: expected [yes] got [no]`. The build itself succeeds today, so this is one of the cases where an exit-status assertion would have passed against the bug; the directory assertion is what carries the test.
 
 - [ ] **Step 5: Add `posts` as a prerequisite of the three consumers**
 
@@ -694,7 +696,7 @@ posts:
 - [ ] **Step 7: Run all four tests and the full suite**
 
 Run: `cd /home/andre/Code/grampa && make test`
-Expected: 342 passed, 0 failed. Confirm specifically that `test_deleting_a_post_heals_the_feed` — the pre-existing one — still passes unchanged.
+Expected: 351 passed, 0 failed — the four tests contribute 3 + 3 + 4 + 2 assertions. Confirm specifically that `test_deleting_a_post_heals_the_feed` — the pre-existing one — still passes unchanged.
 
 - [ ] **Step 8: Verify the properties the tests do not cover**
 
@@ -715,7 +717,7 @@ echo "--- deleting the last post empties index and feed at exit 0 ---"
 rm posts/*.txt; sleep 1; make >/dev/null 2>&1 && echo "exit 0"; grep -c '<item>' build/rss.xml
 ```
 
-Expected: `make posts` prints `make: 'posts' is up to date.` and runs no recipe; the no-op rebuild prints only `Build completed.` / `All done.`; the in-place append leaves the directory mtime unchanged (so ordinary edits do not over-trigger); `-j8` from clean exits 0; deleting every post leaves 0 `<item>`s at exit 0.
+Expected: `make posts` prints `make: 'posts' is up to date.` and runs no recipe — preceded by the parse-time `grampa: markdown: …` notice, which is correct and not an anomaly: `BUILD_GOAL` is a **denylist** (`NONBUILD_GOALS := clean setup test config`), so an unlisted goal like `posts` gets the notice by design. The no-op rebuild prints only `Build completed.` / `All done.`; the in-place append leaves the directory mtime unchanged (so ordinary edits do not over-trigger); `-j8` from clean exits 0; deleting every post leaves 0 `<item>`s at exit 0.
 
 - [ ] **Step 9: Commit**
 
@@ -756,10 +758,10 @@ an empty site at exit 0. The posts: rule restores that exactly -- with the
 directory present and no prerequisites of its own, make judges it up to
 date and never runs the recipe.
 
-Three tests watched failing first, each on the artifact rather than the
-exit status. The fourth, test_build_works_without_a_posts_directory, is a
-regression guard for the posts: rule and passes before the change; it is
-labelled as such rather than claimed as red-first.
+Four tests watched failing first, each on the artifact rather than the exit
+status. test_build_works_without_a_posts_directory is the one worth naming:
+its build succeeds today, so an exit-status assertion would have passed
+against the bug -- the load-bearing assertion is that posts/ came back.
 
 test_deleting_a_post_heals_the_feed_after_incremental_growth is the one
 that matters: the existing test_deleting_a_post_heals_the_feed builds all
@@ -772,7 +774,7 @@ already worked, and it passes against the unfixed Makefile."
 ### Task 5: Correct every claim Task 4 falsified
 
 **Files:**
-- Modify: `Makefile:169-185` (the `.SECONDARY` comment block)
+- Modify: `Makefile:162-186` (the `.SECONDARY` comment block and its statement)
 - Modify: `CLAUDE.md:353` (build-pipeline, the `.rssitem` paragraph), `CLAUDE.md:373` ("prerequisites are exact"), the feed self-heal gotcha, the "Deleting a post leaves its HTML behind" gotcha
 
 **Interfaces:**
@@ -807,19 +809,25 @@ Expected: 10 items, Post 12 absent, Post 2 present, 11 `.rssitem` files. That is
 
 - [ ] **Step 2: Also confirm the existing test no longer distinguishes the mutation**
 
+Run the whole suite against a **mutated scratch copy**, never against the real tree — an interruption between a `sed -i` and its restore would leave the working tree silently mutated, and the evidence is identical either way.
+
 ```bash
-cd /home/andre/Code/grampa && cp Makefile /tmp/claude-1000/-home-andre-Code-grampa/eea74005-4867-4cfb-99f4-04c1ee64d486/scratchpad/Makefile.orig
+S=/tmp/claude-1000/-home-andre-Code-grampa/eea74005-4867-4cfb-99f4-04c1ee64d486/scratchpad/t5suite
+rm -rf "$S" && mkdir -p "$S" && cd "$S"
+cp /home/andre/Code/grampa/Makefile . && cp -R /home/andre/Code/grampa/.source .
+cp -R /home/andre/Code/grampa/tests . && cp -R /home/andre/Code/grampa/tools .
 sed -i 's|^\.SECONDARY: \$(TMP_FILES) \$(STAGED_FILES)|.SECONDARY: $(TMP_FILES) $(STAGED_FILES) $(RSSITEM_FILES)|' Makefile
-make test 2>&1 | tail -5
-cp /tmp/claude-1000/-home-andre-Code-grampa/eea74005-4867-4cfb-99f4-04c1ee64d486/scratchpad/Makefile.orig Makefile
-git diff --stat Makefile
+grep -n '^\.SECONDARY' Makefile
+./tests/run.sh 2>&1 | tail -5
 ```
 
-Expected: the suite passes in full **with** the mutation applied, including `test_deleting_a_post_heals_the_feed`. Then the restore leaves `git diff --stat` empty. That is the evidence for deleting the comment's citation of that test as its guard.
+`tools/` is required — five tests shell out to `./tools/migrate-categories.sh` and without it you get 18 unrelated failures.
+
+Expected: **351 passed, 0 failed with the mutation applied**, including `test_deleting_a_post_heals_the_feed`. That is the evidence for deleting the comment's citation of that test as its guard: the test no longer distinguishes the mutation from the real Makefile.
 
 - [ ] **Step 3: Rewrite the `.SECONDARY` comment block**
 
-`Makefile:169-185` currently says listing `RSSITEM_FILES` "would be actively harmful", that this was "verified empirically both ways", and names `test_deleting_a_post_heals_the_feed` as the guard. All three are now false. Replace with a block saying:
+The block at `Makefile:162-186` currently says listing `RSSITEM_FILES` "would be actively harmful", that this was "verified empirically both ways", and names `test_deleting_a_post_heals_the_feed` as the guard. All three are now false. Replace with a block saying:
 
 - `.rssitem` files still do not need `.SECONDARY`: they are explicit prerequisites of the explicit target `work/rss.tmp`, and make only reaps files it never sees mentioned.
 - Listing them is now **unnecessary rather than harmful**. It used to suppress the feed's self-heal, because the heal depended on the incoming `.rssitem` being *missing*. Since `posts` became a prerequisite of `rss.tmp`, the target is out of date on any set change and make builds its missing secondary prerequisites anyway.
@@ -844,7 +852,7 @@ It should now say only what remains true: the deleted post's **own page** linger
 - [ ] **Step 8: Run the full suite**
 
 Run: `cd /home/andre/Code/grampa && make test`
-Expected: 342 passed, 0 failed. This task is prose only; it must change nothing.
+Expected: 351 passed, 0 failed. This task is prose only; it must change nothing.
 
 - [ ] **Step 9: Commit**
 
@@ -899,7 +907,9 @@ untracked output nothing can know about. Nothing links to it any more."
 - [ ] **Step 1: Run the full suite one more time from a clean tree**
 
 Run: `cd /home/andre/Code/grampa && make clean && make test`
-Expected: 342 passed, 0 failed. Record the exact number; the backlog entries cite it.
+Expected: 351 passed, 0 failed. Record the exact number; the backlog entries cite it.
+
+This is the one step that runs in the real tree deliberately, and `make clean` wipes a real `build/`/`work/` if one exists. That is normal here — the repo is the program, not a site — but know it is intended before running it.
 
 - [ ] **Step 2: Mark items 8, 9, 10 and the Minor bullet done**
 
@@ -950,6 +960,8 @@ Address every finding or argue it down in writing. Then report to the user: what
 
 **Placeholder scan:** No TBD/TODO. Every test step carries its actual code; every verification step carries its actual commands and expected output; every commit step carries its actual message.
 
-**Consistency:** The stderr line format `grampa: setup: <probe>: <reason>` is defined in Task 3 Step 3 and asserted verbatim in Task 3 Step 1. The `posts` prerequisite spelling is identical in Task 4 Steps 5–6 and Task 5. Test names match between the steps that write them, the steps that run them, and the counts (335 → 337 → 338 → 342).
+**Consistency:** The stderr line format `grampa: setup: <probe>: <reason>` is defined in Task 3 Step 3 and asserted verbatim in Task 3 Step 1. The `posts` prerequisite spelling is identical in Task 4 Steps 5–6 and Task 5. Test names match between the steps that write them and the steps that run them.
 
-**One deliberate deviation from strict TDD, flagged rather than hidden:** `test_build_works_without_a_posts_directory` (Task 4 Step 4) passes before the change. It guards the `posts:` rule against being forgotten in Step 6, and Step 4 says so explicitly rather than claiming a red-first run it cannot have.
+**Counts: 335 → 338 → 339 → 351.** The suite's summary counts **assertions**, not tests (`ok()` increments once per assert), so the checkpoints are the baseline plus 3, then 1, then 12 — not plus 2, 1, 4. The plan's first draft added test counts and was wrong at every checkpoint, including the one Task 6 tells the executor to cite in the backlog. Corrected after checkpoint 2, and verified by execution: 335 baseline, 339 after Tasks 2–3, 351 with all seven tests.
+
+**All seven new tests are red-first**, including `test_build_works_without_a_posts_directory`, which the first draft wrongly called a pass-today regression guard. Its build *does* succeed today — nothing recreates `posts/` after the sandbox deletes it, since `mkdir -p posts` lives only in `setup`'s recipe — so the directory assertion is what makes it fail. That is the same shape as the shell-metacharacter tests recorded in the backlog: where the build already fails or already succeeds for an unrelated reason, assert on the artifact, never the exit status.
