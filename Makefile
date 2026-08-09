@@ -1432,10 +1432,25 @@ config:
 # a checkout ever moves between OSes, and what picks up a
 # markdown processor installed after the fact.
 #
-# The rewrite goes through config.mk.new and a cmp, so a
-# no-op setup leaves the mtime alone. config.mk is a
-# prerequisite of %.staged, so an unconditional write would
+# The rewrite goes through a per-process scratch file and a
+# cmp, so a no-op setup leaves the mtime alone. config.mk is
+# a prerequisite of %.staged, so an unconditional write would
 # re-stage every post on every setup.
+#
+# The scratch name carries $$ -- the PID -- because two
+# setups at once in one directory sharing one fixed name
+# means one can truncate the file the other is midway
+# through writing, and the mv can promote a half-written
+# config.mk that every later parse -includes. mv is atomic,
+# so the interleaving has to land inside the write.
+#
+# The cost: a setup aborted between the write and the mv
+# leaks config.mk.<pid> indefinitely, where the old fixed
+# name was overwritten by the next setup. It is gitignored
+# by /config.mk.* and inert, and make clean does not remove
+# it. Accepted rather than cured with a trap ... EXIT, which
+# would grow an already-long single logical line for a file
+# nothing reads.
 #
 .PHONY: setup
 setup: config
@@ -1445,7 +1460,8 @@ setup: config
 	@mkdir -p templates;
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
-	@if date -v1d >/dev/null 2>&1; then dialect=bsd; \
+	@scratch=config.mk.$$$$; \
+	if date -v1d >/dev/null 2>&1; then dialect=bsd; \
 	elif date -d 2026-01-15 >/dev/null 2>&1; then dialect=gnu; \
 	else echo "grampa: no supported date dialect (need BSD 'date -v' or GNU 'date -d')" >&2; exit 1; fi; \
 	winner=$$(printf '%s\n' "$$MARKDOWN_CANDIDATES" | while IFS='|' read -r probe cmd; do \
@@ -1463,9 +1479,9 @@ setup: config
 		echo "$$cmd"; break; \
 	done); \
 	{ echo "DATE_DIALECT := $$dialect"; \
-	  echo "DETECTED_MARKDOWN := $$winner"; } > config.mk.new; \
-	if cmp -s config.mk.new config.mk; then rm -f config.mk.new; \
-	else mv config.mk.new config.mk; fi; \
+	  echo "DETECTED_MARKDOWN := $$winner"; } > "$$scratch"; \
+	if cmp -s "$$scratch" config.mk; then rm -f "$$scratch"; \
+	else mv "$$scratch" config.mk; fi; \
 	echo "Configured date dialect: $$dialect"; \
 	if [ -n "$$winner" ]; then echo "Configured markdown: $$winner"; \
 	else echo "Configured markdown: none -- post bodies stay HTML"; fi

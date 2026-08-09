@@ -152,8 +152,12 @@ to re-run. The one exception is `config.mk`, which is *generated* rather than co
 probes `date(1)` and the markdown candidates and rewrites it, which is what re-fixes the
 dialect if a checkout ever moves between OSes and what picks up a newly installed markdown
 processor. The rewrite is conditional on the content actually differing — setup writes
-`config.mk.new` and `cmp`s it — because `config.mk` is a prerequisite of `%.staged`, and an
-unconditional touch would re-stage every post on every setup.
+a per-process scratch file (`config.mk.$$$$`, the PID) and `cmp`s it — because `config.mk`
+is a prerequisite of `%.staged`, and an unconditional touch would re-stage every post on
+every setup. The per-process name is what keeps two concurrent setups from truncating each
+other's scratch file and promoting a half-written `config.mk`; the cost is that a setup
+aborted between the write and the `mv` leaks `config.mk.<pid>` indefinitely, which
+`/config.mk.*` ignores and `make clean` does not remove.
 
 ## config
 
@@ -338,9 +342,9 @@ during development and whose flags are inferred from family behaviour rather tha
 The probe file is rewritten **inside** the loop, per candidate: a candidate that truncates a
 shared file would make every candidate behind it fail the `<i>` check on empty input.
 
-`setup` writes `config.mk.new` and `mv`s it only when `cmp` says the content changed, so a
-no-op `make setup` does not bump the mtime — without that, every setup would re-stage every
-post, `config.mk` being a staging prerequisite.
+`setup` writes a per-process scratch file (`config.mk.$$$$`) and `mv`s it only when `cmp`
+says the content changed, so a no-op `make setup` does not bump the mtime — without that,
+every setup would re-stage every post, `config.mk` being a staging prerequisite.
 
 `.tmp` files are rendered post fragments and are the unit of reuse: the per-post page and
 the index are both just a `base.txt` wrapper around one or more `.tmp` files. `.rssitem`
