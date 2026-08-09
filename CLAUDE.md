@@ -593,8 +593,17 @@ more than a format-string swap.
   post. This happens whenever a category's *last* post goes away — `CATEGORY_SLUGS` is
   derived from the filenames that exist at parse time, so a category with no posts left is
   simply not in the target list, and nothing rebuilds or removes its page. The fossil is not
-  inert: it still renders the deleted or renamed post's body, and its link to that post's own
-  page (now equally orphaned) is exactly as dead. `make clean` fixes it.
+  inert, and deletion and renaming leave it pointing at two different things. Delete that
+  last post and the fossil's link goes to a page that is itself now orphaned — the same dead
+  end described in the "Deleting a post" gotcha below. Rename it instead — the
+  `tools/migrate-categories.sh` pattern — and the post keeps the exact same URL, since the
+  category is not part of it: the fossil's link points at a page that still exists, still
+  renders, and is live, just filed under its new category now. One more wrinkle on
+  the rename path, pre-existing and not new on this branch: the renamed post's own page lags
+  one build behind — `make --debug=b` shows its `.tmp` fragment does not yet exist at rename
+  time, so `.SECONDARY` lets make judge the page up to date and it is rebuilt only on the
+  *next* `make`, so for one build the live post page still shows the old category and still
+  links back to the fossil. `make clean` clears the fossil in either case.
 - **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
   page existed — an untracked output, the same shape as the deleted-category gotcha above —
   and `make clean` is still what removes the file itself. What usually no longer lingers is
@@ -653,10 +662,12 @@ more than a format-string swap.
   all eleven as `not runnable` — up to eleven such lines on stderr, just not printed anywhere.
   Two tests, `test_probe_rejects_a_smartening_candidate` and
   `test_setup_names_a_rejected_candidate`, then overwrite the `lowdown` stub with `path_stub`
-  and run `make setup` a **second**, visible time, with the stub now exiting 0 and rewriting
-  `--` to an en dash — a real (if narrow) markdown processor rather than a non-runnable one.
-  It is only that second setup run, and only for `lowdown`, that reads `smartens punctuation`;
-  the other ten candidates, and `lowdown` itself on the first, hidden run, still read
+  and run `make setup` a **second** time, with the stub now exiting 0 and rewriting `--` to
+  an en dash — a real (if narrow) markdown processor rather than a non-runnable one. (Only
+  `test_setup_names_a_rejected_candidate` captures that second run's output for assertion;
+  the other test's second run is discarded too, same as the first.) It is only that second
+  setup run, and only for `lowdown`, that reads `smartens punctuation`; the other ten
+  candidates, and `lowdown` itself on the first, hidden run, still read
   `not runnable` throughout. Harmless either way (`sandbox()` redirects
   them, and `markdown_stub` only surfaces output on failure) and worth knowing before someone
   reads it as a regression.
