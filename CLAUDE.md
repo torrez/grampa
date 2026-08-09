@@ -138,7 +138,7 @@ Makefile, `.source/`, `README.md`, `CLAUDE.md`, `.gitignore`, `tests/`, `tools/`
 | `.source/splitter.txt` | yes | The `-----------------------------------` front-matter delimiter |
 | `README.md`, `CLAUDE.md` | yes | Docs for humans and for Claude |
 | `tests/run.sh` | yes | The suite, run by `make test` in throwaway sandboxes |
-| `tools/` | yes | One-off maintenance scripts (`migrate-categories.sh`) |
+| `tools/` | yes | One-off maintenance scripts (`migrate-categories.sh`, `probe-platform.sh`) |
 | `docs/` | yes | Specs, plans, and `backlog.md` — the standing review findings |
 | `posts/` | no | Source posts, one `.txt` per post |
 | `templates/` | no | Working templates (edit these, not `.source/`) |
@@ -421,13 +421,23 @@ category rule wins from either position — verified by moving it below `%.html`
 fails the build and 4.4.1 renders the category page correctly. The order is kept because
 specific-before-generic reads better, not because it is required.
 
-Two things backstop it regardless: the version guard keeps 3.81 out entirely, and the
-unknown-page guard added in `d96a855` turns a wrong page into a loud failure —
+Two things backstop it regardless: the version guard keeps 3.81 out entirely, and **each of
+the two rules carries its own unknown-page guard**, so a stem no post maps to is a loud
+failure whichever rule claims it —
 
 ```
-build/category/home.html: no post in posts/ builds this page
-make: *** [build/category/home.html] Error 1
+build/category/typo.html: no post in posts/ builds this page
+make: *** [build/category/typo.html] Error 1
 ```
+
+The category rule's copy is not redundant with the `%.html` one added in `d96a855`, which is
+the mistake that left it missing for so long: shortest-stem selection means this rule *always*
+claims a `build/category/…` target above the floor, so the `%.html` guard is never the one
+asked about a category path. Without its own, `tmp_files_in_category` came back empty, the
+prerequisite list was trivially satisfiable, and `awk` ran with **zero file operands** — an
+empty `base.txt`-wrapped page at exit 0, or a wait on stdin when stdin was a terminal. Guarded
+now by `test_unknown_category_page_target_fails_cleanly`, which is a separate test from
+`test_unknown_page_target_fails_cleanly` for exactly the reason above.
 
 `build/rss.xml` is a fourth consumer, gated on `SITE_URL`: `FEED_PAGES` is
 `$(BUILD_DIR)rss.xml` when `url=` is set in config and empty otherwise, so with no `url=`
@@ -626,7 +636,11 @@ more than a format-string swap.
 - **Categories come from filenames, not front matter.** `CATEGORY_SLUGS` is
   `$(sort $(foreach …))` over `POST_NAMES`, so discovering them needs no shell and no
   reading of post contents. Renaming a category means renaming files — see
-  `tools/migrate-categories.sh` for the pattern.
+  `tools/migrate-categories.sh` for the pattern. That script's slug filter is `a-z0-9-`, which
+  is narrower than what the Makefile accepts: a non-ASCII category like `Café` is a legal
+  filename here but would slugify to `caf`, so the script **refuses** it and says to rename by
+  hand rather than silently dropping the character. Stripping ASCII punctuation is intended and
+  stays silent — the filename rules reject it anyway.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
   post. This happens whenever a category's *last* post goes away — `CATEGORY_SLUGS` is
   derived from the filenames that exist at parse time, so a category with no posts left is
@@ -741,13 +755,19 @@ more than a format-string swap.
   `No rule to make target 'config.mk', needed by 'work/….staged'` instead of the deliberate
   `grampa: no DATE_DIALECT -- run make setup first`. Verified both messages. The cost is that
   the prerequisite is only *there* when `config.mk` existed at parse time: in an invocation
-  that starts without one, staging carries no `config.mk` dependency at all. That shadow is
-  currently unreachable in a way that could produce wrong output — such an invocation either
-  has nothing to stage, or dies at `date_select` before any staging recipe runs (verified: a
-  virgin tree with a dated post fails `make setup all` exactly there, and one with an empty
-  `posts/` exits 0) — but it is the same lazy-parse-vs-recipe split as the `url=`/`FEED_PAGES`
-  and `-include config.mk` bullets, and it is worth knowing before someone relies on that
-  prerequisite for something new.
+  that starts without one, staging carries no `config.mk` dependency at all. That shadow **is**
+  reachable: on a virgin tree with a dated post, `make work/<post>.staged` exits 0 and stages
+  verbatim, because staging expands no date helper and neither guard fires — `BAD_POST_DATES`
+  is gated off and the `origin` guard needs `DATE_DIALECT`. (An earlier version of this bullet
+  claimed such an invocation must either have nothing to stage or die at `date_select`; that
+  dichotomy is false, and naming a `.staged` target directly is the counterexample.) It
+  produces no *persistent* wrong output, because `make setup` then writes a newer `config.mk`
+  and the next full `make` re-parses, picks the prerequisite up, and re-stages — verified with
+  a body whose markdown rendering visibly changes. The residual is a whole-second-mtime
+  filesystem, where a
+  same-second `.staged`/`config.mk` tie would skip that re-stage; the same granularity the
+  suite's `sleep 1`s exist for. It is the same lazy-parse-vs-recipe split as the
+  `url=`/`FEED_PAGES` and `-include config.mk` bullets.
 - **The build notice is a parse-time `$(info)`, and it costs one `$(shell)`.** It prints
   `grampa: markdown: …` as the first line of every build, above every `Building …` line, in
   serial and under `-j` alike — a line in `build`'s recipe could not, since a recipe runs
@@ -804,8 +824,12 @@ running commands in a sandbox — copying `Makefile` and `.source/` into a scrat
 the way `tests/run.sh` does — rather than asserting from inspection.
 
 To run the suite itself from a scratch copy, copy `tools/` too: five tests shell out to
-`./tools/migrate-categories.sh`, and without it the suite reports 18 failures that are
-nothing to do with the change under review.
+`./tools/migrate-categories.sh` (six call sites — `test_migration_converts_old_posts` runs it
+twice), and without it the suite reports 15 assertion failures that are nothing to do with the
+change under review. That count is from a Linux host, where `test_migration_reports_error_when_rm_fails`
+skips for want of `chflags`; on macOS it runs and fails too. Re-count both numbers when adding
+a migration test — the sentence has been wrong twice, most recently by being corrected against
+the tree as it stood *before* the diff that added a fifth such test.
 
 Ask for findings split into blocking / recommended / optional, plus a list of what it
 actively verified. The verified list is worth as much as the findings: it stops the same

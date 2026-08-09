@@ -67,6 +67,22 @@ for f in posts/*.txt; do
 		continue
 	fi
 
+	# Stripping ASCII punctuation is intended -- the Makefile
+	# rejects it in a filename. Silently dropping anything
+	# else is not: café is a legal category there, and the
+	# a-z0-9- filter below would publish it as "caf". Refuse
+	# instead, the same way an empty slug does.
+	#
+	# The class is everything outside printable ASCII, which
+	# is wider than "non-ASCII" and deliberately so: a tab
+	# survives the ' ' -> '-' tr and would then be filtered
+	# out, silently joining two words into one.
+	if printf '%s' "$category" | LC_ALL=C grep -q '[^ -~]'; then
+		echo "ERROR    $f: category '$category' has characters outside printable ASCII that this script would silently drop; rename it by hand" >&2
+		errors=$((errors + 1))
+		continue
+	fi
+
 	slug=$(printf '%s' "$category" \
 		| tr '[:upper:]' '[:lower:]' \
 		| tr ' ' '-' \

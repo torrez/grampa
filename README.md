@@ -46,12 +46,11 @@ If you would rather just type `make`, put Homebrew's version first on your `PATH
 export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
 ```
 
-**3.81 is not merely old here.** It voids `.DELETE_ON_ERROR` for the intermediate files grampa
-builds, so a build that fails partway leaves a half-written fragment behind — and the *next*
-build treats that fragment as current and publishes the post with an empty body, at exit 0.
-That is a wrong page shipped silently, which is the one failure this project works hardest to
-prevent. Make 4.0 is rejected too, for an unrelated reason: it crashes on an emoji in a post
-filename. `tools/probe-platform.sh` will tell you what your machine has.
+**3.81 is not merely old here.** It has a bug that lets a failed build silently publish a post
+with an empty body on the next run — a wrong page shipped at exit 0, which is the one failure
+this project works hardest to prevent. Make 4.0 is rejected too, for an unrelated reason: it
+crashes on an emoji in a post filename. `tools/probe-platform.sh` will tell you what your
+machine has.
 
 Optional: a **markdown processor**, to write post bodies in Markdown instead of HTML. You do
 not have to pick one — `make setup` looks for these, in this order, and uses the first it
@@ -87,9 +86,7 @@ and an example `config` and `deploy.sh` into place, and detects your `date` dial
 markdown processor. It never overwrites a file you already have, so it is safe to re-run —
 with one deliberate exception, the generated `config.mk`, which is re-probed every time and
 rewritten whenever the answer changed. That's what re-fixes the `date` dialect if a checkout
-moves between machines, and what picks up a markdown processor you installed later. Leaving
-it alone when nothing changed matters: `config.mk` is a build dependency, so touching it
-needlessly would re-stage every post.
+moves between machines, and what picks up a markdown processor you installed later.
 
 It is a one-time step and wants its own invocation. Run `make setup`, *then* `make` — see
 Known issues below for why you can't combine them.
@@ -142,7 +139,8 @@ title slug even in different categories — they'd both want the same page, and 
 names the two files for you.
 
 Zero-padding the date is optional; posts sort correctly either way. It just gives you a tidier
-URL: `/2026/08/06/…` rather than `/2026/8/6/…`.
+URL: `/2026/08/06/…` rather than `/2026/8/6/…`. The date does have to be a real one, though —
+`2026-02-30`, or February 29th in a non-leap year, stops the build and names the file.
 
 A filename may contain letters, digits, and `-`, `_`, `.` — and nothing else. Every other
 ASCII punctuation character is rejected, so `2026-01-02-home_what's-up.txt` is a build error
@@ -240,9 +238,10 @@ equivalents.
 
 ## Known issues
 
-- **Deleting a post leaves its HTML behind**, and usually its feed item too. Nothing knows the
-  old page existed. Same for renaming or deleting a category, and for removing `url=` from
-  `config`, which leaves a stale `build/rss.xml`. `make clean && make` fixes all of it.
+- **Deleting a post leaves its own HTML page behind.** Nothing knows the old page existed.
+  Everything that *links* to it — the front page, its category page, the feed — drops it on the
+  next `make`. The orphaned page itself needs `make clean && make`, as does a category page
+  whose **last** post you deleted, and a stale `build/rss.xml` left by removing `url=`.
 - **`make setup` can't share an invocation with a build.** `make -j setup all` dies with
   `No rule to make target 'templates/…'`, because make resolves the whole prerequisite graph
   before running any recipe, so it looks for the templates the build needs before `setup` has
