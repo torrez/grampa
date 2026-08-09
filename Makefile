@@ -926,6 +926,23 @@ CHECKED_STATIC_SPLIT := $(foreach f,$(STATIC_SRC),$(if $(wildcard $(f)),,$(error
 # future page type that forgets silently reopens every
 # collision these three close.
 #
+# The comparison is byte-exact ($(filter), not a
+# case-folding or Unicode-normalizing one). On a
+# case-sensitive filesystem that is exactly right. On a
+# case-insensitive one -- APFS's default, and this project
+# treats macOS as first-class via its BSD date dialect --
+# static/Index.html does not match build/index.html here, so
+# no guard fires, yet the two paths name ONE inode: two rules
+# write the same file and the surviving content is
+# order-dependent, at exit 0. An NFD/NFC normalization twin of
+# a non-ASCII name (café.html two ways) is the same hole
+# through the same mechanism. This is not new: two post slugs
+# differing only in case already evade CHECKED_POST_PAGES
+# identically. Documented rather than cured, because a
+# case-insensitive or normalizing comparison would reject
+# static/Index.html on Linux, where it is a legal filename
+# that collides with nothing.
+#
 GENERATED_PAGES := $(BUILD_DIR)index.html $(BUILD_DIR)rss.xml $(addprefix $(BUILD_DIR),$(addsuffix .html,$(POST_PAGES))) $(CATEGORY_PAGES)
 
 #

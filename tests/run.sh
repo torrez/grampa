@@ -3287,9 +3287,17 @@ EOF
 #
 # The placement constraint, pinned rather than commented --
 # the sibling of test_character_error_precedes_the_date_error.
-# A name bad in BOTH ways must get the character message. With
-# the checks below build's prerequisite line, a : dies at make's
-# own "target pattern contains no '%'" instead.
+# A name bad in BOTH ways must get the character message. The
+# collision guards must sit below CHECKED_STATIC_CHARS: a
+# space-bearing name word-splits STATIC_PAGES into a bogus
+# extra word (false exact-collision match), and a % in a name
+# would corrupt the $(s)/% and $(g)/% filter patterns the
+# shadow/under-page guards use. Verified by moving the
+# collision block below the copy rule -- the : still dies at
+# the character check with the good message, since that check
+# did not move; the "target pattern contains no '%'" failure a
+# below-the-copy-rule placement was once thought to risk does
+# not occur, and crediting it to this ordering was wrong.
 #
 test_static_character_error_precedes_the_collision_error() {
 	sandbox static_check_order
