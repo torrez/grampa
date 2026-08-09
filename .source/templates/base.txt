@@ -2,6 +2,7 @@
 	<head>
 		<title>{{page_title}}</title>
 		<link rel="alternate" type="application/rss+xml" title="RSS" href="/rss.xml">
+		<link rel="stylesheet" href="/style.css">
 	</head>
 <body>
 

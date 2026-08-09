@@ -359,7 +359,11 @@ title: Hello
 <p>Hi.</p>
 EOF
 	build || return
-	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+	# css: setup now seeds static/style.css, published as
+	# build/style.css. It's designed output, not a leak -- what
+	# this test protects is that no .tmp/.staged intermediate
+	# escapes work/ into build/, which "css html" still catches.
+	assert_eq "extensions under build/" "css html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
 test_zero_posts_does_not_hang() {
@@ -2031,7 +2035,11 @@ title: Doorbell
 <p>Hi.</p>
 EOF
 	build || return
-	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+	# css: setup now seeds static/style.css, published as
+	# build/style.css. It's designed output, not a leak -- what
+	# this test protects is that no .tmp/.staged intermediate
+	# escapes work/ into build/, which "css html" still catches.
+	assert_eq "extensions under build/" "css html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
 test_migration_converts_old_posts() {
@@ -3037,6 +3045,441 @@ EOF
 }
 
 #
+# static/ filenames are checked with a deliberately narrower
+# set than posts use: only what breaks a make list, a make
+# target name, or an unquoted shell word. logo@2x.png is a
+# legal asset name and must keep building.
+#
+test_bad_character_in_a_static_name_fails() {
+	sandbox static_bad_char
+	mkdir -p static
+	: > 'static/a:b.css'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep "static/a:b.css"
+}
+
+test_space_in_a_static_name_fails() {
+	sandbox static_space
+	mkdir -p static
+	: > 'static/my photo.png'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep "static/my photo.png"
+}
+
+#
+# Rendered through cat -vt, so the byte reaches the terminal
+# as ^A rather than raw. Same trade CONTROL_CHAR_NAMES makes.
+#
+test_control_character_in_a_static_name_fails() {
+	sandbox static_control
+	mkdir -p static
+	: > "$(printf 'static/ctrl\001x.css')"
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep 'static/ctrl^Ax.css'
+}
+
+#
+# The hole the posts checks still have. A newline is
+# invisible to a line-based grep -- find prints the name as
+# two lines and neither matches -- so the existence check is
+# what catches it. Its message names a fragment, because a
+# fragment is all there is to name.
+#
+test_newline_in_a_static_name_fails() {
+	sandbox static_newline
+	mkdir -p static
+	: > "$(printf 'static/nl\nx.css')"
+	build_expect_fail || return
+	assert_out_grep "splits a make list"
+	assert_out_grep "static/nl"
+}
+
+#
+# The converse, and the reason the set is not BAD_CHARS:
+# every one of these is legal and must not error.
+#
+test_legal_static_names_are_accepted() {
+	sandbox static_legal_names
+	mkdir -p static/img
+	: > 'static/logo@2x.png'
+	: > 'static/style,min.css'
+	: > 'static/a+b.css'
+	: > 'static/café.jpg'
+	: > 'static/x~y.css'
+	: > 'static/img/deep.svg'
+	build || return
+	assert_out_not_grep "bad character in static filename"
+}
+
+test_static_file_is_copied() {
+	sandbox static_copy
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "body{color:red}" > static/style.css
+	build || return
+	assert_file build/style.css
+	assert_grep build/style.css "body{color:red}"
+	assert_file build/2026/08/06/hello.html
+}
+
+test_static_subdirectory_is_preserved() {
+	sandbox static_subdir
+	mkdir -p static/img/deep
+	echo "svg" > static/img/deep/x.svg
+	build || return
+	assert_file build/img/deep/x.svg
+	assert_grep build/img/deep/x.svg "svg"
+}
+
+#
+# Doubles as the .SECONDARY / intermediate-reaping guard:
+# a reaped copy would be re-made every build.
+#
+test_static_file_is_not_recopied_when_unchanged() {
+	sandbox static_incremental
+	mkdir -p static
+	echo "a" > static/style.css
+	build || return
+	assert_out_grep "Copying build/style.css"
+	build || return
+	assert_out_not_grep "Copying build/style.css"
+}
+
+test_changed_static_file_is_recopied() {
+	sandbox static_changed
+	mkdir -p static
+	echo "a" > static/style.css
+	build || return
+	sleep 1
+	echo "b" > static/style.css
+	build || return
+	assert_out_grep "Copying build/style.css"
+	assert_grep build/style.css "b"
+}
+
+#
+# The bug a plain $(BUILD_DIR)% pattern rule had: %.html beat
+# it for build/about.html -- its prerequisites all exist --
+# and the unknown-page guard fired with a message about
+# posts. /about.html and the /404.html GitHub Pages wants at
+# the root both failed. The static pattern rule does not
+# compete on stem length at all.
+#
+test_static_html_page_is_published() {
+	sandbox static_html_page
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "<h1>About</h1>" > static/about.html
+	build || return
+	assert_file build/about.html
+	assert_grep build/about.html "<h1>About</h1>"
+	assert_out_not_grep "no post in posts/ builds this page"
+}
+
+test_static_html_page_in_category_dir_is_published() {
+	sandbox static_html_category
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/category
+	echo "<h1>Extra</h1>" > static/category/extra.html
+	build || return
+	assert_file build/category/extra.html
+	assert_grep build/category/extra.html "<h1>Extra</h1>"
+	assert_file build/category/home.html
+}
+
+test_static_collision_with_index_fails() {
+	sandbox static_collide_index
+	mkdir -p static
+	echo "<h1>Mine</h1>" > static/index.html
+	build_expect_fail || return
+	assert_out_grep "both build build/index.html"
+	assert_out_grep "rename or remove"
+}
+
+#
+# rss.xml is a reserved path whether or not the feed is
+# currently built. Gating this on FEED_PAGES would accept the
+# file today and break the build on the day url= gets set --
+# a failure whose cause was added weeks earlier. No url= here
+# on purpose.
+#
+test_static_collision_with_the_feed_fails_without_url() {
+	sandbox static_collide_feed
+	mkdir -p static
+	echo "nope" > static/rss.xml
+	build_expect_fail || return
+	assert_out_grep "both build build/rss.xml"
+}
+
+test_static_collision_with_a_post_page_fails() {
+	sandbox static_collide_post
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/2026/08/06
+	echo "<h1>Impostor</h1>" > static/2026/08/06/hello.html
+	build_expect_fail || return
+	assert_out_grep "both build build/2026/08/06/hello.html"
+}
+
+#
+# The silent one. static/2026 beside a 2026-dated post: the
+# first serial build exits 0 having never published the file
+# -- build/2026/ exists as a directory newer than the source,
+# so make judges the target up to date -- and after a touch,
+# cp copies INTO the directory and lands at build/2026/2026.
+# Exit 0 both times. Under -j4 it is a race-dependent mkdir
+# failure instead.
+#
+test_static_file_shadowing_a_page_directory_fails() {
+	sandbox static_shadow_dir
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "nope" > static/2026
+	build_expect_fail || return
+	assert_out_grep "same path as a directory generated pages live in"
+	assert_out_grep "build/2026"
+}
+
+test_static_directory_named_for_a_page_fails() {
+	sandbox static_under_page
+	mkdir -p static/index.html
+	echo "nope" > static/index.html/x.css
+	build_expect_fail || return
+	assert_out_grep "same path as a generated page"
+	assert_out_grep "build/index.html"
+}
+
+#
+# The near-misses that must NOT fire. filter's % is anchored
+# by the /, so these are clean -- if either errors, the
+# collision filters have lost their anchor.
+#
+test_static_names_near_a_generated_page_are_fine() {
+	sandbox static_near_miss
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/2026/08/06
+	echo "a" > static/2026/08/06/hello.htmlx
+	echo "b" > static/categoryextra.css
+	build || return
+	assert_file build/2026/08/06/hello.htmlx
+	assert_file build/categoryextra.css
+	assert_file build/2026/08/06/hello.html
+}
+
+#
+# The placement constraint, pinned rather than commented --
+# the sibling of test_character_error_precedes_the_date_error.
+# A name bad in BOTH ways must get the character message. The
+# collision guards must sit below CHECKED_STATIC_CHARS: a
+# space-bearing name word-splits STATIC_PAGES into a bogus
+# extra word (false exact-collision match), and a % in a name
+# would corrupt the $(s)/% and $(g)/% filter patterns the
+# shadow/under-page guards use.
+#
+# The fixture is 'static/index.html x' and the space is the
+# whole point. This test shipped with static/index:x.html,
+# which is bad in ONE way only -- it collides with nothing,
+# since build/index:x.html is not a page grampa builds -- so
+# it passed under both orderings and pinned nothing. Moving
+# the GENERATED_PAGES block above the character check left
+# the suite at 419/0. With the space, the same mutation
+# splits the listing into `static/index.html` and `x`,
+# STATIC_PAGES gets build/index.html, and the mutated
+# Makefile dies at CHECKED_STATIC_EXACT with "static file and
+# a generated page both build build/index.html" while the
+# real one dies at the character check. Proved by mutation in
+# both directions.
+#
+# The second sandbox keeps the old : fixture for what it does
+# pin: the OTHER placement constraint, character-check above
+# the copy rule. Verified by moving the collision block below
+# the copy rule -- the : still dies at the character check
+# with the good message, since that check did not move; the
+# "target pattern contains no '%'" failure a below-the-copy-
+# rule placement was once thought to risk does not occur, and
+# crediting it to this ordering was wrong.
+#
+test_static_character_error_precedes_the_collision_error() {
+	sandbox static_check_order
+	mkdir -p static
+	: > 'static/index.html x'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_not_grep "static file and a generated page both build"
+
+	sandbox static_check_order_colon
+	mkdir -p static
+	: > 'static/index:x.html'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_not_grep "target pattern contains no"
+}
+
+#
+# find static (no slash) prints only the symlink, so
+# STATIC_PAGES got the literal word `static`, which exists,
+# and the build exited 0 having copied nothing.
+#
+test_symlinked_static_directory_is_published() {
+	sandbox static_symlink
+	mkdir -p assets
+	echo "body{color:blue}" > assets/style.css
+	# From Task 4 on, setup already created a real static/
+	# directory; ln -s against it would nest a self-looping
+	# static/assets -> assets inside it instead of replacing it.
+	rm -rf static
+	ln -s assets static
+	build || return
+	assert_file build/style.css
+	assert_grep build/style.css "body{color:blue}"
+}
+
+#
+# The listing was `find static/ ! -type d`, which admitted a
+# FIFO, and cp on a FIFO blocks on a writer that never comes:
+# `mkfifo static/pipe && make` hung forever, in serial and
+# under -j8, killed at 20s both times. make -n was fine, so it
+# was recipe-time. This is the failure class the getline
+# guards and the two cats' /dev/null already close everywhere
+# else.
+#
+# build_expect_fail_within for the same reason the unreadable-
+# template tests use it: a plain build_expect_fail against an
+# unguarded hang blocks the whole suite rather than failing
+# one test.
+#
+# It asserts LOUD, not skipped-in-silence. Narrowing the
+# listing alone would trade the hang for a static/ that does
+# not publish in full and says so nowhere -- the silent wrong
+# output this program refuses everywhere else -- so
+# CHECKED_STATIC_TYPES names the entry and stops.
+#
+# The symlink half is a second case, not decoration: the
+# listing deliberately keeps symlinks (a symlinked asset must
+# still publish), so a link to a FIFO hangs cp identically,
+# and only the find -L in the type check sees through it.
+#
+test_fifo_in_static_does_not_hang() {
+	sandbox static_fifo
+	mkfifo static/pipe
+	build_expect_fail_within 10
+	local built=$?
+	# Sandboxes are kept after the run, and a leftover FIFO
+	# is a trap for anything that later walks the tree
+	# without special-file handling -- the same courtesy the
+	# unreadable-template tests pay with their chmod 644.
+	rm -f static/pipe
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot be published"
+	assert_out_grep "static/pipe"
+	assert_no_file build/pipe
+
+	sandbox static_fifo_symlink
+	mkfifo "$SBOX/realpipe"
+	ln -s "$SBOX/realpipe" static/lpipe
+	build_expect_fail_within 10
+	built=$?
+	rm -f static/lpipe "$SBOX/realpipe"
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot be published"
+	assert_out_grep "static/lpipe"
+	assert_no_file build/lpipe
+}
+
+#
+# { } and , are legal under the minimal set, and brace-expand
+# in an unquoted cp. This is UNIVERSAL coverage, not the
+# host-conditional coverage this comment used to claim: make
+# runs recipes with $(SHELL), and the Makefile sets
+# SHELL := /bin/bash unconditionally, so the recipe shell is
+# bash whatever /bin/sh happens to be. Verified with a probe
+# recipe printing $0 and $BASH_VERSION, and by repointing
+# SHELL and watching $0 follow it rather than staying
+# /bin/sh. The old wording invited someone to discount a
+# guard that is actually solid.
+#
+test_brace_in_a_static_name_builds() {
+	sandbox static_brace
+	mkdir -p static
+	echo "b" > 'static/x{1,2}y.css'
+	build || return
+	assert_file 'build/x{1,2}y.css'
+}
+
+test_build_works_without_a_static_directory() {
+	sandbox static_absent
+	# From Task 4 on, sandbox() runs setup, which now seeds
+	# static/ with the stock stylesheet -- remove it so this
+	# test still exercises what its name says: a build with no
+	# static/ at all.
+	rm -rf static
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file build/2026/08/06/hello.html
+	assert_no_file build/style.css
+}
+
+test_setup_creates_static_with_the_stylesheet() {
+	sandbox static_setup
+	assert_file static/style.css
+	assert_grep static/style.css "font-family"
+}
+
+#
+# setup is safe to re-run -- the yes n | cp -i guarantee that
+# templates/ has. An edited stylesheet must survive.
+#
+test_setup_does_not_clobber_an_edited_stylesheet() {
+	sandbox static_setup_noclobber
+	echo "body{color:hotpink}" > static/style.css
+	"$MAKE" setup >/dev/null 2>&1
+	assert_grep static/style.css "hotpink"
+}
+
+test_stock_stylesheet_is_published_and_linked() {
+	sandbox static_stylesheet_published
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file build/style.css
+	assert_grep build/index.html '<link rel="stylesheet" href="/style.css">'
+	assert_grep build/2026/08/06/hello.html '<link rel="stylesheet" href="/style.css">'
+}
+
+#
 # ---------------------------------------------------
 # The date half. date -v already rejects every bad date
 # below and exits 1; nothing hears it, because
@@ -3458,5 +3901,30 @@ test_old_config_mk_fails_for_an_explicit_page_goal
 test_setup_recovers_an_old_config_mk
 test_probed_empty_config_mk_builds_fine
 test_clean_works_with_an_old_config_mk
+test_bad_character_in_a_static_name_fails
+test_space_in_a_static_name_fails
+test_control_character_in_a_static_name_fails
+test_newline_in_a_static_name_fails
+test_legal_static_names_are_accepted
+test_static_file_is_copied
+test_static_subdirectory_is_preserved
+test_static_file_is_not_recopied_when_unchanged
+test_changed_static_file_is_recopied
+test_static_html_page_is_published
+test_static_html_page_in_category_dir_is_published
+test_static_collision_with_index_fails
+test_static_collision_with_the_feed_fails_without_url
+test_static_collision_with_a_post_page_fails
+test_static_file_shadowing_a_page_directory_fails
+test_static_directory_named_for_a_page_fails
+test_static_names_near_a_generated_page_are_fine
+test_static_character_error_precedes_the_collision_error
+test_symlinked_static_directory_is_published
+test_fifo_in_static_does_not_hang
+test_brace_in_a_static_name_builds
+test_build_works_without_a_static_directory
+test_setup_creates_static_with_the_stylesheet
+test_setup_does_not_clobber_an_edited_stylesheet
+test_stock_stylesheet_is_published_and_linked
 
 pass_fail_summary

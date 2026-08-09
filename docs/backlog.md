@@ -1,6 +1,7 @@
 # Backlog
 
-Findings from full-repo reviews. Two full sweeps and two branch reviews so far:
+Findings from full-repo reviews. Two full sweeps, two branch reviews and two whole-branch
+pre-merge reviews so far:
 
 - **First sweep**, 2026-08-06, after the RSS feed landed (`2c0c57d`).
 - **Second sweep**, 2026-08-06, after the Markdown failure fix (`b0971a2`). Every item from
@@ -24,6 +25,13 @@ Findings from full-repo reviews. Two full sweeps and two branch reviews so far:
   corrected: the mtime mechanism is pre-existing, but the one-build lag it now produces exists
   only because this branch's own fix (item 8) made the rest of a rename heal, where nothing did
   before. Item 14's count moved from four to seven.
+- **Whole-branch review**, 2026-08-09, of static assets (`b769921`) — the four CLAUDE.md
+  checkpoints across five tasks, then the whole branch before merge. It found one behaviour
+  bug that had to be fixed before shipping (a FIFO in `static/` hung the build forever) and a
+  further run of item 14's defect, taking that count from eight to seventeen. Nothing it found
+  endangers `posts/`. Its residuals are recorded in the section at the end of this file rather
+  than as new numbered items: none of them is a fix waiting to be scheduled, they are decisions
+  taken with their costs known.
 
 Statuses below are current as of **this commit**, not as of the sweep: the sweep's CLAUDE.md
 findings were fixed in the same commit that records them, so several items read "CLAUDE.md
@@ -696,7 +704,7 @@ and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect — eight confident-but-false claims, and the finding is that counting them was the wrong instrument
+### 14. The branch's own recurring defect — seventeen confident-but-false claims across two branches, and the finding is that counting them was the wrong instrument
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
 formerly-true, empirically-false claim". It happened four times on this branch before this
@@ -777,6 +785,61 @@ so in one sentence produced a false half.** Deletion orphans a fossil's link; re
 not, because the URL doesn't carry the category. A rename can still *lag* a build behind, but
 only via the mtime-preservation mechanism that `mv`/`git mv` has and
 `tools/migrate-categories.sh` deliberately does not.
+
+**The static-assets branch produced nine more, 2026-08-09, taking the count from eight to
+seventeen — and the only finding that matters about them is how they were caught.** Every one
+was found by **running something**; not one was found by reading. The nine:
+
+9. **The spec's central design argument.** A plain `$(BUILD_DIR)%` pattern rule was argued safe
+   because make's shortest-stem selection would keep it away from generated pages. False: stem
+   length only *orders* the trial, and which candidate the first pass accepts is decided by its
+   prerequisites. Caught at the Task 3 checkpoint by building the two-rule reproduction, not by
+   re-reading the spec — which had been read at two prior checkpoints.
+10. **The check-placement constraint**, in the first form it was written: that the collision
+    guards had to sit above the first rule expanding `STATIC_PAGES`. Disproven by moving the
+    block; only the character check has that constraint.
+11. **The upgrade-path claim** at Task 4, reproduced as false by the Task 4 review.
+12. **A make-4.4-only behaviour stated as universal.** The rule-selection boundary — what
+    counts as a prerequisite that "ought to exist" — moved in 4.4, and the comment stating it
+    said "makeable" without a version column. Caught by probing three binaries.
+13. **`find static` without the trailing slash "exits 0 having copied nothing and said
+    nothing"** (R-1). True when written against the plain pattern rule of Tasks 1–2; Task 3
+    changed the rule form and nobody re-ran it. Under the shipped static pattern rule make
+    prints `target 'static' doesn't match the target pattern` — still exit 0, still nothing
+    copied, but not silent. Both forms reproduced.
+14. **The brace-expansion hazard applies "on any host whose `/bin/sh` is bash"** (R-2), said in
+    three places, with the test calling itself host-conditional coverage on the strength of it.
+    `Makefile:40` sets `SHELL := /bin/bash`, and make runs recipes with `$(SHELL)`, so the
+    hazard and the guard are universal. This one **understated** a guard rather than
+    overstating it — the same defect pointing the other way, and worse for it, since an
+    understated guard invites someone to discount it.
+15. **"`STATIC_SRC` is read by three checks and one prerequisite list"** (R-4). It is read by
+    one check and one `patsubst`; the character check reads the listing and the three guards
+    read `STATIC_PAGES`. Written at Task 1 as a forward claim — "true once Tasks 2–3 land" —
+    and never revisited when Tasks 2–3 built those readers over something else. A deferred
+    claim is a claim.
+16. **"The placement constraint, pinned rather than commented"** — the comment on
+    `test_static_character_error_precedes_the_collision_error`, which pinned nothing: its
+    `static/index:x.html` fixture is bad in one way only, so the test passed under both
+    orderings. A claim about *coverage* rather than about behaviour, and invisible to reading
+    for exactly that reason — the test existed, was named correctly, and asserted the right
+    message. Only mutation showed it was inert.
+17. **"Everything that is not a directory is an asset."** The spec's justification for
+    `! -type d`. False, and the only one of the nine that was a live hang rather than a wrong
+    sentence: the predicate also admits FIFOs, and `cp` blocks on one forever. Caught by
+    creating one.
+
+**The pattern, and it is the whole finding: nine for nine were caught by execution, zero by
+inspection** — and several had survived multiple careful readings by reviewers who were
+specifically looking for this class, because a false claim about code reads exactly like a true
+one. Instance 16 is the sharpest case, since the thing that was false was a test's own claim to
+be testing something. What separates the nine from the earlier eight is not the rate but the
+cure that now exists for their commonest cause: instances 9, 12 and 13 are all the same
+argument stated in three places — Makefile comment, `CLAUDE.md`, spec — where re-running it in
+one place left two copies asserting something that had stopped being true. That fix wave
+collapsed `CLAUDE.md`'s copy to the conclusion plus a pointer at the Makefile's, which is the
+same subtraction that ended the run at instance 4 and the run at instance 8, applied a third
+time. It is the only move that has ever worked on this defect.
 
 **How it was finally stopped is itself worth recording: by *deleting* the fourth claim rather
 than splitting the sentence a third way.** After three consecutive corrections each replaced
@@ -1761,3 +1824,136 @@ tree. All **verified** by execution unless marked otherwise:
   installed on any review host across either branch review. The probe extension (item 9) is
   believed to generalize to them on the same reasoning that motivated it, but "believed" is
   the honest word: nobody has run any of the four.
+
+### Whole-branch review, 2026-08-09 (static assets)
+
+Same method — scratch copies of `Makefile`, `.source/`, `tests/` and `tools/`, never the real
+tree. All **verified** by execution unless marked otherwise. The branch adds `static/`: a
+directory copied verbatim into `build/`, about twenty non-comment lines of make.
+
+**One blocking finding, fixed before merge.** `STATIC_LS` was `find static/ ! -type d`, which
+admits FIFOs, sockets and device nodes as well as the symlinks it was written for. `mkfifo
+static/pipe && make` then **hung forever** at `Copying build/pipe` — killed at 20s, in serial
+and under `-j8` alike; `make -n` was clean, so it was recipe-time. This is the class the
+`getline` guards and the two `cat`s' `/dev/null` already close everywhere else in this program.
+Shipped as `\( -type f -o -type l \)` plus `CHECKED_STATIC_TYPES`, a parse-time error naming
+anything the predicate drops — loud rather than skipped, because a silent skip trades the hang
+for a `static/` that does not publish in full and says so nowhere. The check runs `find -L`, so
+a *symlink to* a FIFO — which hangs `cp` identically — is caught too; both halves reproduced
+against the unfixed listing and pinned by `test_fifo_in_static_does_not_hang`.
+
+**What shipped knowingly unresolved.** None of these is scheduled work; each is a decision with
+its cost written down.
+
+1. **The `category/` namespace is not reserved unconditionally, the way `rss.xml` is.** The
+   guards compare against `CATEGORY_PAGES`, which is derived from the posts that exist at parse
+   time, so `static/category/home.html` **builds at exit 0 and publishes** on a tree with no
+   posts — and parse-errors with `static file and a generated page both build
+   build/category/home.html` the day a `home` post lands. Verified both halves. That is exactly
+   the "cause added weeks earlier" shape the unconditional `rss.xml` listing exists to avoid,
+   and it is left open deliberately: reserving `build/category/` wholesale would forbid a
+   hand-written `/category/index.html`, which is a reasonable page for a blog to want and which
+   grampa itself will never generate. `rss.xml` is one fixed path with no such tension;
+   `category/` is a namespace.
+2. **The three collision guards compare byte-exactly, and on a case-insensitive filesystem that
+   is a hole.** `$(filter)` is neither case-folding nor Unicode-normalizing, so
+   `static/Index.html` does not match `build/index.html`, no guard fires, and on APFS's default
+   the two paths name one inode: two rules write one file and the survivor is order-dependent,
+   at exit 0. NFD/NFC twins of a non-ASCII name are the same hole. Not new and not this
+   branch's: two post slugs differing only in case already evade `CHECKED_POST_PAGES`
+   identically. Left as-is because a case-folding comparison would reject `static/Index.html`
+   on Linux, where it is legal and collides with nothing.
+3. **The shadow and under-page messages name the offender by its `build/` path, not the path
+   the user has to rename.** Verified: `static/2026` beside a 2026-dated post errors with
+   `static file build/2026 has the same path as a directory generated pages live in`, and a
+   `static/index.html` *directory* with `static directory build/index.html …`. The file to move
+   is `static/2026` and `static/index.html`. Both messages are correct about the collision and
+   wrong about the address; the exact-collision message is fine, because it says "both build".
+   Left as-is: the variables genuinely hold `build/` paths, and mapping back would mean a
+   `patsubst` per message for a diagnostic that already names the right file to within one
+   directory component.
+4. **`sort -u` makes the two amended html-only tests unbounded in `.css`.**
+   `test_build_output_is_html_only` and `test_category_pages_are_html_only_in_build` assert the
+   set of extensions under `build/` is exactly `css html`, and `setup` now seeds
+   `static/style.css`, so `css` is expected output rather than a leak. But `sort -u` collapses
+   duplicates: verified with `static/extra.css` and `static/deep/more.css` added, three
+   stylesheets still read as `css html` and both tests still pass. What the tests were written
+   to catch — a `.tmp` or `.staged` escaping `work/` into `build/` — is still caught, since that
+   would add a term. The `css` term specifically no longer counts anything.
+5. **`make setup deploy` on a virgin tree ships a dangling stylesheet link.** Verified: on a
+   directory where `setup` has never run, that one invocation deploys `build/index.html`
+   carrying `<link rel="stylesheet" href="/style.css">` and **no `build/style.css`**, at exit 0.
+   `STATIC_SRC` is a `:=` `$(shell find static/ …)` snapshotted during the parse, before
+   `setup`'s recipe copies `.source/static/style.css` into place, so `STATIC_PAGES` is empty for
+   that whole process. This is the sixth member of the parse-time-vs-recipe-time family already
+   documented at the top of `CLAUDE.md` — the same shape as `url=`/`FEED_PAGES` — and it
+   self-corrects on the next `make`. Not fixed for the same reason none of the others are: the
+   documented flow is `make setup` and then `make`.
+6. **The make 4.2.1 segfault is a host artifact, not branch breakage.** The prebuilt vanilla
+   4.2.1 used for the cross-version probes segfaults during the parse (exit 139) on this
+   branch — and on pre-branch `main` at `974c186`, at `make setup`, before any of this
+   branch's code is reached. Isolated to a two-line makefile containing nothing but
+   `X := $(wildcard config.mk)`, which segfaults with or without the file present, while 4.3
+   and 4.4 print `ok`: vanilla 4.2.1's bundled `glob` against glibc 2.44. 4.3 and 4.4.1 both
+   build this branch clean at exit 0. So the floor at 4.2 is not in question and no test needs
+   changing; what cannot be done on **this host** is running the suite against a stock 4.2.1
+   binary. Recorded so the next reviewer does not read the crash as a regression.
+
+**Also verified, so the next checkpoint need not re-run it:**
+
+7. Full suite, real tree: **427 passed, 0 failed** (one environmental SKIP: no `chflags` on
+   Linux). 419 before this fix wave; the new FIFO test and the amended check-order test account
+   for the other eight assertions.
+8. The check-placement constraint is now genuinely pinned. It was not:
+   `test_static_character_error_precedes_the_collision_error` shipped with a
+   `static/index:x.html` fixture, which is bad in one way only — nothing generates
+   `build/index:x.html`, so there was no collision to lose the race to — and moving the
+   `GENERATED_PAGES`-and-guards block above the character check left the suite at **419/0**.
+   With the fixture changed to `static/index.html x`, the same mutation gives **425/2**, failing
+   on exactly that test with `static file and a generated page both build build/index.html`
+   where the real Makefile says `bad character in static filename`. Both numbers measured, both
+   directions. The other placement constraint — character check above the copy rule — was
+   already genuinely pinned: moving the whole check-and-guard block below the copy rule gives
+   **424/3**, failing `test_bad_character_in_a_static_name_fails` and the colon half of the
+   check-order test, all three with make's own `multiple target patterns` where the real
+   Makefile gives the character error. (416/3 was the same mutation measured against the
+   419-test suite before this fix wave; the failure count is what carries over, not the pass
+   count. Re-measured rather than carried forward, which is the discipline item 14 is about.)
+9. Every symlink shape behaves as its test expects under the narrowed listing: a symlinked
+   `static/` root publishes its contents, a symlinked asset file publishes, a symlink to a
+   directory still fails loud at `cp: -r not specified`, a dangling symlink fails loud one step
+   earlier than expected — at make's own `No rule to make target 'static/dangle.css'`, since
+   make cannot stat the prerequisite and `$(wildcard)` in `CHECKED_STATIC_SPLIT` matches a
+   dangling link so does not catch it first — and a `static/self -> .` loop is walked by
+   `find`'s own loop detection without hanging. The first draft of the fix's comment said the
+   dangling case was "left to `cp`"; it never reaches `cp`. Caught by running it, which is the
+   point of the entry above.
+10. A `,` in a static filename would silently empty the `$(filter $(s)/%,…)` argument —
+    `$(filter a,b c,a b c)` is empty, and so is `$(filter build/x,y/%,build/x,y/z)`, both
+    measured in a two-line makefile. It is **unreachable**, because the guards only matter when
+    `$(s)` or `$(g)` is a generated-page path — `build/<y>[/<m>[/<d>]]`, `build/category`, or a
+    page — none of which can hold a comma. Recorded in the guard comment because it is closed by
+    an argument about the *other* operand, not by the rejected character set, so a future page
+    type with an author-supplied path component reopens it.
+11. The brace-expansion guard is universal, not host-conditional. `SHELL := /bin/bash` at
+    `Makefile:40` is what make runs every recipe with; `/bin/sh` never enters it. Verified with a
+    probe recipe printing `$0`/`$BASH_VERSION`, and by repointing `SHELL` and watching `$0`
+    follow it rather than staying `/bin/sh`.
+12. Only the newest ten `.tmp` fragments are prerequisites of `work/index.tmp` — `RECENT_FILES`
+    is a `$(wordlist 1, 10, …)`. Confirmed with `make -pn` on a 12-post tree: `index.tmp` names
+    10 of the 12. Two comments said "the fragments are prerequisites of `work/index.tmp`" without
+    that qualifier; the argument they were making rests on `.SECONDARY`, which does cover all of
+    them, so tightening the sentence did not change any conclusion.
+
+**Not verified — recorded so the next reviewer does not have to rediscover the gap:**
+
+- **Anything on macOS or APFS.** Every host in this review was Linux/ext4 with GNU coreutils.
+  That covers the BSD `date` dialect (unchanged by this branch but re-exercised by nothing
+  here), the case-insensitive-filesystem hole in residual 2, and BSD `find`'s handling of
+  `-L` and of the `\( -type f -o -type l \)` grouping, all of which are POSIX but none of which
+  were run there.
+- **A stock GNU make 4.2.1 binary against the suite**, for the reason in residual 6. 4.3 and
+  4.4.1 were both run.
+- **Sockets and device nodes specifically.** `CHECKED_STATIC_TYPES` is written as a negation, so
+  they are covered by construction rather than by enumeration, but the only special file
+  actually created in a sandbox was a FIFO — the one that hangs.

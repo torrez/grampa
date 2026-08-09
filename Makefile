@@ -784,6 +784,307 @@ check_page_collisions = \
 CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(POST_PAGES)))),$(call check_page_collisions))
 
 #
+# static/ is copied into build/ verbatim, mirrored at the
+# site root: static/style.css publishes at /style.css. It is
+# the only source of a page grampa did not generate, which is
+# what makes /favicon.ico and /robots.txt reachable at all.
+#
+# The trailing slash on `find static/` is load-bearing. If
+# static is itself a symlink to a directory -- assets living
+# outside the repo -- then `find static` prints the symlink
+# and nothing under it. patsubst leaves that unmatched word
+# alone, so STATIC_PAGES acquires the literal word `static`
+# and the build exits 0 having copied nothing. Not quite
+# silently, under the static pattern rule this file now
+# ships: `static` does not match that rule's $(BUILD_DIR)%
+# target pattern, so make prints its own
+#
+#   Makefile:NNNN: target 'static' doesn't match the target pattern
+#
+# and carries on to a normal exit 0. That one warning is the
+# whole trace: it names neither static/ nor the assets that
+# went missing, and it appears above the ordinary Building
+# lines where it reads as noise. Until this comment was
+# corrected it claimed the failure "said nothing" -- true of
+# the plain $(BUILD_DIR)% pattern rule of the first two
+# drafts, where `static` names an existing file and make has
+# nothing to complain about, and left unre-run when the rule
+# form changed underneath it. Both forms reproduced. The
+# slash traverses the symlink, and is transparent for a real
+# directory and a missing one. Verified all three.
+#
+# \( -type f -o -type l \) rather than -type f, so a
+# symlinked asset is still copied -- cp follows the link --
+# and rather than the ! -type d this started as, which
+# admitted every remaining file type by accident. A FIFO in
+# static/ made `cp static/pipe build/pipe` block on a writer
+# that never comes and the build hung forever, in serial and
+# under -j8 alike; sockets and device nodes are the same
+# class. The predicate now admits exactly what cp can copy
+# without blocking -- regular files, and symlinks, whose
+# target cp resolves. A symlink to a directory is still
+# enumerated here and still fails loud at cp, which is the
+# behaviour its test already pins.
+#
+# The dropped entries are not skipped in silence: see
+# CHECKED_STATIC_TYPES below, which names them and stops.
+#
+# sort because find walks in directory order, which is
+# neither stable across filesystems nor meaningful to read.
+#
+# 2>/dev/null is what lets a tree with no static/ build clean
+# at exit 0, the same handling POST_LS gives a missing
+# posts/. Unlike posts, static/ has no rule that creates it:
+# nothing downstream requires it to exist.
+#
+# := throughout. STATIC_SRC is read by exactly two things:
+# STATIC_PAGES, which derives the prerequisite list and the
+# three collision guards from it, and CHECKED_STATIC_SPLIT.
+# The character and type checks read the listing itself, not
+# this list, for the reason given at each. (This comment
+# claimed "three checks and one prerequisite list" from Task
+# 1, on the strength of a plan for Tasks 2-3 that ended up
+# building them over STATIC_LS and STATIC_PAGES instead.)
+# The lazy-expansion argument that keeps CONFIG_NAME on =
+# does not apply -- static/ needs no recipe to have run
+# first.
+#
+# STATIC_LS holds a shell fragment rather than a command that
+# runs, exactly as POST_LS does, so the character check below
+# shares the identical listing and the two cannot drift about
+# what the directory holds. STATIC_ODD_LS is its complement
+# and is documented at the check that uses it.
+#
+STATIC_LS := find static/ \( -type f -o -type l \) 2>/dev/null | sort
+STATIC_ODD_LS := find -L static/ ! -type d ! -type f ! -type l 2>/dev/null | sort
+STATIC_SRC := $(shell $(STATIC_LS))
+STATIC_PAGES := $(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))
+
+#
+# A static filename may contain anything except whitespace, a
+# control character, and the punctuation that breaks make or
+# an unquoted shell word. This is deliberately NOT the
+# BAD_CHARS set posts use: logo@2x.png and style,min.css are
+# legal asset names that break nothing, and rejecting them
+# for symmetry's sake would be a rule with no failure behind
+# it. Non-ASCII is fine, so café.jpg and emoji names build.
+#
+# Three escaping layers stack on the grep line. $$ is make's
+# escape for a literal $, \# is make's for a literal #, and
+# '\'' is the shell's way to put a single quote inside a
+# single-quoted string. ] leads the bracket expression
+# because that is the only position where it is literal.
+#
+# \\ is chosen for portability rather than by test: POSIX
+# says a backslash is literal inside a bracket expression, so
+# \\ contributes one twice and harmlessly, while GNU reads it
+# as an escaped backslash and contributes it once. Both
+# readings yield the same set. Verified against 21 bad names
+# and 11 legal ones on GNU grep 3.12 and ugrep 7.5.0.
+#
+# It greps the directory listing rather than STATIC_SRC, and
+# that is load-bearing rather than tidy: a filename
+# containing a space cannot be an element of the list you
+# would be checking, because make splits on whitespace. A
+# check written over STATIC_SRC could not see the principal
+# thing it exists to catch. Same lesson as
+# CONTROL_CHAR_NAMES above.
+#
+# LC_ALL=C pins the classes to bytes, matching the control
+# check's definition -- 0x00-0x1F and 0x7F -- so U+0085
+# arrives as two bytes and builds, the same line café is on.
+#
+# cat -vt renders a control byte as ^A rather than spraying
+# it at a terminal. It renders non-ASCII the same way, so a
+# rejected café(1).jpg is named as cafM-CM-)(1).jpg -- ugly,
+# but it only ever applies to a name already being rejected.
+#
+# HASH exists because make's \# escape works in a plain
+# assignment but NOT inside a function argument: written
+# directly in the $(error) text it reaches the terminal as
+# \#. Verified. The backslash is named in words for the same
+# reason -- \\ in the message renders as \\ and there is no
+# assignment trick that fixes it.
+#
+HASH := \#
+BAD_STATIC_NAMES := $(shell $(STATIC_LS) | LC_ALL=C grep -e '[[:space:][:cntrl:]]' -e '[]:%$$\#\\*?[`()&'\''"|;<>=]' | cat -vt)
+CHECKED_STATIC_CHARS := $(if $(BAD_STATIC_NAMES),$(error bad character in static filename: $(BAD_STATIC_NAMES); shown rendered, so ^A is one byte. A static filename may not contain whitespace, a control character, or any of these: : % $$ $(HASH) * ? [ ] ` ( ) & ' " | ; < > = -- nor a backslash))
+
+#
+# The one hole the posts checks still have, closed here for
+# one line. A 0x0A inside a filename is invisible to a
+# line-based grep: find prints such a name as two lines and
+# neither matches the character class. Both halves then
+# word-split into STATIC_SRC entries that name no file on
+# disk, so a positive existence test catches what a denylist
+# structurally cannot.
+#
+# It runs second because its message is worse -- it names a
+# fragment, since a fragment is all that exists to name --
+# so the check with the good message gets first refusal.
+#
+# Residual, documented not cured: if a split fragment
+# coincidentally names a real path relative to the repo root,
+# that fragment passes here. It is then a source file the
+# copy rule cannot find, so the build still fails, just later
+# and less clearly.
+#
+CHECKED_STATIC_SPLIT := $(foreach f,$(STATIC_SRC),$(if $(wildcard $(f)),,$(error static filename splits a make list, most likely a newline in it: $(f) is not a file. Rename it.)))
+
+#
+# The complement of STATIC_LS, named rather than skipped. A
+# FIFO, socket or device node cannot be published, and cp
+# blocks forever on the first of them -- the whole reason the
+# listing above narrowed from ! -type d. Dropping such an
+# entry quietly would trade a hang for a static/ that does
+# not publish in full and says so nowhere, which is the
+# silent-wrong-output this file refuses everywhere else. Loud
+# is the house default and this is loud.
+#
+# find -L, so what counts is the type of the thing cp will
+# actually open. A symlink to a FIFO hangs cp identically to
+# a bare one, and without -L it is `-type l` to both
+# predicates and sails through both. Under -L the other
+# symlink shapes stay where their own tests expect them. A
+# symlink to a directory reads as a directory under -L and is
+# excluded here, still enumerated by STATIC_LS and still
+# failing loud at `cp: -r not specified`. A dangling symlink
+# reads as `-type l` and is excluded too; it does not reach
+# cp at all -- make cannot stat the prerequisite and stops
+# with its own "No rule to make target 'static/dangle.css',
+# needed by 'build/dangle.css'". (CHECKED_STATIC_SPLIT does
+# not catch that one first: $(wildcard) matches a dangling
+# link.) Loud either way, which is all this check needs of
+# them. Verified all four, plus a static/self -> . loop,
+# which find's own loop detection walks without hanging.
+#
+# Written as a negation and not as -type p -o -type s -o
+# -type b -o -type c. Enumerating the bad set is how [ and ]
+# got into a static filename in the first place; the
+# negation is closed by construction.
+#
+# Its position against the character check is free rather
+# than constrained, unlike the collision guards': the two
+# listings are disjoint except for a symlink whose target is
+# neither file nor directory, and either message is correct
+# for that one entry. It sits last so the two checks with the
+# commoner messages keep first refusal.
+#
+# One extra find per parse. Measured on a 60-post tree with
+# a 40-file static/: no difference outside noise on a no-op
+# rebuild.
+#
+# cat -vt for the same reason BAD_STATIC_NAMES uses it -- a
+# device node's name is as free to hold a control byte as
+# any other.
+#
+BAD_STATIC_TYPES := $(shell $(STATIC_ODD_LS) | cat -vt)
+CHECKED_STATIC_TYPES := $(if $(BAD_STATIC_TYPES),$(error static/ holds something that cannot be published: $(BAD_STATIC_TYPES); a FIFO, socket or device node is not something cp can copy -- it blocks forever on a FIFO -- so move it out of static/))
+
+#
+# Every page grampa itself builds. A static file that claims
+# one of these paths -- or a directory one of them lives in
+# -- is a parse-time error naming both sides, the same
+# refusal to pick a winner CHECKED_POST_PAGES makes for two
+# posts wanting one URL.
+#
+# This is the SOLE containment. See the copy rule's comment:
+# there is no rule-selection argument keeping a static file
+# out of a generated page's target, so without these guards
+# the static file wins silently at exit 0.
+#
+# POST_PAGES (:=) and not html_post_files (=): the two name
+# the same set, but the recursive one re-walks TMP_FILES on
+# every expansion -- the shape that cost 131 shell calls on a
+# 60-post rebuild before POST_NAMES became :=. Verified equal
+# to what build names at the build: line, over unpadded
+# dates, two-digit years, hyphenated categories and
+# non-ASCII slugs.
+#
+# rss.xml is listed UNCONDITIONALLY, not through FEED_PAGES.
+# With url= unset FEED_PAGES is empty, so a gated check would
+# accept static/rss.xml today and break the build on the day
+# url= gets set -- a failure whose cause was added weeks
+# earlier. The feed page is a reserved path whether or not it
+# is currently built.
+#
+# Anything added to build's output must be added here too. A
+# future page type that forgets silently reopens every
+# collision these three close.
+#
+# The comparison is byte-exact ($(filter), not a
+# case-folding or Unicode-normalizing one). On a
+# case-sensitive filesystem that is exactly right. On a
+# case-insensitive one -- APFS's default, and this project
+# treats macOS as first-class via its BSD date dialect --
+# static/Index.html does not match build/index.html here, so
+# no guard fires, yet the two paths name ONE inode: two rules
+# write the same file and the surviving content is
+# order-dependent, at exit 0. An NFD/NFC normalization twin of
+# a non-ASCII name (café.html two ways) is the same hole
+# through the same mechanism. This is not new: two post slugs
+# differing only in case already evade CHECKED_POST_PAGES
+# identically. Documented rather than cured, because a
+# case-insensitive or normalizing comparison would reject
+# static/Index.html on Linux, where it is a legal filename
+# that collides with nothing.
+#
+GENERATED_PAGES := $(BUILD_DIR)index.html $(BUILD_DIR)rss.xml $(addprefix $(BUILD_DIR),$(addsuffix .html,$(POST_PAGES))) $(CATEGORY_PAGES)
+
+#
+# Three conditions, not one. Exact equality is the obvious
+# case; the other two are worse, and the middle one is the
+# only silent failure of the three.
+#
+# STATIC_SHADOWS_DIR: a static file whose published path
+# equals a DIRECTORY generated pages live under. static/2026
+# beside a 2026-dated post exits 0 having never published the
+# file -- build/2026/ exists as a directory newer than the
+# source, so make judges the target up to date -- and after a
+# touch, cp copies INTO the directory and lands at
+# build/2026/2026. Exit 0 both times, content nowhere. Under
+# -j4 from clean it is a race-dependent mkdir failure
+# instead. A file named `category` does the same.
+#
+# STATIC_UNDER_PAGE: the inverse, a static DIRECTORY named
+# for a generated page. It fails on its own today, but with a
+# mkdir message rather than an explanation.
+#
+# No ancestor-walking needed: filter's % anchored by the /
+# does it in one pass each. Verified against the near-misses
+# that must not fire -- hello.htmlx and categoryextra.css.
+#
+# Two characters would break these two filters if they ever
+# reached $(s) or $(g), and both are held off upstream rather
+# than here. A % is the pattern wildcard itself, so $(s)/%
+# would stop meaning "anything under $(s)". A , ends the
+# filter's first argument: $(filter a,b c,a b c) is EMPTY,
+# not $(filter a,b c), so a comma silently empties the result
+# and the guard passes a collision it should have caught --
+# verified in a two-line makefile, along with the concrete
+# shape, $(filter build/x,y/%,build/x,y/z), also empty. The %
+# is rejected by CHECKED_STATIC_CHARS, so it never arrives.
+# The , is deliberately LEGAL in a static filename
+# (style,min.css), so nothing rejects it -- but it is
+# unreachable all the same, because $(s) and $(g) are not
+# arbitrary names: the shadow guard only matters when $(s)
+# equals a directory generated pages live in, which is
+# build/<y>[/<m>[/<d>]] or build/category, and the under
+# guard only when $(g) is a generated page path. A date
+# component cannot hold a comma and neither can the literal
+# `category`. Recorded because it is unreachable by an
+# argument about the OTHER operand, not by the rejected set
+# -- so a future page type whose path is author-supplied
+# reopens it.
+#
+STATIC_EXACT_COLLISIONS := $(filter $(GENERATED_PAGES),$(STATIC_PAGES))
+STATIC_SHADOWS_DIR := $(strip $(foreach s,$(STATIC_PAGES),$(if $(filter $(s)/%,$(GENERATED_PAGES)),$(s))))
+STATIC_UNDER_PAGE := $(strip $(foreach g,$(GENERATED_PAGES),$(if $(filter $(g)/%,$(STATIC_PAGES)),$(g))))
+CHECKED_STATIC_EXACT := $(if $(STATIC_EXACT_COLLISIONS),$(error static file and a generated page both build $(STATIC_EXACT_COLLISIONS); rename or remove the file in static/))
+CHECKED_STATIC_SHADOW := $(if $(STATIC_SHADOWS_DIR),$(error static file $(STATIC_SHADOWS_DIR) has the same path as a directory generated pages live in; rename or remove it))
+CHECKED_STATIC_UNDER := $(if $(STATIC_UNDER_PAGE),$(error static directory $(STATIC_UNDER_PAGE) has the same path as a generated page; rename or remove it))
+
+#
 # Because the category is in the filename but not the
 # URL, a page cannot be mapped back to its fragment by
 # turning slashes into hyphens. Search instead.
@@ -1183,7 +1484,7 @@ clean:
 #
 .PHONY: build
 build: templates/post.txt templates/rss-item.txt
-build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES)
+build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES) $(STATIC_PAGES)
 	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml. A previously built build/rss.xml, if any, is left in place."; fi
 	@echo "Build completed."
 
@@ -1301,6 +1602,113 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 		export PAGE_TITLE="$$BLOG_NAME"; \
 	fi; \
 	awk "$$WRAP_IN_BASE" $< > $@;
+
+#
+# static/ files, copied into build/ with their relative path
+# preserved. The whole feature, three lines of recipe.
+#
+# A STATIC PATTERN RULE, not a plain $(BUILD_DIR)% pattern
+# rule, and the difference is not style. The first draft was
+# plain, argued safe on the grounds that shortest-stem
+# selection would keep it away from generated pages. That
+# argument is FALSE. Make's implicit-rule search orders
+# candidates by stem length, but which candidate the first
+# pass ACCEPTS is decided by its prerequisites -- and where
+# make draws that line MOVED IN 4.4, so read the version
+# column before quoting any of this.
+#
+# "Makeable" is not the test, and an earlier version of this
+# comment saying so was wrong. Probed all four forms on GNU
+# make 4.2.1, 4.3 and 4.4.1, with a two-rule makefile where
+# out/%.html: work/%.tmp competes with out/%: src/% for
+# out/a.html (REAL = the .tmp rule won, IMPOSTOR = the copy
+# rule won):
+#
+#   work/a.tmp is...              4.2.1   4.3    4.4.1
+#   made by another PATTERN rule  IMPOST  IMPOST IMPOST
+#   an explicit target            REAL    REAL   REAL
+#   listed in .SECONDARY          REAL    REAL   IMPOST
+#   a prereq of another target    REAL    REAL   IMPOST
+#
+# Below 4.4 ANY mention in the makefile counted as "ought to
+# exist"; 4.4 narrowed it to the target being built. That
+# inverts the case here, because TMP_FILES -- ALL of it -- is
+# in .SECONDARY (see above). The other mention is narrower
+# than it reads: only the newest ten fragments are
+# prerequisites of work/index.tmp, since that is what
+# RECENT_FILES selects, so with 12 posts index.tmp names 10
+# of the 12 (verified with make -pn). The .SECONDARY mention
+# covers every fragment on its own, which is why the argument
+# does not depend on the window. So on 4.4+, a build where a
+# post's .tmp is
+# not yet on disk has $(BUILD_DIR)%.html failing the pass
+# while a $(BUILD_DIR)% rule whose static/ twin exists passes
+# it -- the LONGER stem wins. On 4.2/4.3 both mentions count
+# and $(BUILD_DIR)%.html wins instead. Confirmed end to end
+# with a twin at static/2026/08/06/hello.html and the
+# collision guards removed: 4.4.1 shipped the impostor at
+# exit 0, in serial, under -j8, and when the page was asked
+# for by name -- while 4.3 rendered the real page. The plain
+# form was not merely unsafe, it was inconsistently unsafe.
+#
+# The CONCLUSION is version-independent even though the
+# mechanism is not: an explicit rule beats a pattern rule on
+# every version, so the static pattern rule below is safe on
+# 4.2, 4.3 and 4.4 alike, and the collision guards are the
+# sole containment on all of them. Do not "simplify" the
+# version column away and leave the conclusion resting on it.
+#
+# A static pattern rule is an explicit rule for exactly the
+# listed targets, so it enters no such contest, and it is
+# inert for anything not in STATIC_PAGES -- a hand-typed
+# make build/nope.css still gets make's own "No rule to make
+# target". An empty STATIC_PAGES parses and builds fine,
+# which is the tree with no static/ at all.
+#
+# It also fixes a plain behavioural bug the pattern form had:
+# a legal, non-colliding static/about.html BROKE the build,
+# because %.html beat $(BUILD_DIR)% for it -- an empty
+# tmp_for_page plus templates/base.txt and config all exist
+# -- and fired the unknown-page guard. /about.html, and the
+# /404.html GitHub Pages wants at the root, failed with a
+# message about posts.
+#
+# The guards above are therefore the SOLE containment against
+# a static file claiming a generated page: under either rule
+# form the twin wins silently without them. They are not a
+# backstop to a rule-selection argument. There is no
+# rule-selection argument.
+#
+# Everything is single-quoted. The rejected character set is
+# the minimal one, so { } and , are legal in a static
+# filename, and static/x{1,2}y.css brace-expands in an
+# unquoted cp -- on EVERY host, not only where /bin/sh is
+# bash. SHELL := /bin/bash at the top of this file is what
+# make runs recipes with; /bin/sh never enters it. Verified
+# with a probe recipe printing $$0 and $$BASH_VERSION, and by
+# repointing SHELL and watching $$0 follow it. An earlier
+# version of this comment said "on any host whose /bin/sh is
+# bash" and its test called itself host-conditional; both
+# understated a guard that is universal. ' is rejected, so
+# nothing can escape the quotes.
+#
+# Plain cp, not cp -p: the copy takes a current mtime, newer
+# than its source, which is what make wants. Preserving the
+# source mtime would leave the two equal and lean on make's
+# treatment of a tie.
+#
+# A symlink to a directory inside static/ (e.g.
+# static/sub -> ../elsewhere) is enumerated by
+# STATIC_LS as a single -type l entry, so cp refuses it and
+# the build fails loud rather than publishing wrong output.
+# CHECKED_STATIC_TYPES deliberately does not pre-empt that:
+# under find -L the link reads as the directory it points at
+# and is excluded there.
+#
+$(STATIC_PAGES): $(BUILD_DIR)%: static/%
+	@echo "Copying $@"
+	@mkdir -p '$(dir $@)'
+	@cp '$<' '$@'
 
 #
 # If just building the index. cat needs /dev/null in
@@ -1526,7 +1934,9 @@ setup: config
 	@mkdir -p $(WORK_DIR);
 	@mkdir -p posts;
 	@mkdir -p templates;
+	@mkdir -p static;
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
+	-@yes n | cp -i .source/static/* static/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
 	@scratch=config.mk.$$$$; \
 	if date -v1d >/dev/null 2>&1; then dialect=bsd; \
