@@ -1781,7 +1781,9 @@ setup: config
 	@mkdir -p $(WORK_DIR);
 	@mkdir -p posts;
 	@mkdir -p templates;
+	@mkdir -p static;
 	-@yes n | cp -i .source/templates/* templates/ 2>/dev/null
+	-@yes n | cp -i .source/static/* static/ 2>/dev/null
 	-@yes n | cp -i .source/deploy.sh.example deploy.sh 2>/dev/null
 	@scratch=config.mk.$$$$; \
 	if date -v1d >/dev/null 2>&1; then dialect=bsd; \

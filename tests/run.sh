@@ -359,7 +359,11 @@ title: Hello
 <p>Hi.</p>
 EOF
 	build || return
-	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+	# css: setup now seeds static/style.css, published as
+	# build/style.css. It's designed output, not a leak -- what
+	# this test protects is that no .tmp/.staged intermediate
+	# escapes work/ into build/, which "css html" still catches.
+	assert_eq "extensions under build/" "css html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
 test_zero_posts_does_not_hang() {
@@ -2031,7 +2035,11 @@ title: Doorbell
 <p>Hi.</p>
 EOF
 	build || return
-	assert_eq "extensions under build/" "html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+	# css: setup now seeds static/style.css, published as
+	# build/style.css. It's designed output, not a leak -- what
+	# this test protects is that no .tmp/.staged intermediate
+	# escapes work/ into build/, which "css html" still catches.
+	assert_eq "extensions under build/" "css html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 }
 
 test_migration_converts_old_posts() {
@@ -3317,6 +3325,10 @@ test_symlinked_static_directory_is_published() {
 	sandbox static_symlink
 	mkdir -p assets
 	echo "body{color:blue}" > assets/style.css
+	# From Task 4 on, setup already created a real static/
+	# directory; ln -s against it would nest a self-looping
+	# static/assets -> assets inside it instead of replacing it.
+	rm -rf static
 	ln -s assets static
 	build || return
 	assert_file build/style.css
@@ -3339,6 +3351,11 @@ test_brace_in_a_static_name_builds() {
 
 test_build_works_without_a_static_directory() {
 	sandbox static_absent
+	# From Task 4 on, sandbox() runs setup, which now seeds
+	# static/ with the stock stylesheet -- remove it so this
+	# test still exercises what its name says: a build with no
+	# static/ at all.
+	rm -rf static
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -3347,6 +3364,36 @@ EOF
 	build || return
 	assert_file build/2026/08/06/hello.html
 	assert_no_file build/style.css
+}
+
+test_setup_creates_static_with_the_stylesheet() {
+	sandbox static_setup
+	assert_file static/style.css
+	assert_grep static/style.css "font-family"
+}
+
+#
+# setup is safe to re-run -- the yes n | cp -i guarantee that
+# templates/ has. An edited stylesheet must survive.
+#
+test_setup_does_not_clobber_an_edited_stylesheet() {
+	sandbox static_setup_noclobber
+	echo "body{color:hotpink}" > static/style.css
+	"$MAKE" setup >/dev/null 2>&1
+	assert_grep static/style.css "hotpink"
+}
+
+test_stock_stylesheet_is_published_and_linked() {
+	sandbox static_stylesheet_published
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file build/style.css
+	assert_grep build/index.html '<link rel="stylesheet" href="/style.css">'
+	assert_grep build/2026/08/06/hello.html '<link rel="stylesheet" href="/style.css">'
 }
 
 #
@@ -3792,5 +3839,8 @@ test_static_character_error_precedes_the_collision_error
 test_symlinked_static_directory_is_published
 test_brace_in_a_static_name_builds
 test_build_works_without_a_static_directory
+test_setup_creates_static_with_the_stylesheet
+test_setup_does_not_clobber_an_edited_stylesheet
+test_stock_stylesheet_is_published_and_linked
 
 pass_fail_summary

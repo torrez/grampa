@@ -8,6 +8,7 @@
 # the rest follow it here.
 #
 /posts/
+/static/
 /config
 /config.mk
 /config.mk.*

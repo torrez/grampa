@@ -1,5 +1,5 @@
 <h4>{{title}}</h4>
 {{body}}
-<p>
+<p class="meta">
 <a href="{{permalink}}">posted on {{pub_date}}</a> in <a href="{{category_url}}">{{category}}</a>
 </p>
