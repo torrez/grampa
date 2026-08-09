@@ -1195,7 +1195,18 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # empirically in both orders. Keep this rule above the
 # %.html rule below it.
 #
-$(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config
+#
+# posts is a prerequisite so that deleting a post makes this
+# page out of date, not just editing one. Its own
+# prerequisites are exact fragments -- every one of them is
+# still on disk and unchanged after a deletion, since nothing
+# deletes a .tmp file -- so without this, make would see every
+# prerequisite present and older and never re-run the awk pass
+# that would have dropped the deleted post's fragment from the
+# list. A directory's mtime moves when an entry is created or
+# removed, which is exactly "the set of posts changed".
+#
+$(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config posts
 	@echo "Building $@"
 	@mkdir -p $(dir $@)
 	@PAGE_TITLE="$(call category_display,$*) - $$BLOG_NAME" \
@@ -1259,7 +1270,14 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 # case there are no posts yet, or it would sit and
 # read stdin.
 #
-$(WORK_DIR)index.tmp: $(RECENT_FILES)
+# posts is also a prerequisite, for the same reason it is on
+# the category page rule above: RECENT_FILES names the newest
+# ten .tmp fragments, every one of which is still on disk and
+# older after a deletion, so nothing here would otherwise
+# notice a post left the window. A directory's mtime moves on
+# entry creation or removal, which records exactly that.
+#
+$(WORK_DIR)index.tmp: $(RECENT_FILES) posts
 	@mkdir -p $(WORK_DIR)
 	@cat /dev/null $(RECENT_FILES) > $@
 
@@ -1398,7 +1416,16 @@ $(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
 # case there are no posts yet, or it would sit and read
 # stdin -- the same reason index.tmp's does.
 #
-$(WORK_DIR)rss.tmp: $(RECENT_ITEMS)
+# posts is also a prerequisite, same reasoning as index.tmp:
+# RECENT_ITEMS names the newest ten .rssitem fragments, and
+# those are only ever absent for a post that was never in the
+# window. A post grown past the window and later deleted
+# already has its fragment on disk, unchanged and older, so
+# without this nothing would notice it left the set. A
+# directory's mtime moves on entry creation or removal, which
+# records exactly that.
+#
+$(WORK_DIR)rss.tmp: $(RECENT_ITEMS) posts
 	@mkdir -p $(WORK_DIR)
 	@cat /dev/null $(RECENT_ITEMS) > $@
 
@@ -1422,6 +1449,23 @@ $(BUILD_DIR)index.html: $(WORK_DIR)index.tmp templates/base.txt config
 
 config:
 	@yes n | cp -i .source/config.example config
+
+#
+# posts/ is a prerequisite of index.tmp, rss.tmp and every
+# category page, so that deleting a post makes them out of
+# date -- a directory's mtime moves when an entry is created
+# or removed, which is exactly "the set of posts changed".
+#
+# It needs a rule because a bare prerequisite would make a
+# tree with no posts/ die on make's own "No rule to make
+# target 'posts'" instead of building an empty site at exit
+# 0, which is what it did before and must keep doing. With
+# the directory present and no prerequisites of its own,
+# make judges it up to date and never runs this recipe, so
+# it costs nothing on a normal build.
+#
+posts:
+	@mkdir -p posts
 
 #
 # config.mk is generated, not copied: setup probes date(1)

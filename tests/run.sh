@@ -666,6 +666,14 @@ test_setup_names_a_rejected_candidate() {
 	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
 	BUILD_OUT=$(make setup 2>&1)
 	assert_out_grep "grampa: setup: lowdown: smartens punctuation"
+	# BUILD_OUT merges stdout and stderr, so it cannot tell
+	# the diagnostic line above apart from a winner written to
+	# config.mk -- both start with "grampa:" and both contain
+	# "DETECTED_MARKDOWN :=" as a substring. Pin the actual
+	# file to an exactly-empty value so a diagnostic that
+	# leaks onto stdout (and so into config.mk) is caught.
+	assert_eq "no diagnostic leaked into the winner" "DETECTED_MARKDOWN :=" \
+		"$(grep '^DETECTED_MARKDOWN' config.mk | sed 's/[[:space:]]*$//')"
 }
 
 #
@@ -1452,6 +1460,119 @@ EOF
 	assert_grep build/rss.xml "<title>Post 12</title>"
 	assert_not_grep build/rss.xml "<title>Post 1</title>"
 	assert_eq "newest item first" "Post 12" "$(grep '<title>' build/rss.xml | sed -n '2p' | sed 's/.*<title>//; s|</title>.*||')"
+}
+
+#
+# Deleting a post used to leave it on the FRONT PAGE, which
+# is worse than the feed case beside it and was undocumented.
+#
+# index.tmp is a cat of the newest-ten .tmp files, taken as
+# prerequisites -- so make asks whether any is newer, never
+# whether the set changed. Every post has a .tmp because
+# every post has a page, so the incoming fragment is always
+# already on disk and older, and index.tmp never re-cats.
+# That is why the feed sometimes healed and the index never
+# did.
+#
+test_deleting_a_post_heals_the_index() {
+	sandbox delete_index
+	local i
+	for i in 1 2 3; do
+		add_post "2026-01-0$i-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	assert_grep build/index.html "Post 3"
+	# Whole-second mtime resolution: posts/ must come out
+	# strictly newer than index.tmp or nothing re-cats.
+	sleep 1
+	rm posts/2026-01-03-home_post-3.txt
+	build || return
+	assert_not_grep build/index.html "Post 3"
+	assert_grep build/index.html "Post 2"
+}
+
+#
+# Same mechanism as the index, one target over. A category
+# page is an awk pass over every fragment in its category,
+# taken as prerequisites -- and it is not even windowed, so
+# a deleted post stays on it forever.
+#
+test_deleting_a_post_heals_the_category_page() {
+	sandbox delete_category
+	local i
+	for i in 1 2 3; do
+		add_post "2026-01-0$i-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	assert_grep build/category/home.html "Post 3"
+	sleep 1
+	rm posts/2026-01-03-home_post-3.txt
+	build || return
+	assert_not_grep build/category/home.html "Post 3"
+	assert_grep build/category/home.html "Post 2"
+}
+
+#
+# test_deleting_a_post_heals_the_feed builds all twelve
+# posts at once, which is the ONE corpus shape where the
+# heal already worked -- the eleventh-newest post has no
+# .rssitem, so deletion forces one to be built, which makes
+# rss.tmp out of date. That test passes against the unfixed
+# Makefile and covers none of the bug.
+#
+# A blog grown a post at a time is the normal shape, and
+# there every out-of-window post already has its fragment.
+# Nothing rebuilds and the deleted post's <item> survives.
+#
+test_deleting_a_post_heals_the_feed_after_incremental_growth() {
+	sandbox feed_delete_incremental
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10 11; do
+		add_post "2026-01-$(printf '%02d' $i)-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	sleep 1
+	add_post "2026-01-12-home_post-12.txt" <<EOF
+title: Post 12
+-----------------------------------
+<p>Body 12.</p>
+EOF
+	build || return
+	assert_grep build/rss.xml "<title>Post 12</title>"
+	sleep 1
+	rm posts/2026-01-12-home_post-12.txt
+	build || return
+	assert_eq "items in feed after delete" "10" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+	assert_not_grep build/rss.xml "<title>Post 12</title>"
+	assert_grep build/rss.xml "<title>Post 2</title>"
+}
+
+#
+# A tree with no posts/ at all builds an empty site at exit
+# 0, and must keep doing so. Adding posts as a prerequisite
+# of index.tmp/rss.tmp/category pages would otherwise make
+# make die on its own "No rule to make target 'posts'", so
+# the posts: rule exists to recreate it.
+#
+test_build_works_without_a_posts_directory() {
+	sandbox no_posts_dir
+	rm -rf posts
+	build || return
+	assert_file build/index.html
+	assert_eq "posts/ recreated" "yes" "$([ -d posts ] && echo yes || echo no)"
 }
 
 #
@@ -3078,6 +3199,10 @@ test_no_url_means_no_feed
 test_feed_is_built_when_url_is_set
 test_feed_escapes_titles_and_bodies
 test_feed_is_capped_at_ten_newest
+test_deleting_a_post_heals_the_index
+test_deleting_a_post_heals_the_category_page
+test_deleting_a_post_heals_the_feed_after_incremental_growth
+test_build_works_without_a_posts_directory
 test_deleting_a_post_heals_the_feed
 test_feed_with_zero_posts
 test_feed_is_byte_stable_across_rebuilds
