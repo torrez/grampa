@@ -793,14 +793,41 @@ CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(
 # static is itself a symlink to a directory -- assets living
 # outside the repo -- then `find static` prints the symlink
 # and nothing under it. patsubst leaves that unmatched word
-# alone, so STATIC_PAGES acquires the literal word `static`,
-# which exists as a prerequisite, and the build exits 0
-# having copied nothing and said nothing. The slash traverses
-# it, and is transparent for a real directory and a missing
-# one. Verified all three.
+# alone, so STATIC_PAGES acquires the literal word `static`
+# and the build exits 0 having copied nothing. Not quite
+# silently, under the static pattern rule this file now
+# ships: `static` does not match that rule's $(BUILD_DIR)%
+# target pattern, so make prints its own
 #
-# ! -type d rather than -type f so a symlinked asset is
-# copied -- cp follows the link -- rather than skipped.
+#   Makefile:NNNN: target 'static' doesn't match the target pattern
+#
+# and carries on to a normal exit 0. That one warning is the
+# whole trace: it names neither static/ nor the assets that
+# went missing, and it appears above the ordinary Building
+# lines where it reads as noise. Until this comment was
+# corrected it claimed the failure "said nothing" -- true of
+# the plain $(BUILD_DIR)% pattern rule of the first two
+# drafts, where `static` names an existing file and make has
+# nothing to complain about, and left unre-run when the rule
+# form changed underneath it. Both forms reproduced. The
+# slash traverses the symlink, and is transparent for a real
+# directory and a missing one. Verified all three.
+#
+# \( -type f -o -type l \) rather than -type f, so a
+# symlinked asset is still copied -- cp follows the link --
+# and rather than the ! -type d this started as, which
+# admitted every remaining file type by accident. A FIFO in
+# static/ made `cp static/pipe build/pipe` block on a writer
+# that never comes and the build hung forever, in serial and
+# under -j8 alike; sockets and device nodes are the same
+# class. The predicate now admits exactly what cp can copy
+# without blocking -- regular files, and symlinks, whose
+# target cp resolves. A symlink to a directory is still
+# enumerated here and still fails loud at cp, which is the
+# behaviour its test already pins.
+#
+# The dropped entries are not skipped in silence: see
+# CHECKED_STATIC_TYPES below, which names them and stops.
 #
 # sort because find walks in directory order, which is
 # neither stable across filesystems nor meaningful to read.
@@ -818,9 +845,11 @@ CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(
 # STATIC_LS holds a shell fragment rather than a command that
 # runs, exactly as POST_LS does, so the character check below
 # shares the identical listing and the two cannot drift about
-# what the directory holds.
+# what the directory holds. STATIC_ODD_LS is its complement
+# and is documented at the check that uses it.
 #
-STATIC_LS := find static/ ! -type d 2>/dev/null | sort
+STATIC_LS := find static/ \( -type f -o -type l \) 2>/dev/null | sort
+STATIC_ODD_LS := find -L static/ ! -type d ! -type f ! -type l 2>/dev/null | sort
 STATIC_SRC := $(shell $(STATIC_LS))
 STATIC_PAGES := $(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))
 
@@ -894,6 +923,56 @@ CHECKED_STATIC_CHARS := $(if $(BAD_STATIC_NAMES),$(error bad character in static
 # and less clearly.
 #
 CHECKED_STATIC_SPLIT := $(foreach f,$(STATIC_SRC),$(if $(wildcard $(f)),,$(error static filename splits a make list, most likely a newline in it: $(f) is not a file. Rename it.)))
+
+#
+# The complement of STATIC_LS, named rather than skipped. A
+# FIFO, socket or device node cannot be published, and cp
+# blocks forever on the first of them -- the whole reason the
+# listing above narrowed from ! -type d. Dropping such an
+# entry quietly would trade a hang for a static/ that does
+# not publish in full and says so nowhere, which is the
+# silent-wrong-output this file refuses everywhere else. Loud
+# is the house default and this is loud.
+#
+# find -L, so what counts is the type of the thing cp will
+# actually open. A symlink to a FIFO hangs cp identically to
+# a bare one, and without -L it is `-type l` to both
+# predicates and sails through both. Under -L the other
+# symlink shapes stay where their own tests expect them. A
+# symlink to a directory reads as a directory under -L and is
+# excluded here, still enumerated by STATIC_LS and still
+# failing loud at `cp: -r not specified`. A dangling symlink
+# reads as `-type l` and is excluded too; it does not reach
+# cp at all -- make cannot stat the prerequisite and stops
+# with its own "No rule to make target 'static/dangle.css',
+# needed by 'build/dangle.css'". (CHECKED_STATIC_SPLIT does
+# not catch that one first: $(wildcard) matches a dangling
+# link.) Loud either way, which is all this check needs of
+# them. Verified all four, plus a static/self -> . loop,
+# which find's own loop detection walks without hanging.
+#
+# Written as a negation and not as -type p -o -type s -o
+# -type b -o -type c. Enumerating the bad set is how [ and ]
+# got into a static filename in the first place; the
+# negation is closed by construction.
+#
+# Its position against the character check is free rather
+# than constrained, unlike the collision guards': the two
+# listings are disjoint except for a symlink whose target is
+# neither file nor directory, and either message is correct
+# for that one entry. It sits last so the two checks with the
+# commoner messages keep first refusal.
+#
+# One extra find per parse. Measured on a 60-post tree with
+# a 40-file static/: no difference outside noise on a no-op
+# rebuild.
+#
+# cat -vt for the same reason BAD_STATIC_NAMES uses it -- a
+# device node's name is as free to hold a control byte as
+# any other.
+#
+BAD_STATIC_TYPES := $(shell $(STATIC_ODD_LS) | cat -vt)
+CHECKED_STATIC_TYPES := $(if $(BAD_STATIC_TYPES),$(error static/ holds something that cannot be published: $(BAD_STATIC_TYPES); a FIFO, socket or device node is not something cp can copy -- it blocks forever on a FIFO -- so move it out of static/))
 
 #
 # Every page grampa itself builds. A static file that claims
@@ -1577,9 +1656,11 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 #
 # A symlink to a directory inside static/ (e.g.
 # static/sub -> ../elsewhere) is enumerated by
-# find static/ ! -type d as a single non-directory entry, so
-# cp refuses it and the build fails loud rather than
-# publishing wrong output.
+# STATIC_LS as a single -type l entry, so cp refuses it and
+# the build fails loud rather than publishing wrong output.
+# CHECKED_STATIC_TYPES deliberately does not pre-empt that:
+# under find -L the link reads as the directory it points at
+# and is excluded there.
 #
 $(STATIC_PAGES): $(BUILD_DIR)%: static/%
 	@echo "Copying $@"

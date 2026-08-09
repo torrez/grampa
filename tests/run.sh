@@ -3336,10 +3336,68 @@ test_symlinked_static_directory_is_published() {
 }
 
 #
+# The listing was `find static/ ! -type d`, which admitted a
+# FIFO, and cp on a FIFO blocks on a writer that never comes:
+# `mkfifo static/pipe && make` hung forever, in serial and
+# under -j8, killed at 20s both times. make -n was fine, so it
+# was recipe-time. This is the failure class the getline
+# guards and the two cats' /dev/null already close everywhere
+# else.
+#
+# build_expect_fail_within for the same reason the unreadable-
+# template tests use it: a plain build_expect_fail against an
+# unguarded hang blocks the whole suite rather than failing
+# one test.
+#
+# It asserts LOUD, not skipped-in-silence. Narrowing the
+# listing alone would trade the hang for a static/ that does
+# not publish in full and says so nowhere -- the silent wrong
+# output this program refuses everywhere else -- so
+# CHECKED_STATIC_TYPES names the entry and stops.
+#
+# The symlink half is a second case, not decoration: the
+# listing deliberately keeps symlinks (a symlinked asset must
+# still publish), so a link to a FIFO hangs cp identically,
+# and only the find -L in the type check sees through it.
+#
+test_fifo_in_static_does_not_hang() {
+	sandbox static_fifo
+	mkfifo static/pipe
+	build_expect_fail_within 10
+	local built=$?
+	# Sandboxes are kept after the run, and a leftover FIFO
+	# is a trap for anything that later walks the tree
+	# without special-file handling -- the same courtesy the
+	# unreadable-template tests pay with their chmod 644.
+	rm -f static/pipe
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot be published"
+	assert_out_grep "static/pipe"
+	assert_no_file build/pipe
+
+	sandbox static_fifo_symlink
+	mkfifo "$SBOX/realpipe"
+	ln -s "$SBOX/realpipe" static/lpipe
+	build_expect_fail_within 10
+	built=$?
+	rm -f static/lpipe "$SBOX/realpipe"
+	[ $built -eq 0 ] || return
+	assert_out_grep "cannot be published"
+	assert_out_grep "static/lpipe"
+	assert_no_file build/lpipe
+}
+
+#
 # { } and , are legal under the minimal set, and brace-expand
-# in an unquoted cp on a bash-/bin/sh host. Passes either way
-# on a dash host, so this is host-conditional coverage --
-# honest about that rather than claiming universal.
+# in an unquoted cp. This is UNIVERSAL coverage, not the
+# host-conditional coverage this comment used to claim: make
+# runs recipes with $(SHELL), and the Makefile sets
+# SHELL := /bin/bash unconditionally, so the recipe shell is
+# bash whatever /bin/sh happens to be. Verified with a probe
+# recipe printing $0 and $BASH_VERSION, and by repointing
+# SHELL and watching $0 follow it rather than staying
+# /bin/sh. The old wording invited someone to discount a
+# guard that is actually solid.
 #
 test_brace_in_a_static_name_builds() {
 	sandbox static_brace
@@ -3837,6 +3895,7 @@ test_static_directory_named_for_a_page_fails
 test_static_names_near_a_generated_page_are_fine
 test_static_character_error_precedes_the_collision_error
 test_symlinked_static_directory_is_published
+test_fifo_in_static_does_not_hang
 test_brace_in_a_static_name_builds
 test_build_works_without_a_static_directory
 test_setup_creates_static_with_the_stylesheet

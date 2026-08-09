@@ -182,6 +182,10 @@ so `logo@2x.png` and `style,min.css` both work, as do accents and emoji.
 It is a copy, not a filter — `style.css~`, `.DS_Store` and editor swap files in `static/` get
 published along with everything else.
 
+Only regular files and symlinks are publishable, though. A FIFO, socket or device node in
+`static/` stops the build and names itself, rather than being copied: `cp` on a FIFO waits
+forever for a writer, so the alternative was a build that hangs.
+
 ## Configuration
 
 `make setup` copies an example `config` into the repo root. It has three keys, all optional:
