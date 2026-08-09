@@ -326,11 +326,18 @@ the body, and the posted-on/category line. Plus the `<h4>` that category and ind
 inherit from the same fragment. No framework, no preprocessor, no build step; it is a file that
 gets copied.
 
-Both files reach existing installs together or not at all: `cp -i` will not clobber an existing
-`templates/base.txt`, and an existing install has no `static/`, so nobody acquires a stylesheet
-link pointing at a file they do not have. New installs get both. This is deliberately *not* the
-shape of the existing `rel="alternate"` feed link, which every install advertises whether or
-not `url=` is set — the README already admits that one 404s.
+New installs get both. An existing install that upgrades and re-runs `make setup` gets the
+**file but not the link**: `cp -i` will not clobber its `templates/base.txt`, but
+`static/style.css` does not exist yet, and `cp -i` only guards files that are already there. So
+such an install ships an unreferenced `/style.css`. Harmless, and the invariant that matters
+still holds — nobody acquires a stylesheet *link* pointing at a file they do not have, which is
+deliberately *not* the shape of the existing `rel="alternate"` feed link that every install
+advertises whether or not `url=` is set.
+
+An earlier version of this paragraph claimed an upgrading install "gets neither the file nor the
+link". That is false and was reproduced as such at the Task 4 review: `make setup` is the
+documented, encouraged re-run — it is the prescribed step for picking up a newly installed
+markdown processor — and it copies the stylesheet in.
 
 An install that predates this feature keeps its old `base.txt` and therefore stays unstyled
 until the author adds the link by hand. That is the same "install that predates the change"
