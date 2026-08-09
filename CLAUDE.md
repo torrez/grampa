@@ -325,7 +325,7 @@ neither is the name.
 
 The two differ because they are mangled at different stages, which is worth one sentence since a
 reader who reproduces only one will otherwise write the other down wrong. `POST_LS` is
-`ls posts | grep '\.txt$'`. A newline makes `ls` print the name as **two lines**, and the `grep`
+`ls posts 2>/dev/null | grep '\.txt$'`. A newline makes `ls` print the name as **two lines**, and the `grep`
 then **drops the `a` line outright** — `POST_NAMES` holds `b.txt` alone, so `b.txt` is the only
 thing the check ever sees. A space keeps the name one line all the way through `ls`, `grep` and
 `sort` (`POST_NAMES := a b.txt`) and splits only at make's word-splitting, where `a` comes
@@ -793,22 +793,41 @@ more than a format-string swap.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
-- **The copy rule is a static pattern rule, and the reason is not style.** The first draft was a
-  plain `$(BUILD_DIR)%` pattern rule, argued safe on the grounds that shortest-stem selection
-  would keep it away from generated pages. **That argument is false.** Stem length only *orders*
-  make's implicit-rule trial; the first pass then accepts a candidate only if its prerequisites
-  are already on disk *or named as explicit targets*. A prerequisite that would have to come
-  from another **pattern** rule does not count — nor does a mention in `.SECONDARY`, nor a
-  mention as some other target's prerequisite, all three probed. Grampa's `.tmp` fragments are
-  exactly those three forms and never an explicit target, so for every contested page here the
-  short version holds: stem length orders the trial, *existence decides it*. On any build where
-  a post's `.tmp` fragment is not yet on disk, `$(BUILD_DIR)%.html` fails that pass while a
-  `$(BUILD_DIR)%` rule whose `static/` twin **is** on disk passes it — and the **longer** stem
-  wins. Verified by reverting the rule to the plain form and disabling the guards: with an
-  impostor at `static/2026/08/06/hello.html`, `build/2026/08/06/hello.html` shipped the
-  impostor's bytes at exit 0 in serial, again under `-j8`, and again when the page was asked for
-  by name. Isolated to four lines outside this repo, which is the version to reach for if the
-  claim is ever doubted again:
+- **The copy rule is a static pattern rule, and the reason is not style.** Read the conclusion
+  first, because the *mechanism* below is version-dependent and the conclusion is not. A static
+  pattern rule is an **explicit** rule for exactly its listed targets, and an explicit rule beats
+  a pattern rule on every version of make. A plain `$(BUILD_DIR)%` pattern rule is not explicit,
+  and on at least one supported version it loses a page to a static twin. So: **the three
+  collision guards are the sole containment on every supported version**, 4.2 through 4.4 alike.
+  Nothing below narrows that; it only explains what the rejected form would have done, and on
+  which make.
+
+  The first draft was that plain pattern rule, argued safe on the grounds that shortest-stem
+  selection would keep it away from generated pages. **That argument is false.** Stem length
+  only *orders* make's implicit-rule trial; which candidate the first pass accepts is decided by
+  its prerequisites, and **where make draws that line moved in 4.4**. Probed on three binaries —
+  GNU make 4.2.1, 4.3 and 4.4.1 — with the four-line makefile below:
+
+  | The `work/a.tmp` prerequisite is… | 4.2.1 | 4.3 | 4.4.1 |
+  | --- | --- | --- | --- |
+  | made only by another **pattern** rule | `IMPOSTOR` | `IMPOSTOR` | `IMPOSTOR` |
+  | an **explicit target** `work/a.tmp:` | `REAL` | `REAL` | `REAL` |
+  | listed in `.SECONDARY: work/a.tmp` | `REAL` | `REAL` | `IMPOSTOR` |
+  | a prerequisite of an unrelated target | `REAL` | `REAL` | `IMPOSTOR` |
+
+  Below 4.4, **any** mention of the file in the makefile counted as "ought to exist" and the
+  candidate passed; 4.4 narrowed that to mentions in the target being built, which is what its
+  NEWS describes. **That inverts the case for grampa**, because `TMP_FILES` is named in
+  `.SECONDARY` (Makefile:235) and the fragments are prerequisites of `work/index.tmp`: on 4.4+
+  neither mention counts and `$(BUILD_DIR)%.html` fails the first pass whenever the fragment is
+  off disk, while on 4.2/4.3 both count and it passes. Confirmed end to end in a grampa sandbox
+  with the rule reverted to the plain form and the guards disabled, an impostor at
+  `static/2026/08/06/hello.html`: **4.4.1 ships the impostor at exit 0** — in serial, under
+  `-j8`, and when the page is asked for by name — while **4.3 renders the real page**. So the
+  plain form was not merely unsafe, it was *inconsistently* unsafe, which is worse than either.
+
+  The four-line reproduction, outside this repo, is the thing to reach for if any of the above
+  is ever doubted again:
 
   ```make
   all: out/a.html
@@ -821,21 +840,26 @@ more than a format-string swap.
   ```
 
   With `src/a.html` holding `IMPOSTOR`: no `work/a.tmp` on disk gives `out/a.html = IMPOSTOR`,
-  and `work/a.tmp` on disk gives `out/a.html = REAL`. Same two rules, same stems, opposite
-  winners — decided entirely by whether the prerequisite was already there. Adding an explicit
-  `work/a.tmp:` rule also gives `REAL`; adding `.SECONDARY: work/a.tmp`, or naming it as a
-  prerequisite of some unrelated target, gives `IMPOSTOR`. That is the whole boundary.
+  and `work/a.tmp` on disk gives `out/a.html = REAL` — same two rules, same stems, opposite
+  winners, on all three binaries. The four variants above are the rest of the table. This is not
+  the *whole* boundary even on 4.4.1: an other-target mention still acts as a lower tier there.
+  With no competing rule at all, adding `other: work/a.tmp` changes 4.4.1's message from
+  `No rule to make target 'out/a.html'` to
+  `No rule to make target 'work/a.tmp', needed by 'out/a.html'` — the pattern rule *was*
+  accepted and then failed loud on the prerequisite. It loses to a competing rule whose
+  prerequisite is on disk; it is not ignored.
 
-  A static pattern rule is an **explicit** rule for exactly its listed targets, so it
-  enters no such contest at all, and it stays inert for anything else — a hand-typed
+  Being an **explicit** rule for exactly its listed targets, the static pattern rule
+  enters none of this, and it stays inert for anything else — a hand-typed
   `make build/nope.css` still gets make's own `No rule to make target`, verified. It also fixed a
   plain bug the pattern form had: a legal, non-colliding `static/about.html` *broke the build*,
   because `%.html` beat `$(BUILD_DIR)%` for it — an empty `tmp_for_page` plus `templates/base.txt`
   and `config` all exist — and fired the unknown-page guard; `/about.html` and the `/404.html`
-  GitHub Pages wants both failed with a message about posts. Reproduced, and both publish fine
-  under the static pattern rule. **The three collision guards are therefore the sole
-  containment** against a static file claiming a generated page's path. They are not a backstop
-  to a rule-selection argument. There is no rule-selection argument.
+  GitHub Pages wants both failed with a message about posts. That one is version-independent —
+  reproduced identically on 4.3 and 4.4.1, since `%.html`'s prerequisites here are only
+  `templates/base.txt` and `config`, both on disk — and both pages publish fine under the static
+  pattern rule. Which returns to the top of this bullet: the guards are not a backstop to a
+  rule-selection argument. There is no rule-selection argument to back up.
 - **`GENERATED_PAGES` is hand-maintained, and a future page type that forgets to join it
   silently reopens every collision the three guards close.** It is written out longhand —
   `index.html`, `rss.xml`, the post pages, the category pages — because nothing in the Makefile

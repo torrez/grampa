@@ -1503,23 +1503,45 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 # plain, argued safe on the grounds that shortest-stem
 # selection would keep it away from generated pages. That
 # argument is FALSE. Make's implicit-rule search orders
-# candidates by stem length, but its first pass only accepts
-# a rule whose prerequisites already exist on disk or are
-# named as explicit targets. "Makeable" is NOT the test, and
-# writing it that way here was wrong: a prerequisite that
-# would come from another PATTERN rule does not pass, and
-# neither does one merely listed in .SECONDARY or named as
-# some other target's prerequisite. Probed all four. Grampa's
-# .tmp fragments are exactly those three non-counting forms
-# and never explicit targets, so here the short version
-# holds: stem length orders the trial; existence decides
-# it. So on any build where a post's .tmp fragment is not yet
-# on disk, $(BUILD_DIR)%.html fails that pass while a
-# $(BUILD_DIR)% rule whose static/ twin exists on disk passes
-# it -- and the LONGER stem wins. Verified: with a twin at
-# static/2026/08/06/hello.html and the collision guards
-# removed, the impostor shipped at exit 0, in serial, under
-# -j8, and when the page was asked for by name.
+# candidates by stem length, but which candidate the first
+# pass ACCEPTS is decided by its prerequisites -- and where
+# make draws that line MOVED IN 4.4, so read the version
+# column before quoting any of this.
+#
+# "Makeable" is not the test, and an earlier version of this
+# comment saying so was wrong. Probed all four forms on GNU
+# make 4.2.1, 4.3 and 4.4.1, with a two-rule makefile where
+# out/%.html: work/%.tmp competes with out/%: src/% for
+# out/a.html (REAL = the .tmp rule won, IMPOSTOR = the copy
+# rule won):
+#
+#   work/a.tmp is...              4.2.1   4.3    4.4.1
+#   made by another PATTERN rule  IMPOST  IMPOST IMPOST
+#   an explicit target            REAL    REAL   REAL
+#   listed in .SECONDARY          REAL    REAL   IMPOST
+#   a prereq of another target    REAL    REAL   IMPOST
+#
+# Below 4.4 ANY mention in the makefile counted as "ought to
+# exist"; 4.4 narrowed it to the target being built. That
+# inverts the case here, because TMP_FILES is in .SECONDARY
+# (see above) and the fragments are prerequisites of
+# work/index.tmp. So on 4.4+, a build where a post's .tmp is
+# not yet on disk has $(BUILD_DIR)%.html failing the pass
+# while a $(BUILD_DIR)% rule whose static/ twin exists passes
+# it -- the LONGER stem wins. On 4.2/4.3 both mentions count
+# and $(BUILD_DIR)%.html wins instead. Confirmed end to end
+# with a twin at static/2026/08/06/hello.html and the
+# collision guards removed: 4.4.1 shipped the impostor at
+# exit 0, in serial, under -j8, and when the page was asked
+# for by name -- while 4.3 rendered the real page. The plain
+# form was not merely unsafe, it was inconsistently unsafe.
+#
+# The CONCLUSION is version-independent even though the
+# mechanism is not: an explicit rule beats a pattern rule on
+# every version, so the static pattern rule below is safe on
+# 4.2, 4.3 and 4.4 alike, and the collision guards are the
+# sole containment on all of them. Do not "simplify" the
+# version column away and leave the conclusion resting on it.
 #
 # A static pattern rule is an explicit rule for exactly the
 # listed targets, so it enters no such contest, and it is
