@@ -1,32 +1,18 @@
 #
 # The floor. Everything below assumes GNU make 4.2 or newer.
 #
-# 3.81 -- what macOS still ships, being the last release
-# before the license change, and what this repo claimed as
-# its floor until now -- silently voids .DELETE_ON_ERROR for
-# any target named in .SECONDARY, which here is every .tmp
-# and .staged file. A failed awk pass then leaves its
-# half-written fragment on disk, newer than its
-# prerequisites, and the *next* build wraps that empty
-# fragment in base.txt and exits 0. Verified: after a single
-# unreadable templates/post.txt, 3.81 goes on to publish a
-# post page with an empty body where 4.x rebuilds it
-# correctly. Isolated to .SECONDARY in a six-line makefile,
-# and fixed in 3.82.
+# 3.81 -- what macOS still ships -- silently voids
+# .DELETE_ON_ERROR for any target named in .SECONDARY, which
+# here is every .tmp and .staged file, so a failed awk pass
+# leaves a half-written fragment that the next build wraps
+# in base.txt and ships at exit 0. Fixed in 3.82.
 #
-# 4.0 is excluded for an unrelated reason: it hangs or
-# segfaults during the parse on a post filename containing a
-# 4-byte UTF-8 character -- an emoji slug, which the
+# 4.0 hangs or segfaults during the parse on a 4-byte UTF-8
+# character in a post filename -- an emoji slug, which the
 # character check deliberately allows. Fixed in 4.1.
 #
 # 4.2 rather than 4.1 because 4.2 is where .SHELLSTATUS
 # arrives, and nothing between them is a floor anyone ships.
-# The suite as it stood before this guard existed was run
-# against builds of 3.81, 3.82, 4.0, 4.1, 4.2, 4.2.1 and
-# 4.3: green everywhere except 3.81 and 4.0. That run is not
-# reproducible from here -- 3.82 and 4.1 now die at this
-# guard like everything else below the floor -- so it is
-# recorded rather than repeatable.
 #
 # The 4.0.% and 4.1.% patterns catch prereleases such as
 # 4.0.90, which predate the emoji fix. No release ever used
@@ -178,19 +164,16 @@ WORK_DIR := work/
 # strings and gets that wrong.
 #
 # := and not =, so the ls|grep|sort runs once per build
-# instead of once per expansion. TMP_FILES below is built
-# from it, and the %.html rule's second-expanded
-# prerequisites reach tmp_for_page twice per page -- once
-# directly, once through post_for_page -- so with = the
-# pipeline ran O(posts) times: counted at 131 runs for a
-# 60-post no-op rebuild, against 1 now. The
-# lazy-expansion argument that keeps CONFIG_NAME and
-# CONFIG_URL on = does not apply here: those exist because
-# config may not be on disk when this file is parsed,
-# whereas a missing posts/ is already handled by the
-# 2>/dev/null, which yields the same empty list either
-# way. Being simply expanded also removes a window where
-# two expansions in one build could disagree.
+# instead of once per expansion: the %.html rule's
+# second-expanded prerequisites reach tmp_for_page twice per
+# page -- once directly, once through post_for_page -- so
+# with = the pipeline ran O(posts) times. The lazy-expansion
+# argument that keeps CONFIG_NAME and CONFIG_URL on = does
+# not apply here: those exist because config may not be on
+# disk when this file is parsed, whereas a missing posts/ is
+# already handled by the 2>/dev/null. Being simply expanded
+# also removes a window where two expansions in one build
+# could disagree.
 #
 # POST_LS is the listing itself, split out so the
 # control-character check below can share it and the two
@@ -204,7 +187,6 @@ WORK_DIR := work/
 #
 POST_LS := ls posts 2>/dev/null | grep '\.txt$$'
 POST_NAMES := $(shell $(POST_LS) | sort -t- -k1,1n -k2,2n -k3,3n)
-POST_FILES = $(addprefix posts/, $(POST_NAMES))
 TMP_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.tmp))
 STAGED_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.staged))
 RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
@@ -239,17 +221,19 @@ RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 # must be remade, make builds its missing secondary
 # prerequisites anyway regardless of .SECONDARY. So appending
 # $(RSSITEM_FILES) here is now unnecessary rather than
-# harmful -- verified by mutation, both the deletion-heals
-# behaviour above and the full suite (including
-# test_deleting_a_post_heals_the_feed, which no longer
-# distinguishes the two forms) pass identically with it
-# appended. Verified on GNU make 4.4.1 and re-verified on
-# 4.2: .SECONDARY and intermediate-file reaping are where
-# make releases have historically differed most, so this
-# claim is checked at both ends of the supported range
-# rather than at one.
+# harmful -- verified by mutation on 4.4.1 and 4.2, the two
+# ends of the supported range, since .SECONDARY and
+# intermediate reaping are where make releases differ most.
 #
+# Guarded on there being any posts because a bare
+# `.SECONDARY:` with no prerequisites does not mean "nothing
+# is secondary" -- it means EVERY target is. That is benign
+# in a zero-post build, which has no pattern intermediates,
+# but it is a semantic nobody chose.
+#
+ifneq ($(POST_NAMES),)
 .SECONDARY: $(TMP_FILES) $(STAGED_FILES)
+endif
 
 #
 # Reverses a list
@@ -391,11 +375,9 @@ MARKDOWN_CMD = $(or $(strip $(CONFIG_MARKDOWN)),$(DETECTED_MARKDOWN))
 # would see it.
 #
 # The gate is an ifneq around a := snapshot rather than one
-# $(if) wrapping everything, purely to shell out once. A
+# $(if) wrapping everything, purely to shell out once: a
 # single $(if) naming MARKDOWN_CMD and CONFIG_MARKDOWN ran
-# the config sed THREE times per parse -- once for $(or)'s
-# condition, once for the value, once for the suffix test
-# -- measured at +48ms on a 60-post no-op rebuild. The
+# the config sed three times per parse. The
 # snapshot is safe to := precisely because the note is
 # documented as a parse-time reading; MARKDOWN_CMD itself
 # stays lazy. Both names are used only by the line below.
@@ -528,15 +510,9 @@ bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 # absent from BAD_CHARS. A grep over the directory is the
 # only way to see them.
 #
-# LC_ALL=C pins [[:cntrl:]] to 0x00-0x1F and 0x7F. That pin
-# is by principle rather than by demonstration: all 288
-# locales installed on the development machine agree with C
-# here, and APFS refuses invalid UTF-8 filenames outright,
-# so no undecodable byte can reach the grep on this
-# platform. It has the same standing as
-# rfc822_from_filename's LC_ALL=C -- both are about
-# environments this machine cannot reproduce, and neither
-# is guarded by a test that could fail.
+# LC_ALL=C pins [[:cntrl:]] to 0x00-0x1F and 0x7F, by
+# principle rather than demonstration -- see the locale-sweep
+# note in tests/run.sh.
 #
 # This re-reads the directory rather than interpolating
 # $(POST_NAMES) into the shell, which is why -- unlike the
@@ -544,8 +520,7 @@ bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 # either direction. Verified: a post named
 # ...home_a<0x01>$(>PWN).txt renders the payload literally
 # and executes nothing, because := never rescans a
-# function's result. $(SHELL) in a filename prints as
-# $(SHELL) and not /bin/bash, which is the decisive case.
+# function's result.
 #
 # That freedom is spent on putting the check FIRST. A tab
 # in a filename word-splits POST_NAMES, so checked second
@@ -637,21 +612,13 @@ digits_to_plus = $(subst 0,+,$(subst 1,+,$(subst 2,+,$(subst 3,+,$(subst 4,+,$(s
 # callers must establish non-emptiness separately, which
 # YEAR_SHAPES does.
 #
-# This overlaps digits_to_plus on purpose, and the overlap
-# is the point. Alone, the shape match trusts that the
-# marker character cannot occur in a filename, which is true
-# only because BAD_CHARS rejects +. Swap the marker for a
-# letter -- an edit the comment above warns against and a
-# reviewer's mutation actually made -- and a year like 2q26
-# maps to qqqq, matches a four-character shape, and is
-# cleared without date ever seeing it. That mutation
-# survived all 34 tests, because it can only be reached by a
-# filename containing the new marker, and any letter is
-# legal, so no fixed test name pins it.
-#
-# Checking the digits directly makes the marker's identity
-# irrelevant to correctness rather than load-bearing, which
-# is worth ten substitutions.
+# This overlaps digits_to_plus on purpose. Alone, the shape
+# match is correct only because BAD_CHARS rejects +: swap the
+# marker for a letter and a year like 2q26 maps to qqqq,
+# matches a four-character shape, and is cleared without date
+# ever seeing it. Checking the digits directly makes the
+# marker's identity irrelevant. (That marker-swap mutation
+# survived all 34 tests at the time.)
 #
 strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1)))))))))))
 
@@ -932,36 +899,20 @@ endef
 # it. Author-supplied text therefore goes in LAST: the
 # derived values (pub_date, permalink, category_url,
 # category) first, then title, then body. Before this, a
-# post whose body mentioned {{permalink}} -- a post about
-# grampa's own template syntax, on a blog whose README
-# invites people to read the Makefile -- published the real
+# post whose body mentioned {{permalink}} published the real
 # URL in place of the example.
 #
-# What this does NOT close: whatever is filled last is
-# still injectable into everything filled before it. The
-# leak needs no template line carrying both markers --
-# every fill() runs on every line, so the title fill puts
-# {{body}} into the <h4> line and the body fill consumes it
-# there. Verified against the stock post.txt, where
-# {{title}} and {{body}} are on different lines: a post
-# titled `On {{body}} markers` renders
-# <h4>On <p>the whole body</p> markers</h4>.
-#
-# Siblings, same class, all reproduced: a title containing
-# {{main}} puts the entire rendered fragment in the page's
-# <title>; the title/{{body}} leak fires in the feed too,
-# via RENDER_ITEM; and a url= containing {{title}} puts the
-# post title inside every *item's* <link> and <guid>. Not
-# the channel <link>: WRAP_IN_CHANNEL fills link first, so
-# that one takes the blog name instead.
-#
-# Closing these needs a single-pass fill that never rescans
-# a substituted value -- a real change to fill()'s signature
-# and to all four call sites, and it would also drop the
-# documented "first {{key}} on a line only" behaviour.
-# Deferred: the body is the large author-controlled blob and
-# the realistic case, and it is now closed. Guarded by the
-# four test_placeholders_* tests.
+# What this does NOT close: whatever is filled last is still
+# injectable into everything filled before it, and it needs
+# no template line carrying both markers -- every fill()
+# runs on every line, so the title fill puts {{body}} into
+# the <h4> line and the body fill consumes it there. Closing
+# it needs a single-pass fill that never rescans a
+# substituted value, which would also drop the documented
+# "first {{key}} on a line only" behaviour. Deferred: the
+# body is the large author-controlled blob and is now
+# closed. The reproduced siblings are catalogued in
+# CLAUDE.md; guarded by the four test_placeholders_* tests.
 #
 define RENDER_POST
 BEGIN {
@@ -1249,30 +1200,17 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # prerequisite list is trivially satisfiable -- so which
 # one make picks is a real question.
 #
-# It used to be answered by this rule coming first. On GNU
-# make 3.81 the winner was the earliest matching rule in
-# makefile order, NOT the shortest stem, so a %.html
-# defined above this one claimed build/category/notes.html
-# and produced a wrong page with no error: a base.txt
-# document nested inside another one, titled with the blog
-# name instead of the category.
-#
-# 3.82 changed the choice to shortest stem first, and the
-# competing stems here are "notes" against
-# "category/notes". Anywhere above the 4.2 floor this rule
-# therefore wins from either position -- verified by moving
-# it below %.html, where 3.81 fails the build and 4.4.1
-# renders the category page correctly. The order is no
-# longer load-bearing. It is kept because
-# specific-before-generic reads better.
-#
-# Two things backstop it anyway: the version guard at the
-# top of this file keeps 3.81 out entirely, and the
-# unknown-page guard in the %.html rule turns a wrong page
-# into
-#
-#   build/category/notes.html: no post in posts/ builds this page
-#
+# It used to be answered by this rule coming first: 3.81
+# picked the earliest matching rule in makefile order, so a
+# %.html defined above this one claimed the page and nested
+# one base.txt document inside another with no error. 3.82
+# changed the choice to shortest stem -- "notes" against
+# "category/notes" -- so anywhere above the 4.2 floor this
+# rule wins from either position, verified by moving it
+# below %.html. The order is kept because
+# specific-before-generic reads better, not because it is
+# required, and the version guard at the top of this file
+# keeps 3.81 out regardless.
 #
 # posts is a prerequisite so that deleting a post makes this
 # page out of date, not just editing one. Its own
@@ -1284,7 +1222,28 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # list. A directory's mtime moves when an entry is created or
 # removed, which is exactly "the set of posts changed".
 #
+# The guard is this rule's own copy of the one in %.html
+# below, and it needs one: since 3.82 picks the shortest stem,
+# this rule -- not %.html -- always claims a typo'd
+# build/category/<name>.html, so that guard never sees a
+# category path. A category no post is in leaves
+# tmp_files_in_category empty, which makes the prerequisite
+# list trivially satisfiable, and awk would then run with zero
+# file operands: an empty base.txt-wrapped page at exit 0, or
+# a wait on stdin if it is a terminal. CATEGORY_PAGES only
+# names categories with at least one post, so this can only
+# fire on a target named by hand.
+#
+# It has to stay a make-level test of the fragment LIST, not
+# a shell test that those fragments exist: on a first build
+# they legitimately do not yet.
+#
 $(BUILD_DIR)category/%.html: $$(call tmp_files_in_category,$$*) templates/base.txt config posts
+	@if [ -z "$(call tmp_files_in_category,$*)" ]; \
+		then \
+		echo "$@: no post in posts/ builds this page" >&2; \
+		exit 1; \
+	fi
 	@echo "Building $@"
 	@mkdir -p $(dir $@)
 	@PAGE_TITLE="$(call category_display,$*) - $$BLOG_NAME" \
@@ -1390,29 +1349,15 @@ $(WORK_DIR)index.tmp: $(RECENT_FILES) posts
 # fail silently, back when the body was reassembled with
 # `cat chunks | tail -n +2`.
 #
-# Every scratch name is an exact filename, never a glob. It
-# used to be `split -p` plus $*.a[b-z]*, which was wrong
-# twice: the glob stopped at .az, so a body with more than
-# 25 delimiter lines was silently truncated, and $*.a[a-z]*
-# reached onto a same-date sibling's outputs -- stem
-# ...home_x matching ...home_x.ab.staged -- and deleted them
-# mid-build.
+# Every scratch name is an exact filename, never a glob --
+# the `split -p` form it replaced globbed onto a same-date
+# sibling's outputs and deleted them mid-build.
 #
-# The rm at the *head* of the chain is hygiene now rather
-# than correctness, which is a demotion. Under the old glob
-# it was load-bearing: a failed run left chunks behind and
-# the reassembly globbed up whatever it found, so a post
-# that later split into fewer chunks swept the stale ones
-# back in. Exact filenames cannot do that. All three are
-# truncated before they are read -- awk's `print >`
-# truncates on first write, the END block's printf truncates
-# even when nothing else is written, and the shell's `>`
-# truncates .mdbody before the processor starts -- so no stale
-# byte survives into $@. Verified by neutering this rm: the
-# failing-stub test and the parallel test both still pass.
-# It stays because a persistently failing install should not
-# accumulate scratch, and because that truncation argument
-# holds only as long as nothing in the chain is reordered.
+# The rm at the *head* of the chain is hygiene, not
+# correctness: every scratch file is truncated before it is
+# read, but only as long as the chain keeps this order. It
+# stays so a persistently failing install does not
+# accumulate scratch.
 #
 # config is a prerequisite because markdown= lives there, so
 # editing it must re-stage every post -- the same reasoning
@@ -1621,29 +1566,14 @@ setup: config
 #
 # It builds first; it does not set up first. A directory
 # where make setup has never run still fails on the missing
-# templates, which is unchanged and correct. Where deploy
-# does now create config is the narrower case of setup
-# having been run and config deleted afterwards -- not a
-# fresh install, which has one already, since setup: config.
+# templates.
 #
-# What being a non-leaf target does and does not change,
-# because the obvious guess is wrong. A page you DELETED
-# from build/ is regenerated before shipping, and a page
-# whose source is newer is rebuilt. A page you hand-EDITED
-# is not: your edit made it newer than its prerequisites, so
-# make considers it up to date and deploy ships the edit.
-# Make cannot tell an edit from a build. So ./deploy.sh
-# build/ and make deploy send the same bytes in that case,
-# and build/ is no safer a scratchpad than it was.
-#
-# A failing build now stops the ship, which is the change
-# with the most teeth. It sounds like a loss -- the old
-# form would have shipped the last good build/ -- but that
-# last good build/ is largely a myth: .DELETE_ON_ERROR
-# removes a half-written page, so a build that fails partway
-# leaves a site with a page MISSING, and the old deploy
-# shipped exactly that at exit 0. Verified. Refusing is
-# strictly better.
+# This does NOT sanitize build/, and the obvious guess is
+# wrong. A page you DELETED is regenerated before shipping
+# and a page whose source is newer is rebuilt, but a page you
+# hand-EDITED is now newer than its prerequisites, so make
+# considers it up to date and deploy ships the edit. Make
+# cannot tell an edit from a build.
 #
 # Guarded by test_deploy_builds_first.
 #

@@ -12,9 +12,9 @@
 #
 #     sh tools/probe-platform.sh
 #
-# It exists because grampa is BSD/macOS-only today -- see the
-# BSD-only gotcha in CLAUDE.md -- and porting it needs facts
-# about the target platform rather than recollections about it.
+# It exists to gather facts about a host before building
+# grampa on it -- see the portable-date gotcha in CLAUDE.md --
+# rather than debugging from recollections about it.
 #
 set -u
 
@@ -123,10 +123,12 @@ echo "=== make behaviour this repo depends on"
 printf 'make version:                         '
 make --version 2>/dev/null | head -1
 
-# The floor. Same test the Makefile itself makes.
+# The floor. This filter must stay identical to the guard at
+# the top of the Makefile; the .0.%/.1.% patterns are what
+# catch prereleases like 4.0.90.
 printf 'meets the GNU make 4.2 floor:         '
 cat > "$tmp/Makefile.floor" <<'MK'
-ifeq ($(filter 3.% 4.0 4.1,$(MAKE_VERSION)),$(MAKE_VERSION))
+ifeq ($(filter 3.% 4.0 4.0.% 4.1 4.1.%,$(MAKE_VERSION)),$(MAKE_VERSION))
 $(error NO -- grampa needs GNU make 4.2 or newer, this is $(MAKE_VERSION))
 endif
 all: ; @echo "yes"

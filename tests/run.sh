@@ -307,8 +307,7 @@ pass_fail_summary() {
 #
 # ---------------------------------------------------
 # Baseline: behaviour that must survive every change
-# below. These use the CURRENT filename format and are
-# rewritten in Task 2 when the format changes.
+# below.
 # ---------------------------------------------------
 #
 
@@ -422,8 +421,8 @@ EOF
 	# .staged -> .tmp -> html chain the default config runs.
 	printf 'name=My Weblog\nurl=https://example.com\n' > config
 	build -j8 || return
-	# Counts dated post pages only, so category pages
-	# added in Task 4 do not change the expected number.
+	# Counts dated post pages only, so category pages do
+	# not change the expected number.
 	assert_eq "post pages built" "6" "$(find build -type f -name '*.html' -path 'build/2*' | wc -l | tr -d ' ')"
 	assert_eq "no stray intermediates" "" "$(ls work/ | grep -vE '\.(tmp|staged|rssitem)$' | tr '\n' ' ' | sed 's/ *$//')"
 	assert_file build/rss.xml
@@ -1856,6 +1855,36 @@ EOF
 	assert_file build/2026/08/06/real.html
 }
 
+#
+# The same guard for a category stem. This needs its own
+# test because it is a different rule: build/category/%.html
+# and %.html both match build/category/typo.html, and above
+# the 4.2 floor the shortest stem wins, so the category rule
+# always claims it and the %.html guard never sees a category
+# path at all.
+#
+# Without a guard of its own, tmp_files_in_category is empty
+# for an unknown category, the prerequisite list is trivially
+# satisfiable, and awk runs with zero file operands -- which
+# writes an empty base.txt-wrapped page at exit 0, or, if
+# stdin happens to be a terminal rather than the /dev/null
+# the helpers redirect, sits there reading it.
+#
+test_unknown_category_page_target_fails_cleanly() {
+	sandbox unknown_category
+	add_post 2026-08-06-home_real.txt <<'EOF'
+title: Real Post
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	build_expect_fail build/category/typo.html || return
+	assert_out_grep "no post"
+	assert_out_grep "build/category/typo.html"
+	assert_no_file build/category/typo.html
+	assert_file build/category/home.html
+}
+
 test_category_link_on_post_page() {
 	sandbox category_link_post
 	add_post 2026-08-06-home_installing-a-doorbell.txt <<'EOF'
@@ -2095,6 +2124,35 @@ EOF
 	assert_grep migrate.out "posts/2026-01-03-weird_title.txt"
 	assert_file posts/2026-01-03-weird_title.txt
 	assert_grep posts/2026-01-03-weird_title.txt "category: Home"
+}
+
+#
+# The Makefile allows a non-ASCII category, but the script's
+# a-z0-9- slug filter cannot carry one -- it would rename
+# "Café" to caf_ and lose a character with no diagnostic.
+# Refusing matches what it already does for a category that
+# slugifies to nothing. The check is wider than non-ASCII:
+# it covers everything outside printable ASCII, because a
+# tab survives the space-to-hyphen tr and would silently
+# join two words.
+#
+test_migration_refuses_a_non_ascii_category() {
+	sandbox migration_non_ascii
+	cp -R "$REPO/tools" .
+	local status
+	cat > posts/2026-01-03-a-post.txt <<'EOF'
+title: A Post
+category: Café
+-----------------------------------
+<p>Hi.</p>
+EOF
+	./tools/migrate-categories.sh --apply > migrate.out 2>&1
+	status=$?
+	assert_eq "apply exit code" "1" "$status"
+	assert_grep migrate.out "ERROR"
+	assert_grep migrate.out "outside printable ASCII"
+	assert_file posts/2026-01-03-a-post.txt
+	assert_no_file posts/2026-01-03-caf_a-post.txt
 }
 
 #
@@ -2404,7 +2462,8 @@ test_setup_with_no_processor_records_empty() {
 
 #
 # The cmp guard: a no-op setup must not bump the mtime, or
-# every setup re-stages every post once Task 4 lands. The
+# every setup re-stages every post, config.mk being a
+# prerequisite of %.staged. The
 # scratch file setup writes and cmps against is named
 # config.mk.$$ (the PID), so no fixed name is knowable
 # statically -- a glob count is what stands in for
@@ -2787,7 +2846,7 @@ EOF
 # .txt satisfies the has-a-category-word test and home
 # satisfies category_slug -- and publishes
 # build/2026/01/02/.html, a dotfile no server will serve and
-# no ls will show. Found by the Task 1 review. The sibling
+# no ls will show. Found by review. The sibling
 # of the empty-category clause, and it wants the same
 # treatment.
 #
@@ -3153,7 +3212,7 @@ EOF
 # stay below CHECKED_POST_NAMES, because its $(shell)
 # interpolates filenames unquoted and a name carrying $( or
 # a backtick executes during the parse. Nothing enforced
-# that. Found by the Task 2 review: with the two checks
+# that. Found by review: with the two checks
 # swapped, all eleven other character and date tests still
 # passed, because each of them uses a name that is bad in
 # exactly one way and so never observes which check fires.
@@ -3336,6 +3395,7 @@ test_filename_with_empty_category_fails
 test_duplicate_permalink_fails
 test_same_slug_on_different_dates_is_fine
 test_unknown_page_target_fails_cleanly
+test_unknown_category_page_target_fails_cleanly
 test_category_link_on_post_page
 test_category_link_display_name_has_spaces
 test_category_link_on_index
@@ -3348,6 +3408,7 @@ test_category_pages_are_html_only_in_build
 test_migration_converts_old_posts
 test_migration_skips_already_migrated_by_missing_category
 test_migration_refuses_ambiguous_underscore_title
+test_migration_refuses_a_non_ascii_category
 test_migration_reports_error_when_rm_fails
 test_base_template_advertises_the_feed
 test_feed_category_uses_display_form
