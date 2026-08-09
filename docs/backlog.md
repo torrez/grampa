@@ -696,7 +696,7 @@ and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect, counted — seven confident-but-false claims, three found by the whole-branch review that checked this entry's own commit before merge
+### 14. The branch's own recurring defect — eight confident-but-false claims, and the finding is that counting them was the wrong instrument
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
 formerly-true, empirically-false claim". It happened four times on this branch before this
@@ -749,10 +749,27 @@ this entry's own commit (`666ec7a`, which wrote items 12, 13, and this item toge
    the very next build and is what produces the one-build lag on the post's own page as a
    residue of that improvement. See item 13 above, corrected in this pass.
 
-Three in one commit, in a file whose subject is not making this mistake, is the sharpest
-instance of the shape recorded below — and it is itself an instance of the shape: item 12 and
-item 13 each tried to state, confidently and in one pass, a fact about code that had just
-changed underneath them, without rerunning it against both the old and new state to check.
+Two of those three (6 and 7) were in one commit, in a file whose subject is not making this
+mistake — and they are themselves instances of the shape: item 12 and item 13 each tried to
+state, confidently and in one pass, a fact about code that had just changed underneath them,
+without rerunning it against both the old and new state to check. Instance 5 is older; it
+dates to `7f03f00` on main and had simply never been found.
+
+**8. And then this entry's own commit made the eighth.** Correcting item 13 above, it added a
+sentence to CLAUDE.md explaining the lag as a `.tmp` fragment carrying "the *renamed source's*
+old, preserved mtime". `mv` preserves the mtime of the `.txt`, not the fragment: the fragment
+does not exist at rename time and is built fresh, *newer* than the source — verified by `stat`,
+and the sentence contradicted itself two clauses later. Found by the re-review of the fix wave,
+which was looking for exactly this because the entry above predicts it.
+
+That is where the counting stopped, and how: **not by writing a ninth, more careful sentence,
+but by deleting the eighth.** The mechanism is stated correctly once, in item 13, and the
+CLAUDE.md bullet now points at it and says plainly that three attempts to compress it in place
+each produced something false. The same subtraction ended the earlier run at instance 4. A
+count is a poor instrument for a defect that regenerates under correction; what the eight
+instances actually establish is that **this class is produced by compression** — by a summary
+sentence restating, from memory, a mechanism verified somewhere else — and the reliable cure is
+one statement in one place with a pointer to it, not a better sentence in both.
 
 **Record the shape, not just the count, because it is the same every time: one clause trying
 to cover deletion and renaming as though they behave the same way, when every attempt to say
@@ -1382,8 +1399,10 @@ category page turned out never to have healed at all. Item 6, the single-pass `f
 unaffected and remains this ranked list's one open question — a scope worth being explicit
 about, because that same branch review separately opened items 12 and 13 above, in the `##
 Important` numbering, not this one. Item 12 is closed as of this pass; item 13 is not, so the
-file's honest total across both numberings is one open ranked item plus one open `Important`
-item, not one flat.
+file's honest total across both numberings is one open ranked item plus **two** open
+`Important` items, not one flat — item 13, and the table-correction half of item 9, which has
+been open all along and stays unranked. An earlier draft of this very sentence said "one open
+`Important` item"; it was added to fix a scoping error and introduced a counting one.
 
 The four that closed did what everything on this list does: **three of the four were described
 wrongly by their own entries**, and the fourth was described rightly and then closed by a commit

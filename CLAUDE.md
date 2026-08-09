@@ -606,10 +606,10 @@ more than a format-string swap.
   the same `posts` prerequisite that heals deletion (below) makes both the old and the new
   category page correct themselves on the very next `make` — verified against a pre-`posts`-
   prerequisite tree, where neither ever healed, across any number of rebuilds. One page still
-  lags: the renamed post's own permalink page reads its category from a `.tmp` fragment that
-  `mv`/`git mv` leaves with the *renamed source's* old, preserved mtime, so it takes one extra
-  `make` — the build that follows the one where the fragment itself gets forced into
-  existence — before the post's own page notices. See `docs/backlog.md` item 13.
+  lags: after an `mv`/`git mv` rename the post's own permalink page takes one extra `make` to
+  notice its new category. `tools/migrate-categories.sh` does not have that lag. The mechanism
+  is written up in `docs/backlog.md` item 13 and deliberately not repeated here — three
+  attempts to compress it into this bullet each produced a claim that turned out to be false.
 - **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
   page existed — an untracked output, the same shape as the deleted-category gotcha above —
   and `make clean` is still what removes the file itself. What usually no longer lingers is
