@@ -1,4 +1,54 @@
 #
+# The floor. Everything below assumes GNU make 4.2 or newer.
+#
+# 3.81 -- what macOS still ships, being the last release
+# before the license change, and what this repo claimed as
+# its floor until now -- silently voids .DELETE_ON_ERROR for
+# any target named in .SECONDARY, which here is every .tmp
+# and .staged file. A failed awk pass then leaves its
+# half-written fragment on disk, newer than its
+# prerequisites, and the *next* build wraps that empty
+# fragment in base.txt and exits 0. Verified: after a single
+# unreadable templates/post.txt, 3.81 goes on to publish a
+# post page with an empty body where 4.x rebuilds it
+# correctly. Isolated to .SECONDARY in a six-line makefile,
+# and fixed in 3.82.
+#
+# 4.0 is excluded for an unrelated reason: it hangs or
+# segfaults during the parse on a post filename containing a
+# 4-byte UTF-8 character -- an emoji slug, which the
+# character check deliberately allows. Fixed in 4.1.
+#
+# 4.2 rather than 4.1 because 4.2 is where .SHELLSTATUS
+# arrives, and nothing between them is a floor anyone ships.
+# The suite as it stood before this guard existed was run
+# against builds of 3.81, 3.82, 4.0, 4.1, 4.2, 4.2.1 and
+# 4.3: green everywhere except 3.81 and 4.0. That run is not
+# reproducible from here -- 3.82 and 4.1 now die at this
+# guard like everything else below the floor -- so it is
+# recorded rather than repeatable.
+#
+# The 4.0.% and 4.1.% patterns catch prereleases such as
+# 4.0.90, which predate the emoji fix. No release ever used
+# a third component below 4.2.
+#
+# Unlike the config.mk guards below, this one is not gated
+# on BUILD_GOAL. There is no deadlock to avoid, because the
+# fix is a newer make rather than a recipe in this file --
+# clean, setup and test have nothing to offer a 3.81 either.
+#
+# Do not add that gate later: BUILD_GOAL is defined *below*
+# this block, so an $(if $(BUILD_GOAL),...) here reads it
+# empty and disables the guard entirely rather than
+# narrowing it. Verified by mutation -- the three
+# make-version tests all go red on a guard gated that way,
+# which is the only reason it does not pass unnoticed.
+#
+ifeq ($(filter 3.% 4.0 4.0.% 4.1 4.1.%,$(MAKE_VERSION)),$(MAKE_VERSION))
+$(error grampa: GNU make 4.2 or newer required; this is make $(MAKE_VERSION))
+endif
+
+#
 # Default to the right shell
 #
 SHELL := /bin/bash
@@ -193,10 +243,11 @@ RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 # behaviour above and the full suite (including
 # test_deleting_a_post_heals_the_feed, which no longer
 # distinguishes the two forms) pass identically with it
-# appended. Verified on GNU make 4.4.1; .SECONDARY and
-# intermediate-file reaping are where 3.81 and 4.x have
-# historically differed most, so this is the claim to re-check
-# if that floor is still real.
+# appended. Verified on GNU make 4.4.1 and re-verified on
+# 4.2: .SECONDARY and intermediate-file reaping are where
+# make releases have historically differed most, so this
+# claim is checked at both ends of the supported range
+# rather than at one.
 #
 .SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 
@@ -671,11 +722,16 @@ date_is_sound = $(strip \
 #
 # date already rejects a bad date and exits 1. Nothing in
 # the build hears it: date_from_filename is a $(shell) call,
-# which keeps the output and throws the status away, and
-# make 3.81 has no .SHELLSTATUS. So this is not a second
-# implementation of date's judgement, it is the only way to
-# hear a verdict date already reaches -- at parse time,
-# where a non-zero exit can still become an $(error).
+# which keeps the output and throws the status away. So this
+# is not a second implementation of date's judgement, it is
+# a way to hear a verdict date already reaches -- at parse
+# time, where a non-zero exit can still become an $(error).
+#
+# It was the *only* way when the floor was make 3.81, which
+# has no .SHELLSTATUS. The floor is 4.2 now, which is
+# exactly where .SHELLSTATUS arrives, so a more direct
+# rewrite has become possible. It has not been done, and
+# this form is the one the suite covers. See docs/backlog.md.
 #
 # THIS MUST STAY BELOW CHECKED_POST_NAMES. The $(shell)
 # interpolates filenames into a shell command line
@@ -856,7 +912,7 @@ endef
 # prerequisite of every rule that runs this program, so awk
 # is not invoked at all. (Not the same as "make errors" --
 # for the two templates named only in pattern rules, make
-# 3.81 can quietly reuse a stale fragment instead. See the
+# can quietly reuse a stale fragment instead. See the
 # deleted-template bullet in docs/backlog.md.) A template
 # that is present but *unreadable* -- chmod 000, or a
 # cp/rsync that dropped the mode -- does reach it, because
@@ -1144,13 +1200,16 @@ clean:
 # templates/post.txt and templates/rss-item.txt are listed
 # here even though nothing in this rule reads them, and
 # that is load-bearing. They are otherwise named only in
-# the %.tmp and %.rssitem *pattern* rules, and make 3.81
-# does not consider a pattern rule's missing prerequisite
+# the %.tmp and %.rssitem *pattern* rules, and make does
+# not consider a pattern rule's missing prerequisite
 # a file that ought to exist -- it just drops the rule
 # from consideration. Delete either template and the
 # matching rule becomes inapplicable, the stale fragment
 # sitting in work/ is taken as-is with no dependency
 # check, and the build exits 0 serving the old body.
+# This is make's behaviour, not a quirk of some old
+# version: verified by mutation on 3.81, 4.2 and 4.4.1
+# alike, all three serving the pre-edit body at exit 0.
 #
 # templates/base.txt and templates/rss.txt never had this
 # problem, because they are prerequisites of the explicit
@@ -1183,32 +1242,36 @@ build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CAT
 # fragments in this category -- because make knows the
 # categories at parse time.
 #
-# Two pattern rules match build/category/notes.html:
-# this one and the %.html rule below. On GNU make 3.81,
-# when a target's prerequisites are satisfiable under
-# more than one pattern rule, make uses the first such
-# rule in the order it appears in the makefile -- NOT
-# the shortest stem, despite what the manual implies.
+# Two pattern rules match build/category/notes.html: this
+# one and the %.html rule below. Both are satisfiable --
+# tmp_for_page returns empty for a category stem, since no
+# single fragment maps to a category page, and an empty
+# prerequisite list is trivially satisfiable -- so which
+# one make picks is a real question.
 #
-# Both are satisfiable here: tmp_for_page returns empty
-# for a category stem, since no single fragment maps to a
-# category page, and an empty prerequisite list is
-# trivially satisfiable. So a %.html rule defined first
-# would claim build/category/notes.html.
+# It used to be answered by this rule coming first. On GNU
+# make 3.81 the winner was the earliest matching rule in
+# makefile order, NOT the shortest stem, so a %.html
+# defined above this one claimed build/category/notes.html
+# and produced a wrong page with no error: a base.txt
+# document nested inside another one, titled with the blog
+# name instead of the category.
 #
-# That used to mean a wrong page and no error -- a
-# base.txt document nested inside another one, titled
-# with the blog name instead of the category. It no
-# longer does: the unknown-page guard in that rule sees
-# an empty tmp_for_page and stops with
+# 3.82 changed the choice to shortest stem first, and the
+# competing stems here are "notes" against
+# "category/notes". Anywhere above the 4.2 floor this rule
+# therefore wins from either position -- verified by moving
+# it below %.html, where 3.81 fails the build and 4.4.1
+# renders the category page correctly. The order is no
+# longer load-bearing. It is kept because
+# specific-before-generic reads better.
+#
+# Two things backstop it anyway: the version guard at the
+# top of this file keeps 3.81 out entirely, and the
+# unknown-page guard in the %.html rule turns a wrong page
+# into
 #
 #   build/category/notes.html: no post in posts/ builds this page
-#
-# So the ordering constraint is still real -- category
-# pages will not build in the wrong order -- but the
-# failure is loud rather than silent. Verified
-# empirically in both orders. Keep this rule above the
-# %.html rule below it.
 #
 #
 # posts is a prerequisite so that deleting a post makes this
@@ -1592,6 +1655,14 @@ deploy: all
 # Runs the test suite in tests/tmp sandboxes. Never
 # touches your real posts/ or build/.
 #
+# MAKE is passed explicitly because make does not export it,
+# and the suite drives make in every sandbox. Without this,
+# `gmake test` on a Mac would run the suite against a bare
+# `make` -- Apple's 3.81 -- and since the floor became 4.2
+# that is not "the suite on 3.81", it is every test dying at
+# the version guard. run.sh checks the floor up front and
+# says so once rather than several hundred times.
+#
 .PHONY: test
 test:
-	@./tests/run.sh
+	@MAKE="$(MAKE)" ./tests/run.sh

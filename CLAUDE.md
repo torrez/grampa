@@ -263,8 +263,10 @@ ruleset as a whole still has these two. Third, a **`:`** dies earlier and less h
 under BSD, `2026` under GNU — see the portable-date gotcha), and `2028-02-29` build.
 `date` already rejected these dates and exited 1 — nothing heard it, because
 `date_from_filename` is a `$(shell)` call, which keeps the output and discards the status, and
-make 3.81 has no `.SHELLSTATUS`. The result was a page with an empty posted-on line and an
-empty `<pubDate>`.
+the floor at the time was make 3.81, which has no `.SHELLSTATUS`. The result was a page with
+an empty posted-on line and an empty `<pubDate>`. The floor is 4.2 now, which is exactly where
+`.SHELLSTATUS` arrives, so a more direct rewrite has become possible — it has not been done,
+and the two-stage check below is the form the suite covers.
 
 The check is two stages. Make clears any year of one to five digits with month 1–12 and day
 1–28 — valid in every month of every year, so no calendar knowledge is needed — and only days
@@ -405,24 +407,27 @@ before categories moved into filenames. `tmp_for_page` searches `TMP_FILES` inst
 is O(posts) per target and so O(posts²) per build — fine at blog scale, fixable with
 `$(eval)`-generated explicit rules if it ever drags.
 
-**`build/category/%.html` must stay defined above the `%.html` rule.** On GNU make 3.81,
-when a target's prerequisites are satisfiable under more than one pattern rule, make picks
-the first such rule in makefile order, not the shortest stem. `tmp_for_page` returns empty
-for a category stem (there is no single fragment a category page maps to), and an empty
-prerequisite list is trivially satisfiable — so if `%.html` appeared first, it would claim
-`build/category/home.html`. Verified empirically in both orders.
+**`build/category/%.html` is defined above the `%.html` rule, and that used to be
+load-bearing.** Both rules match `build/category/home.html`: `tmp_for_page` returns empty for
+a category stem (there is no single fragment a category page maps to), and an empty
+prerequisite list is trivially satisfiable. On GNU make 3.81 the winner was the first
+matching rule in makefile order, not the shortest stem, so a `%.html` defined first claimed
+the category page and produced a nested `base.txt`-wrapped document with the wrong title and
+no error.
 
-That claim used to produce a nested `base.txt`-wrapped document with the wrong title and no
-error. It no longer does: the unknown-page guard added in `d96a855` fires first, and the
-wrong order now fails loudly —
+**Make 3.82 changed the choice to shortest stem first**, and the competing stems are `home`
+against `category/home`. Since the floor moved to 4.2 (see the requirement gotcha below) the
+category rule wins from either position — verified by moving it below `%.html`, where 3.81
+fails the build and 4.4.1 renders the category page correctly. The order is kept because
+specific-before-generic reads better, not because it is required.
+
+Two things backstop it regardless: the version guard keeps 3.81 out entirely, and the
+unknown-page guard added in `d96a855` turns a wrong page into a loud failure —
 
 ```
 build/category/home.html: no post in posts/ builds this page
 make: *** [build/category/home.html] Error 1
 ```
-
-The ordering constraint is still real — category pages will not build in the wrong order —
-but the failure is caught, not silent. Keep `build/category/%.html` first.
 
 `build/rss.xml` is a fourth consumer, gated on `SITE_URL`: `FEED_PAGES` is
 `$(BUILD_DIR)rss.xml` when `url=` is set in config and empty otherwise, so with no `url=`
@@ -522,6 +527,39 @@ more than a format-string swap.
 
 ## Gotchas
 
+- **The floor is GNU make 4.2, enforced by a `$(MAKE_VERSION)` guard at the top of the
+  Makefile.** It was 3.81 — what macOS ships, being the last release before the license
+  change — and that claim was false rather than merely conservative: the suite fails on 3.81.
+  **3.81 silently voids `.DELETE_ON_ERROR` for any target named in `.SECONDARY`,** which here
+  is every `.tmp` and `.staged` file, so a failed awk pass leaves its half-written fragment on
+  disk, newer than its prerequisites, and the *next* build wraps that empty fragment in
+  `base.txt` and exits 0. Verified end to end: after one unreadable `templates/post.txt`, 3.81
+  publishes a post page with an empty body where 4.4.1 rebuilds it correctly. Isolated to
+  `.SECONDARY` in a six-line makefile and fixed in 3.82. **Make 4.0 is excluded separately** —
+  it hangs or segfaults during the parse on a post filename containing a 4-byte UTF-8
+  character, which is to say an emoji slug, of the kind the character check deliberately
+  allows; fixed in 4.1. 4.2 rather than 4.1 because 4.2 is where `.SHELLSTATUS` arrives and
+  nothing between them is a floor anyone ships. The suite *as it stood before the guard*
+  was run against builds of 3.81, 3.82, 4.0, 4.1, 4.2, 4.2.1 and 4.3: 353/353 everywhere
+  except 3.81 (352, one `.DELETE_ON_ERROR` failure) and 4.0 (the crash). That run is recorded
+  rather than repeatable — every binary below the floor now dies at the guard before a test
+  can run. The guard is **not** gated on `BUILD_GOAL`, unlike the `config.mk` guards it sits
+  above, because there is no deadlock to avoid: the fix is a newer make rather than a recipe
+  in this file, so `clean`, `setup` and `test` have nothing to offer an old make either. Do
+  not add that gate later — `BUILD_GOAL` is defined *below* the guard, so an
+  `$(if $(BUILD_GOAL),…)` there reads it empty and disables the guard outright instead of
+  narrowing it. The filter also carries `4.0.%` and `4.1.%` for prereleases like `4.0.90`,
+  which predate the emoji fix; no release ever used a third component below 4.2. Three tests
+  pin all of this by overriding `MAKE_VERSION` on the command line, which needs no old binary
+  on the host.
+- **The suite drives `$MAKE`, not a bare `make`, and `make test` passes `$(MAKE)` in.** Make
+  does not export `MAKE`, so without that the suite would ignore which make invoked it. On a
+  Mac that is the difference between `gmake test` testing gmake and it testing Apple's 3.81 —
+  which, since the floor moved, would not mean "the suite runs on 3.81" but "every single test
+  dies at the version guard". `tests/run.sh` checks the floor up front by running the real
+  Makefile's own guard (no second copy to drift) and exits after one line rather than several
+  hundred. `MAKE=/path/to/make ./tests/run.sh` is also how you run the suite against a
+  specific build.
 - **`POST_NAMES` is sorted with `sort -t- -k1,1n -k2,2n -k3,3n`**, not `$(wildcard)`,
   because wildcard sorts as strings and would put `2026-10-1` before `2026-7-4`. The
   numeric sort makes ordering correct for padded *and* unpadded dates. Zero-padding is

@@ -44,6 +44,33 @@ CURRENT=""
 unset MAKELEVEL MAKEFLAGS MFLAGS
 
 #
+# Which make the suite drives. Every call below goes through
+# $MAKE rather than a bare `make`, and the Makefile's test recipe
+# passes its own $(MAKE) in, so `gmake test` on a Mac exercises
+# gmake. A bare `make` there would find Apple's /usr/bin/make
+# 3.81, and since the floor became 4.2 that does not mean "the
+# suite runs on 3.81" -- it means every single test dies at the
+# version guard. Running ./tests/run.sh directly with nothing set
+# still means plain `make`, which is the Linux case and unchanged.
+#
+MAKE="${MAKE:-make}"
+
+#
+# Fail once and clearly rather than several hundred times. If
+# $MAKE is below the floor the guard fires inside every sandbox,
+# and the real reason ends up buried in the first of a wall of
+# identical failures. The probe runs the real Makefile so there is
+# no second copy of the version test to drift: a good make fails
+# this goal with "No rule to make target", which is not a match.
+#
+floor_out=$("$MAKE" -f "$REPO/Makefile" -n grampa-floor-probe 2>&1 || true)
+if printf '%s\n' "$floor_out" | grep -q "GNU make 4.2 or newer required"; then
+	printf '%s\n' "$floor_out" | grep "GNU make 4.2 or newer required" >&2
+	echo "tests/run.sh: set MAKE to a GNU make 4.2+ (on macOS: brew install make, then gmake test)" >&2
+	exit 1
+fi
+
+#
 # Executable stubs that exit 1 for every PATH candidate in
 # the Makefile's table, so `make setup` finds nothing and
 # staging stays verbatim -- today's behaviour, and the same
@@ -97,7 +124,7 @@ sandbox() {
 	cp -R "$REPO/.source" "$SBOX/"
 	cd "$SBOX" || exit 1
 	hide_markdown_tools
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 }
 
 #
@@ -129,7 +156,7 @@ markdown_stub() {
 	cat > Markdown.pl
 	chmod +x Markdown.pl
 	local setup_out
-	setup_out=$(make setup 2>&1)
+	setup_out=$("$MAKE" setup 2>&1)
 	if [ $? -ne 0 ]; then
 		fail "markdown_stub's make setup failed" "$setup_out"
 	fi
@@ -141,7 +168,7 @@ markdown_stub() {
 # error rather than blocking the suite.
 #
 build() {
-	BUILD_OUT=$(make "$@" < /dev/null 2>&1)
+	BUILD_OUT=$("$MAKE" "$@" < /dev/null 2>&1)
 	local status=$?
 	if [ $status -ne 0 ]; then
 		fail "make failed unexpectedly (exit $status)" "$BUILD_OUT"
@@ -155,7 +182,7 @@ build() {
 # succeeds. Output lands in $BUILD_OUT either way.
 #
 build_expect_fail() {
-	BUILD_OUT=$(make "$@" < /dev/null 2>&1)
+	BUILD_OUT=$("$MAKE" "$@" < /dev/null 2>&1)
 	local status=$?
 	if [ $status -eq 0 ]; then
 		fail "make succeeded but should have failed" "$BUILD_OUT"
@@ -182,7 +209,7 @@ build_expect_fail_within() {
 	local pid waited=0 status
 
 	set -m
-	make "$@" < /dev/null > "$out" 2>&1 &
+	"$MAKE" "$@" < /dev/null > "$out" 2>&1 &
 	pid=$!
 	set +m
 
@@ -428,7 +455,7 @@ EOF
 test_detected_processor_stages_the_body() {
 	sandbox detected_stages
 	path_stub cmark 'sed "s/HELLO/RENDERED/" "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -460,7 +487,7 @@ test_config_markdown_overrides_detection() {
 	sandbox override_wins
 	path_stub cmark 'sed "s/HELLO/DETECTED/" "$f"'
 	path_stub mytool 'sed "s/HELLO/OVERRIDDEN/" "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	# There has to be something to beat: without this the
 	# test silently degrades to "override beats nothing"
 	# if the setup rerun above ever stops detecting.
@@ -645,7 +672,7 @@ test_stub_list_matches_the_candidate_table() {
 test_probe_rejects_a_smartening_candidate() {
 	sandbox probe_smarty
 	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 	assert_grep config.mk "DETECTED_MARKDOWN :="
 }
@@ -664,7 +691,7 @@ test_probe_rejects_a_smartening_candidate() {
 test_setup_names_a_rejected_candidate() {
 	sandbox setup_reject
 	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
-	BUILD_OUT=$(make setup 2>&1)
+	BUILD_OUT=$("$MAKE" setup 2>&1)
 	assert_out_grep "grampa: setup: lowdown: smartens punctuation"
 	# BUILD_OUT merges stdout and stderr, so it cannot tell
 	# the diagnostic line above apart from a winner written to
@@ -694,7 +721,7 @@ test_setup_names_a_rejected_candidate() {
 test_probe_accepts_escaped_quotes() {
 	sandbox probe_escaped_quotes
 	path_stub lowdown 'sed "s/\"/\&quot;/g" "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := lowdown"
 }
 
@@ -705,7 +732,7 @@ test_probe_accepts_escaped_quotes() {
 test_build_announces_the_processor() {
 	sandbox notice_detected
 	path_stub cmark 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -1045,7 +1072,7 @@ test_non_executable_markdown_falls_back_to_verbatim() {
 sed 's|\*\([^*]*\)\*|<em>\1</em>|g' "$1"
 EOF
 	chmod 644 Markdown.pl
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	add_post 2026-08-06-home_hello.txt <<'EOF'
 title: Hello
 -----------------------------------
@@ -1286,11 +1313,16 @@ title: Hello
 <p>Hi.</p>
 EOF
 	build || return
-	# GNU make 3.81's mtime comparisons resolve to whole
-	# seconds, so a touch landing in the same wall-clock
-	# second as the first build looks "not newer" and gets
-	# skipped. Same reason test_editing_one_category_does_
-	# not_rebuild_another sleeps.
+	# Timestamp granularity, which is a property of the make
+	# binary and the filesystem together rather than of the
+	# make version: make compares whole seconds unless its
+	# own build detected nanosecond stat(2). A touch landing
+	# in the same wall-clock second as the first build then
+	# looks "not newer" and gets skipped -- observed 3 of 3
+	# with Apple's make 3.81 on APFS, and not reproducible
+	# with a Linux source build of the same 3.81, which does
+	# compare sub-second. Same reason
+	# test_editing_one_category_does_not_rebuild_another sleeps.
 	sleep 1
 	touch templates/post.txt
 	build || return
@@ -1662,7 +1694,7 @@ EOF
 	# timestamp (a reintroduced lastBuildDate, say) would
 	# otherwise have caught it.
 	sleep 1
-	make clean >/dev/null 2>&1
+	"$MAKE" clean >/dev/null 2>&1
 	build || return
 	if cmp -s first-rss.xml build/rss.xml; then ok; else fail "feed changed across rebuilds" "$(diff first-rss.xml build/rss.xml)"; fi
 }
@@ -1950,11 +1982,12 @@ title: Pi Backup
 EOF
 	build || return
 	touch -t 202701010000 posts/2026-08-06-home_doorbell.txt
-	# GNU make 3.81's mtime comparisons resolve to whole
-	# seconds. Without this, a rebuild that lands in the
-	# same wall-clock second as the first build can look
-	# "not newer" than files the first build produced, and
-	# get skipped -- flaky, not a real rebuild-scope bug.
+	# Timestamp granularity -- see the note on the sleep in
+	# test_editing_base_template_rebuilds_every_page. Without
+	# this, a rebuild that lands in the same wall-clock
+	# second as the first build can look "not newer" than
+	# files the first build produced, and get skipped --
+	# flaky, not a real rebuild-scope bug.
 	sleep 1
 	build || return
 	assert_out_grep "build/category/home.html"
@@ -2157,6 +2190,80 @@ test_setup_writes_the_host_date_dialect() {
 	assert_grep config.mk "DATE_DIALECT := $want"
 }
 
+# ---------------------------------------------------
+# The make version floor. MAKE_VERSION is a built-in, and
+# a command-line assignment overrides a built-in, so these
+# exercise the real guard against a fake version without
+# needing an old make binary on the host. The floor was
+# established by building 3.81 through 4.3 from source and
+# running the suite -- as it stood before these three tests
+# existed -- against each: 3.81 fails because it voids
+# .DELETE_ON_ERROR for .SECONDARY targets, 4.0 hangs or
+# segfaults on an emoji in a post filename. That run is
+# recorded, not repeatable: every binary below the floor now
+# dies at the guard before a single test can run.
+# ---------------------------------------------------
+
+#
+# 3.81 is the version that actually shipped broken, and
+# the one macOS still has.
+#
+test_old_make_version_fails_the_build() {
+	sandbox old_make_version
+	add_post 2026-02-10-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build_expect_fail MAKE_VERSION=3.81
+	assert_out_grep "4.2 or newer"
+	assert_out_grep "3.81"
+	assert_no_file build/2026/02/10/hello.html
+}
+
+#
+# 4.1 rejected and 4.2 accepted, pinning the boundary
+# itself. Without the 4.1 case, narrowing the guard to
+# 3.% alone -- which looks like a tidy-up -- would pass
+# every other test here.
+#
+test_make_version_floor_is_4_2() {
+	sandbox make_version_floor
+	add_post 2026-02-10-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build_expect_fail MAKE_VERSION=4.0
+	assert_out_grep "4.2 or newer"
+	build_expect_fail MAKE_VERSION=4.1
+	assert_out_grep "4.2 or newer"
+	# Prereleases: 4.0.90 predates the emoji fix, so a bare
+	# 4.0/4.1 word match is not enough.
+	build_expect_fail MAKE_VERSION=4.0.90
+	assert_out_grep "4.2 or newer"
+	# Above the floor, including versions that sort oddly as
+	# strings. 4.10 must be accepted, not read as 4.1.
+	build MAKE_VERSION=4.10 || return
+	build MAKE_VERSION=4.2 || return
+	assert_grep build/2026/02/10/hello.html "Hi."
+}
+
+#
+# The guard is deliberately not gated on BUILD_GOAL, unlike
+# the config.mk guards it sits above: the fix is a newer
+# make, not a recipe in this file, so clean and setup have
+# nothing to offer an old make either. Gating it would pass
+# the two tests above and lose this.
+#
+test_old_make_version_fails_nonbuild_goals_too() {
+	sandbox old_make_version_nonbuild
+	build_expect_fail clean MAKE_VERSION=3.81
+	assert_out_grep "4.2 or newer"
+	build_expect_fail setup MAKE_VERSION=3.81
+	assert_out_grep "4.2 or newer"
+}
+
 #
 # With no config.mk, DATE_DIALECT is empty and any dated
 # build must die with "run make setup first". An ordinary
@@ -2201,7 +2308,7 @@ title: End of month
 EOF
 	# setup must succeed and write config.mk despite the suspect
 	# date and the absent config.mk at parse time.
-	if make setup < /dev/null > setup.out 2>&1; then ok; else
+	if "$MAKE" setup < /dev/null > setup.out 2>&1; then ok; else
 		fail "make setup deadlocked on a month-end post" "$(cat setup.out)"; fi
 	assert_file config.mk
 	# And once configured, the build works and the suspect date
@@ -2219,7 +2326,7 @@ EOF
 test_setup_records_the_full_argv() {
 	sandbox setup_full_argv
 	path_stub cmark-gfm 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark-gfm --unsafe -e table"
 }
 
@@ -2230,10 +2337,10 @@ test_setup_records_the_full_argv() {
 test_setup_prefers_the_earlier_candidate() {
 	sandbox setup_order
 	path_stub cmark 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
 	path_stub lowdown 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := lowdown --out-no-smarty"
 }
 
@@ -2247,7 +2354,7 @@ test_probe_skips_a_candidate_that_eats_raw_html() {
 	sandbox probe_raw_html
 	path_stub lowdown 'sed "s|<i>y</i>|RAWGONE|" "$f"'
 	path_stub cmark 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
 }
@@ -2259,7 +2366,7 @@ test_probe_skips_a_candidate_that_eats_raw_html() {
 test_probe_skips_a_whole_document_candidate() {
 	sandbox probe_document
 	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 	# Every other candidate is stubbed to exit 1 by
 	# hide_markdown_tools, so with lowdown rejected nothing
@@ -2281,7 +2388,7 @@ test_a_truncating_candidate_does_not_poison_the_walk() {
 	sandbox probe_truncate
 	path_stub lowdown ': > "$f"; exit 1'
 	path_stub cmark 'cat "$f"'
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"
 }
 
@@ -2290,7 +2397,7 @@ test_a_truncating_candidate_does_not_poison_the_walk() {
 #
 test_setup_with_no_processor_records_empty() {
 	sandbox setup_none
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	assert_grep config.mk "DETECTED_MARKDOWN :="
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
 }
@@ -2310,7 +2417,7 @@ test_noop_setup_leaves_config_mk_untouched() {
 	local before after
 	before=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
 	sleep 1
-	make setup >/dev/null 2>&1
+	"$MAKE" setup >/dev/null 2>&1
 	after=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
 	assert_eq "config.mk mtime unchanged by a no-op setup" "$before" "$after"
 	assert_eq "no scratch file survives setup" "0" \
@@ -2491,7 +2598,7 @@ EOF
 # ---------------------------------------------------
 # Deleted templates. templates/post.txt and
 # templates/rss-item.txt are named only in pattern rules,
-# so under make 3.81's pattern search they are not files
+# so under make's pattern search they are not files
 # that "ought to exist": delete one and the %.tmp or
 # %.rssitem rule simply becomes inapplicable, the stale
 # fragment already in work/ is taken as-is with no
@@ -2875,9 +2982,9 @@ EOF
 # The date half. date -v already rejects every bad date
 # below and exits 1; nothing hears it, because
 # date_from_filename is a $(shell) call, which keeps the
-# output and throws the status away, and make 3.81 has no
-# .SHELLSTATUS. So today these all publish a page with an
-# empty posted-on line and an empty <pubDate>.
+# output and throws the status away. So today these all
+# publish a page with an empty posted-on line and an empty
+# <pubDate>.
 # ---------------------------------------------------
 #
 
@@ -3127,8 +3234,8 @@ ls "$1" > deployed.txt
 EOF
 	chmod +x deploy.sh
 	build || return
-	make clean > deploy-clean.out 2>&1
-	make deploy > deploy-make.out 2>&1
+	"$MAKE" clean > deploy-clean.out 2>&1
+	"$MAKE" deploy > deploy-make.out 2>&1
 	assert_file deployed.txt
 	assert_grep deployed.txt 'index.html'
 }
@@ -3273,6 +3380,9 @@ test_unpadded_date_still_builds
 test_month_end_dates_still_build
 test_character_error_precedes_the_date_error
 test_setup_writes_the_host_date_dialect
+test_old_make_version_fails_the_build
+test_make_version_floor_is_4_2
+test_old_make_version_fails_nonbuild_goals_too
 test_build_without_config_mk_fails
 test_setup_bootstraps_with_a_month_end_post
 test_setup_records_the_full_argv
