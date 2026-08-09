@@ -19,6 +19,31 @@ FAILED=0
 CURRENT=""
 
 #
+# make test runs this file as a recipe, and make exports
+# MAKELEVEL, MAKEFLAGS and MFLAGS into that recipe's environment.
+# Left alone, every sandbox `make` this suite shells out to
+# inherits them, sees MAKELEVEL=1, concludes it is a sub-make, and
+# auto-enables --print-directory -- so "make[1]: Entering
+# directory ..." becomes the first line of a captured build,
+# breaking test_build_announces_the_processor's assertion that the
+# markdown notice is the first line. That assertion is
+# load-bearing, not incidental: the notice's position is the whole
+# reason it is a parse-time $(info) and not a line in build's
+# recipe (see CLAUDE.md).
+#
+# The fix is not --no-print-directory on the test recipe or on the
+# suite's own `make` calls -- that would silence the symptom while
+# leaving MAKEFLAGS inherited, so `make -j4 test` or `make -s test`
+# would still hand sandboxes flags nobody chose, and -s would
+# silence the very output the assertions read. Unsetting all three
+# up front makes every sandbox `make` a top-level make no matter
+# how this file itself was invoked -- the same principle
+# hide_markdown_tools serves below: the suite's result must not
+# depend on the environment it inherits.
+#
+unset MAKELEVEL MAKEFLAGS MFLAGS
+
+#
 # Executable stubs that exit 1 for every PATH candidate in
 # the Makefile's table, so `make setup` finds nothing and
 # staging stays verbatim -- today's behaviour, and the same
@@ -2078,7 +2103,13 @@ test_setup_with_no_processor_records_empty() {
 
 #
 # The cmp guard: a no-op setup must not bump the mtime, or
-# every setup re-stages every post once Task 4 lands.
+# every setup re-stages every post once Task 4 lands. The
+# scratch file setup writes and cmps against is named
+# config.mk.$$ (the PID), so no fixed name is knowable
+# statically -- a glob count is what stands in for
+# assert_no_file here, and it is what actually catches a
+# scratch file left behind, unlike a fixed name nothing
+# writes any more.
 #
 test_noop_setup_leaves_config_mk_untouched() {
 	sandbox setup_noop
@@ -2088,7 +2119,8 @@ test_noop_setup_leaves_config_mk_untouched() {
 	make setup >/dev/null 2>&1
 	after=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
 	assert_eq "config.mk mtime unchanged by a no-op setup" "$before" "$after"
-	assert_no_file config.mk.new
+	assert_eq "no scratch file survives setup" "0" \
+		"$(ls config.mk.* 2>/dev/null | wc -l | tr -d ' ')"
 }
 
 #

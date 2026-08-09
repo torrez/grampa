@@ -152,7 +152,8 @@ to re-run. The one exception is `config.mk`, which is *generated* rather than co
 probes `date(1)` and the markdown candidates and rewrites it, which is what re-fixes the
 dialect if a checkout ever moves between OSes and what picks up a newly installed markdown
 processor. The rewrite is conditional on the content actually differing — setup writes
-a per-process scratch file (`config.mk.$$$$`, the PID) and `cmp`s it — because `config.mk`
+a per-process scratch file (`config.mk.$$$$` in the Makefile, which the shell receives as
+`config.mk.$$` and expands with its PID) and `cmp`s it — because `config.mk`
 is a prerequisite of `%.staged`, and an unconditional touch would re-stage every post on
 every setup. The per-process name is what keeps two concurrent setups from truncating each
 other's scratch file and promoting a half-written `config.mk`; the cost is that a setup
