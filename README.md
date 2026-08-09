@@ -81,10 +81,11 @@ git clone https://github.com/torrez/grampa && cd grampa
 make setup
 ```
 
-`make setup` creates `posts/`, `templates/`, `build/`, and `work/`, copies the stock templates
-and an example `config` and `deploy.sh` into place, and detects your `date` dialect and your
-markdown processor. It never overwrites a file you already have, so it is safe to re-run —
-with one deliberate exception, the generated `config.mk`, which is re-probed every time and
+`make setup` creates `posts/`, `templates/`, `static/`, `build/`, and `work/`, copies the stock
+templates, a stock stylesheet, and an example `config` and `deploy.sh` into place, and detects
+your `date` dialect and your markdown processor. It never overwrites a file you already have,
+so it is safe to re-run — with one deliberate exception, the generated `config.mk`, which is
+re-probed every time and
 rewritten whenever the answer changed. That's what re-fixes the `date` dialect if a checkout
 moves between machines, and what picks up a markdown processor you installed later.
 
@@ -161,6 +162,26 @@ The body is copied through as-is, so it's HTML — unless a markdown processor w
 which case every body is run through it first. The front matter never is: a title keeps its
 asterisks.
 
+## Static files
+
+Anything in `static/` is copied into `build/` with its path preserved, so `static/style.css`
+publishes at `/style.css` and `static/img/logo.png` at `/img/logo.png`. That mirroring at the
+root is what lets you serve `/favicon.ico`, `/robots.txt`, or a `CNAME`. `make setup` creates
+the directory and puts a stock stylesheet in it, which the stock `templates/base.txt` links.
+
+A static file may not have the same path as a page grampa builds. `static/index.html`, and a
+`static/2026/08/06/hello.html` twin of a real post, both stop the build and name the page the
+two of them want, rather than one silently winning. So does a file named for a directory pages
+live in, like `static/2026` or `static/category`. `static/rss.xml` is refused whether or not
+you have set `url=`, so turning the feed on later can't break a site that built yesterday.
+
+Static filenames are checked, but less strictly than post filenames: no whitespace, no control
+characters, and none of ``: % $ # \ * ? [ ] ` ( ) & ' " | ; < > =``. Everything else is fine,
+so `logo@2x.png` and `style,min.css` both work, as do accents and emoji.
+
+It is a copy, not a filter — `style.css~`, `.DS_Store` and editor swap files in `static/` get
+published along with everything else.
+
 ## Configuration
 
 `make setup` copies an example `config` into the repo root. It has three keys, all optional:
@@ -204,6 +225,8 @@ These are the only three keys anything reads.
   category means renaming the files that use it.
 - **`build/rss.xml`** — an RSS 2.0 feed of the ten newest posts, full bodies, same window as
   the front page. Only built when `url=` is set.
+- **Anything in `static/`** — copied to the matching path under `build/`, so `static/style.css`
+  becomes `build/style.css`.
 
 Every page advertises the feed with a `<link rel="alternate">` tag, whether or not you've set
 `url=` — so a site with no feed advertises one that 404s. Set `url=`, or delete the line from
@@ -242,11 +265,17 @@ equivalents.
   Everything that *links* to it — the front page, its category page, the feed — drops it on the
   next `make`. The orphaned page itself needs `make clean && make`, as does a category page
   whose **last** post you deleted, and a stale `build/rss.xml` left by removing `url=`.
+- **Deleting a static file leaves its copy behind in `build/`**, the same as deleting a post,
+  and for the same reason: nothing tracks an output whose source is gone. `make clean && make`
+  clears it.
 - **`make setup` can't share an invocation with a build.** `make -j setup all` dies with
   `No rule to make target 'templates/…'`, because make resolves the whole prerequisite graph
   before running any recipe, so it looks for the templates the build needs before `setup` has
   copied any of them. On a first-ever setup with dated posts already in `posts/`, even the
   serial `make setup all` fails. `make setup` on its own always works; run it, then run `make`.
+  Even where the combined form does run — an empty `posts/` — its build publishes pages that
+  link a `/style.css` it has not copied yet, because the list of static files is read before
+  `setup` puts the stylesheet there. The next `make` copies it.
 - **A first-ever build that creates `config` with `url=` already set produces no feed, and
   says nothing about it.** Whether the feed is built is decided when the Makefile is parsed,
   which is before `config` exists on that first run. It only bites if you've customized
@@ -262,4 +291,3 @@ equivalents.
 ## Not done yet
 
 - Better deployment examples
-- A home for static files (CSS, images) that aren't generated from posts
