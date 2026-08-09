@@ -318,8 +318,20 @@ the post rules and die later with the fragment message documented above; in `sta
 a `BAD_STATIC_NAMES` element and a newline is caught by `CHECKED_STATIC_SPLIT`, a positive
 existence test over `STATIC_SRC` — a denylist structurally cannot see a newline, since `find`
 prints such a name as two lines and neither matches. Verified all four: `static/a b.css` and
-`static/a<LF>b.css` are named by their own checks, while `posts/a b.txt` and
-`posts/a<LF>b.txt` both die at `posts/b.txt: no category in filename`.
+`static/a<LF>b.css` are named by their own checks, while `posts/a b.txt` dies at
+`posts/a: no category in filename` and `posts/a<LF>b.txt` at
+`posts/b.txt: no category in filename` — two different fragments of the same shape of name, and
+neither is the name.
+
+The two differ because they are mangled at different stages, which is worth one sentence since a
+reader who reproduces only one will otherwise write the other down wrong. `POST_LS` is
+`ls posts | grep '\.txt$'`. A newline makes `ls` print the name as **two lines**, and the `grep`
+then **drops the `a` line outright** — `POST_NAMES` holds `b.txt` alone, so `b.txt` is the only
+thing the check ever sees. A space keeps the name one line all the way through `ls`, `grep` and
+`sort` (`POST_NAMES := a b.txt`) and splits only at make's word-splitting, where `a` comes
+first. Verified by reading `POST_NAMES` out of `make -p`, and confirmed from the other side: a
+newline whose **both** halves end in `.txt` survives the grep intact, giving
+`POST_NAMES := x.txt y.txt` and an error naming `posts/x.txt`. It is not a sort-order effect.
 
 **Where the static checks sit in the file is load-bearing, and it is not the same constraint
 posts have.** Everything in this family is `:=`, so the ordering is a guarantee about textual
@@ -334,8 +346,10 @@ of it. Verified by moving the whole check-and-guard block below the copy rule wi
 naming the fragment it was handed. The other fragment, `build/index.html`, does match the
 pattern and would have been accepted as a target of the copy rule in silence; that it is in
 `STATIC_PAGES` is what the guard experiment below shows independently. Above the rules none of
-this is reachable: on the real Makefile the character `$(error)` is the only line printed,
-because it fires while the rules are still unread.
+this is reachable: on the real Makefile no `target … doesn't match the target pattern` line
+appears at all, because the `$(error)` fires while the rules are still unread. (The character
+error is not the *only* output — the parse-time `grampa: markdown:` notice prints above it, as
+it does on every build. The contrast is the absent make diagnostic, not an empty screen.)
 
 The **three collision guards must be below the character check**, and this one is about the
 message. That same `index.html x` contributes the word `build/index.html` to `STATIC_PAGES`, so
@@ -783,8 +797,11 @@ more than a format-string swap.
   plain `$(BUILD_DIR)%` pattern rule, argued safe on the grounds that shortest-stem selection
   would keep it away from generated pages. **That argument is false.** Stem length only *orders*
   make's implicit-rule trial; the first pass then accepts a candidate only if its prerequisites
-  are already on disk, and a prerequisite that would itself have to come from another pattern
-  rule does not count. Stem length orders the trial; *existence decides it*. On any build where
+  are already on disk *or named as explicit targets*. A prerequisite that would have to come
+  from another **pattern** rule does not count — nor does a mention in `.SECONDARY`, nor a
+  mention as some other target's prerequisite, all three probed. Grampa's `.tmp` fragments are
+  exactly those three forms and never an explicit target, so for every contested page here the
+  short version holds: stem length orders the trial, *existence decides it*. On any build where
   a post's `.tmp` fragment is not yet on disk, `$(BUILD_DIR)%.html` fails that pass while a
   `$(BUILD_DIR)%` rule whose `static/` twin **is** on disk passes it — and the **longer** stem
   wins. Verified by reverting the rule to the plain form and disabling the guards: with an
@@ -805,7 +822,9 @@ more than a format-string swap.
 
   With `src/a.html` holding `IMPOSTOR`: no `work/a.tmp` on disk gives `out/a.html = IMPOSTOR`,
   and `work/a.tmp` on disk gives `out/a.html = REAL`. Same two rules, same stems, opposite
-  winners — decided entirely by whether the prerequisite was already there.
+  winners — decided entirely by whether the prerequisite was already there. Adding an explicit
+  `work/a.tmp:` rule also gives `REAL`; adding `.SECONDARY: work/a.tmp`, or naming it as a
+  prerequisite of some unrelated target, gives `IMPOSTOR`. That is the whole boundary.
 
   A static pattern rule is an **explicit** rule for exactly its listed targets, so it
   enters no such contest at all, and it stays inert for anything else — a hand-typed

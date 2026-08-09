@@ -1504,8 +1504,15 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 # selection would keep it away from generated pages. That
 # argument is FALSE. Make's implicit-rule search orders
 # candidates by stem length, but its first pass only accepts
-# a rule whose prerequisites already exist or are themselves
-# makeable. Stem length orders the trial; existence decides
+# a rule whose prerequisites already exist on disk or are
+# named as explicit targets. "Makeable" is NOT the test, and
+# writing it that way here was wrong: a prerequisite that
+# would come from another PATTERN rule does not pass, and
+# neither does one merely listed in .SECONDARY or named as
+# some other target's prerequisite. Probed all four. Grampa's
+# .tmp fragments are exactly those three non-counting forms
+# and never explicit targets, so here the short version
+# holds: stem length orders the trial; existence decides
 # it. So on any build where a post's .tmp fragment is not yet
 # on disk, $(BUILD_DIR)%.html fails that pass while a
 # $(BUILD_DIR)% rule whose static/ twin exists on disk passes
