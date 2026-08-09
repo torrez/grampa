@@ -30,11 +30,13 @@
 | `.source/static/style.css` | Create | The stock stylesheet, copied by setup |
 | `.source/templates/base.txt` | Modify | Add the `<link rel="stylesheet">` |
 | `.source/templates/post.txt` | Modify | Add `class="meta"` to the posted-on line so it can be styled |
-| `tests/run.sh` | Modify | 18 tests plus their registration calls |
+| `tests/run.sh` | Modify | 24 new tests plus their registration calls, and an amendment to 2 pre-existing ones |
 | `README.md` | Modify | Install, a Static files section, What it builds, Known issues, remove the "Not done yet" line |
 | `CLAUDE.md` | Modify | Layout table, the checks, the corrected rule-selection account, two new gotchas |
 
 The whole Makefile change is one contiguous block plus two one-line edits. This repo keeps the program in a single file by design; do not split it.
+
+**Every line number in this plan refers to the Makefile as it stands before any task is applied.** Task 1 inserts ~111 lines, so by Task 2 the `build:` line has moved from 1186 to about 1297, and by Task 4 the `setup` recipe from ~1524 to ~1754. Locate each edit by the **quoted content** beside the number, never by the number alone. (In the pre-plan file, line 1304 is the blank line following the `awk "$$WRAP_IN_BASE"` line, which is 1303.)
 
 ---
 
@@ -134,7 +136,7 @@ Expected: the four `_fails` tests FAIL with `make succeeded but should have fail
 
 - [ ] **Step 3: Write the implementation**
 
-Insert this block into `Makefile` immediately after line 784 (the `CHECKED_POST_PAGES :=` line) and its following blank line.
+Insert this block into `Makefile` immediately after line 784 (the `CHECKED_POST_PAGES :=` line) and its following blank line. End the inserted block with a blank line too, so it does not butt against the next `#`-banner — house style, though make is indifferent.
 
 ```make
 #
@@ -439,7 +441,7 @@ Register all nine before `pass_fail_summary`.
 
 Run: `make test 2>&1 | tail -20`
 
-Expected: eight FAIL on missing `build/…` files. `test_build_works_without_a_static_directory` PASSES already — a regression guard, same note as Task 1's.
+Expected: eight FAIL — seven on missing `build/…` files, and `test_static_file_is_not_recopied_when_unchanged` on the missing `Copying build/style.css` output line rather than a missing file. `test_build_works_without_a_static_directory` PASSES already — a regression guard, same note as Task 1's.
 
 - [ ] **Step 3: Add `$(STATIC_PAGES)` to `build`'s prerequisites**
 
@@ -535,7 +537,7 @@ cd "$(mktemp -d)" && cp ~/Code/grampa/Makefile . && cp -R ~/Code/grampa/.source 
   && make build/nope.css 2>&1 | tail -1
 ```
 
-Expected: six files listed, and `No rule to make target 'build/nope.css'` on the last line.
+Expected: **five** files listed — the post page, `index.html`, `category/home.html`, `style.css`, `img/x.svg` — and `No rule to make target 'build/nope.css'` on the last line. There is no `rss.xml`: this scratch tree has no `url=`.
 
 - [ ] **Step 7: Commit**
 
@@ -681,7 +683,18 @@ Register all seven before `pass_fail_summary`.
 
 Run: `make test 2>&1 | tail -25`
 
-Expected: the six `_fails` tests FAIL — most with `make succeeded but should have failed`, and `test_static_file_shadowing_a_page_directory_fails` demonstrating the silent behaviour the guard exists for. `test_static_names_near_a_generated_page_are_fine` PASSES already; regression guard.
+Expected: **five** FAIL, not six. Four — `collide_index`, `collide_feed`, `collide_post`,
+`shadow_dir` — with `make succeeded but should have failed`. The fifth,
+`test_static_directory_named_for_a_page_fails`, fails on the missing *message*: the `mkdir` over
+a file already fails the build, so `build_expect_fail` is satisfied and only `assert_out_grep`
+fails. That is the spec's account of this case, and seeing it fail that way confirms it.
+
+**Two pass already, and both are regression guards, not drivers.**
+`test_static_names_near_a_generated_page_are_fine` passes because nothing errors yet.
+`test_static_character_error_precedes_the_collision_error` passes because Task 1's character
+check already rejects the `:` — which is exactly the ordering it exists to pin, so it can never
+be watched failing at any point in this plan. Say so in the commit message rather than letting a
+later reader take it for a driven test.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -796,7 +809,12 @@ build/2026/2026 after a touch.
 
 rss.xml is reserved unconditionally rather than via FEED_PAGES, so
 setting url= later cannot break a build for a file added weeks
-earlier."
+earlier.
+
+test_static_character_error_precedes_the_collision_error passes
+before this commit too and cannot be watched failing anywhere: Task
+1's character check is what makes it pass, which is the ordering it
+exists to pin."
 ```
 
 ---
@@ -848,11 +866,55 @@ EOF
 
 Register all three before `pass_fail_summary`.
 
+- [ ] **Step 1b: Amend four existing tests, because this task changes the world they were written in**
+
+This is the one place a task in this plan invalidates earlier work, and it is not optional —
+without it the suite ends this task **red with four failures**, verified. `sandbox()` runs
+`make setup`, so from this task onward *every* sandbox has a `static/` directory containing the
+stock `style.css`, and every sandbox build therefore publishes `build/style.css`.
+
+**Two tests written in this plan** assumed no such directory:
+
+- `test_build_works_without_a_static_directory` (Task 2) — its `assert_no_file build/style.css`
+  now fails, and worse, the test no longer tests its own name. Add `rm -rf static` immediately
+  after the `sandbox static_absent` line.
+- `test_symlinked_static_directory_is_published` (Task 2) — `ln -s assets static` against a
+  directory that now exists creates `static/assets → assets`, a **self-looping symlink inside
+  the directory**, and the build dies with `Too many levels of symbolic links`, exit 2. Add
+  `rm -rf static` immediately before the `ln -s assets static` line.
+
+**Two pre-existing tests** assert that `build/` holds only HTML:
+
+- `test_build_contains_only_html` (`tests/run.sh:353`)
+- `test_category_pages_are_html_only_in_build` (`tests/run.sh:2026`)
+
+Both use the same assertion. Change the expected value from `"html"` to `"css html"` in each:
+
+```bash
+	assert_eq "extensions under build/" "css html" "$(find build -type f | sed 's/.*\.//' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+```
+
+Only the expected string changes — the `find | sed | sort -u | tr | sed` pipeline is copied from
+the existing tests verbatim.
+
+**Change the expectation, do not `rm -rf static` in these two.** The choice matters and should be
+made deliberately. What these tests actually protect is that no `.tmp` or `.staged` intermediate
+leaks out of `work/` into publishable output; `build/` holding "only HTML" was a true description
+of that invariant only while HTML was the only thing grampa produced. A stylesheet is designed
+output, not a leak. `"css html"` still fails the moment a `.tmp` appears, which is the property
+worth keeping, whereas deleting `static/` in these two sandboxes would leave the new interaction
+covered by nothing at all.
+
+Add a one-line comment above each amended assertion recording why the expectation grew, so the
+next reader does not "tidy" it back to `"html"`.
+
 - [ ] **Step 2: Run the tests and verify they fail**
 
 Run: `make test 2>&1 | tail -15`
 
-Expected: all three FAIL — `expected file to exist: static/style.css`, and the missing `<link>`.
+Expected: the three new tests FAIL — `expected file to exist: static/style.css`, and the missing
+`<link>`. The four amendments from Step 1b will not fail yet; they are pre-emptive, and Step 8
+is where they are confirmed.
 
 - [ ] **Step 3: Create `.source/static/style.css`**
 
@@ -968,7 +1030,7 @@ Insert after the `/posts/` line, inside the block the existing anchoring comment
 
 Run: `make test 2>&1 | tail -5`
 
-Expected: `failed: 0`, count up from Task 3's.
+Expected: `failed: 0`. **If you see four failures — `test_build_contains_only_html`, `test_category_pages_are_html_only_in_build`, `test_build_works_without_a_static_directory`, `test_symlinked_static_directory_is_published` — Step 1b was skipped.** Go back and do it; that exact set is the signature.
 
 - [ ] **Step 9: Verify the virgin-tree lag is what the spec says it is**
 
@@ -999,7 +1061,13 @@ nobody acquires a stylesheet link pointing at a file they do not
 have.
 
 post.txt's posted-on line gets class=\"meta\" so it can be styled
-without touching the author's body HTML."
+without touching the author's body HTML.
+
+Amends four tests: sandbox() runs setup, so from here every sandbox
+has a static/ with a stylesheet in it. The two html-only assertions
+become css html rather than deleting static/ in their sandboxes --
+what they protect is that no .tmp or .staged leaks into build/, and
+a stylesheet is designed output, not a leak."
 ```
 
 ---
@@ -1080,13 +1148,15 @@ and must not reach this file."
 
 ## Final: branch review
 
-- [ ] Run the full suite one more time: `make test`. Expect `failed: 0` and 21 tests' worth of new assertions above the baseline recorded before Task 1.
+- [ ] Run the full suite one more time: `make test`. Expect `failed: 0` and 24 tests' worth of new assertions above the baseline recorded before Task 1.
 - [ ] Dispatch the Fable **branch** review — the fourth checkpoint in `CLAUDE.md`'s cycle. Give it the whole diff against `main`, the spec, and this plan. Tell it the four settled decisions are settled, and that section 3 of the spec records an argument already falsified once so it should be checked rather than assumed. Ask for blocking / recommended / optional plus what it actively verified.
 - [ ] Fold the findings in, then use `superpowers:finishing-a-development-branch` to decide integration.
 
 ## Self-review notes
 
-**Spec coverage.** Section 1 → Task 1. Section 2 (both checks, placement) → Task 1 + Task 3's ordering test. Section 3 (rule, quoting, `.SECONDARY`) → Task 2. Section 4 (all three collision conditions) → Task 3. Section 5 (setup, gitignore, base.txt, stylesheet, the virgin-tree lag) → Task 4. Section 6 (docs) → Task 5. Testing table: all 18 tests placed, plus `test_static_names_near_a_generated_page_are_fine`, `test_setup_does_not_clobber_an_edited_stylesheet`, and `test_stock_stylesheet_is_published_and_linked`, which the spec's table implied but did not name — 21 in total.
+**Test count: 24 new functions** (5 + 9 + 7 + 3), plus amendments to 2 pre-existing tests in Task 4's Step 1b. Three of the 24 are regression guards that pass before their task's implementation and are flagged as such in place: `test_legal_static_names_are_accepted`, `test_static_names_near_a_generated_page_are_fine`, and `test_static_character_error_precedes_the_collision_error` — the last of which cannot be watched failing at any point in this plan, since Task 1 is what makes it pass.
+
+**Spec coverage.** Section 1 → Task 1. Section 2 (both checks, placement) → Task 1 + Task 3's ordering test. Section 3 (rule, quoting, `.SECONDARY`) → Task 2. Section 4 (all three collision conditions) → Task 3. Section 5 (setup, gitignore, base.txt, stylesheet, the virgin-tree lag) → Task 4. Section 6 (docs) → Task 5. Testing table: every named test placed (the spec's `test_punctuation_in_a_static_name_fails` is delivered as `test_bad_character_in_a_static_name_fails`, with the legal-names and brace tests covering the converse it implied), plus `test_static_names_near_a_generated_page_are_fine`, `test_setup_does_not_clobber_an_edited_stylesheet`, and `test_stock_stylesheet_is_published_and_linked`, which the spec's table implied but did not name — 21 in total.
 
 **Deviation from the spec, deliberate.** The spec said the stylesheet would style "the posted-on/category line". `post.txt` gives that paragraph no hook, so Task 4 adds `class="meta"` to `.source/templates/post.txt`. That is a template change the spec did not name. It reaches new installs only, like the `base.txt` edit beside it, and no test asserts on `post.txt`'s own markup (checked: all 130 `<p>` occurrences in `tests/run.sh` are post bodies the tests author themselves). Flagging it for the branch review rather than doing it silently.
 
