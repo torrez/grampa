@@ -620,7 +620,19 @@ more than a format-string swap.
   `-smart`. This is why the table records field 2 and not field 1, and why the probe checks
   the `<i>` survives rather than just checking the exit status. An argv in the table must
   contain no `#` or `$`, which would truncate or misparse the `config.mk` line it is written
-  into.
+  into. A candidate that is *found* but then rejected by one of these checks is now named on
+  stderr with its reason — `grampa: setup: lowdown: smartens punctuation`, or `not runnable`,
+  `emits a whole document`, `drops raw HTML` for the other three — instead of falling through
+  in silence to a winner the user did not expect. A candidate not found at all (`command -v`
+  or `[ -x ]` miss) stays silent, on purpose: those misses are the common case, and naming all
+  eleven on a machine with one processor installed would print eleven lines on every setup. The
+  prefix is `grampa: setup:` and deliberately not `grampa: markdown:` — that prefix belongs to
+  the build notice, and `test_clean_and_setup_print_no_notice` asserts it is absent from
+  `make setup`'s output. One cosmetic consequence for the suite: `hide_markdown_tools` installs
+  executable exit-1 stubs for all eleven candidates, so in every sandbox all eleven are found,
+  probed, and rejected as `not runnable` — up to eleven such lines on stderr per sandboxed
+  `make setup`. Harmless (`sandbox()` redirects them, and `markdown_stub` only surfaces output
+  on failure) and worth knowing before someone reads it as a regression.
 - **An install that predates detection fails loud, and the guard is gated on `BUILD_GOAL`.**
   Such a tree has a `config.mk` holding only `DATE_DIALECT`. Nothing else would notice:
   `DATE_DIALECT` is set, so the loud date check is satisfied, and `DETECTED_MARKDOWN` is

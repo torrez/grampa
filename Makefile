@@ -1473,10 +1473,10 @@ setup: config
 		probefile=$$(mktemp); printf 'x <i>y</i> -- z\n' > "$$probefile"; \
 		out=$$($$cmd "$$probefile" 2>/dev/null </dev/null); rc=$$?; \
 		rm -f "$$probefile"; \
-		[ $$rc -eq 0 ] || continue; \
-		case "$$out" in *'<html'*|*'<HTML'*|*DOCTYPE*) continue;; esac; \
-		case "$$out" in *'<i>'*) ;; *) continue;; esac; \
-		case "$$out" in *'--'*) ;; *) continue;; esac; \
+		[ $$rc -eq 0 ] || { echo "grampa: setup: $$probe: not runnable" >&2; continue; }; \
+		case "$$out" in *'<html'*|*'<HTML'*|*DOCTYPE*) echo "grampa: setup: $$probe: emits a whole document" >&2; continue;; esac; \
+		case "$$out" in *'<i>'*) ;; *) echo "grampa: setup: $$probe: drops raw HTML" >&2; continue;; esac; \
+		case "$$out" in *'--'*) ;; *) echo "grampa: setup: $$probe: smartens punctuation" >&2; continue;; esac; \
 		echo "$$cmd"; break; \
 	done); \
 	{ echo "DATE_DIALECT := $$dialect"; \

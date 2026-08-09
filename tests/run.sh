@@ -651,6 +651,24 @@ test_probe_rejects_a_smartening_candidate() {
 }
 
 #
+# setup used to fall through a rejected candidate in
+# silence, so the build notice named a processor the user
+# did not expect and gave no hint why. The punctuation check
+# makes that more likely, not less.
+#
+# The prefix is deliberately NOT "grampa: markdown:" --
+# test_clean_and_setup_print_no_notice asserts that string
+# is absent from setup's output, because it belongs to the
+# build notice and setup must stay quiet about it.
+#
+test_setup_names_a_rejected_candidate() {
+	sandbox setup_reject
+	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
+	BUILD_OUT=$(make setup 2>&1)
+	assert_out_grep "grampa: setup: lowdown: smartens punctuation"
+}
+
+#
 # A TRIPWIRE, not a live guard, and it cannot fail today.
 #
 # cmark, cmark-gfm and md2html all HTML-escape a " in text
@@ -823,7 +841,7 @@ test_failing_markdown_fails_the_build() {
 	sandbox markdown_failure
 	# Unconditional exit 1 would fail setup's own probe --
 	# which runs this exact stub against a synthetic
-	# "x <i>y</i>" file -- so detection would reject the
+	# "x <i>y</i> -- z" file -- so detection would reject the
 	# candidate and DETECTED_MARKDOWN would come back empty,
 	# and the build below would then stage verbatim and
 	# succeed instead of failing. Passing the probe and only
@@ -3030,6 +3048,7 @@ test_hash_in_markdown_value_fails_the_rebuild
 test_uninstalled_detected_processor_fails_the_build
 test_stub_list_matches_the_candidate_table
 test_probe_rejects_a_smartening_candidate
+test_setup_names_a_rejected_candidate
 test_probe_accepts_escaped_quotes
 test_build_announces_the_processor
 test_build_announces_no_processor
