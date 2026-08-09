@@ -896,6 +896,69 @@ CHECKED_STATIC_CHARS := $(if $(BAD_STATIC_NAMES),$(error bad character in static
 CHECKED_STATIC_SPLIT := $(foreach f,$(STATIC_SRC),$(if $(wildcard $(f)),,$(error static filename splits a make list, most likely a newline in it: $(f) is not a file. Rename it.)))
 
 #
+# Every page grampa itself builds. A static file that claims
+# one of these paths -- or a directory one of them lives in
+# -- is a parse-time error naming both sides, the same
+# refusal to pick a winner CHECKED_POST_PAGES makes for two
+# posts wanting one URL.
+#
+# This is the SOLE containment. See the copy rule's comment:
+# there is no rule-selection argument keeping a static file
+# out of a generated page's target, so without these guards
+# the static file wins silently at exit 0.
+#
+# POST_PAGES (:=) and not html_post_files (=): the two name
+# the same set, but the recursive one re-walks TMP_FILES on
+# every expansion -- the shape that cost 131 shell calls on a
+# 60-post rebuild before POST_NAMES became :=. Verified equal
+# to what build names at the build: line, over unpadded
+# dates, two-digit years, hyphenated categories and
+# non-ASCII slugs.
+#
+# rss.xml is listed UNCONDITIONALLY, not through FEED_PAGES.
+# With url= unset FEED_PAGES is empty, so a gated check would
+# accept static/rss.xml today and break the build on the day
+# url= gets set -- a failure whose cause was added weeks
+# earlier. The feed page is a reserved path whether or not it
+# is currently built.
+#
+# Anything added to build's output must be added here too. A
+# future page type that forgets silently reopens every
+# collision these three close.
+#
+GENERATED_PAGES := $(BUILD_DIR)index.html $(BUILD_DIR)rss.xml $(addprefix $(BUILD_DIR),$(addsuffix .html,$(POST_PAGES))) $(CATEGORY_PAGES)
+
+#
+# Three conditions, not one. Exact equality is the obvious
+# case; the other two are worse, and the middle one is the
+# only silent failure of the three.
+#
+# STATIC_SHADOWS_DIR: a static file whose published path
+# equals a DIRECTORY generated pages live under. static/2026
+# beside a 2026-dated post exits 0 having never published the
+# file -- build/2026/ exists as a directory newer than the
+# source, so make judges the target up to date -- and after a
+# touch, cp copies INTO the directory and lands at
+# build/2026/2026. Exit 0 both times, content nowhere. Under
+# -j4 from clean it is a race-dependent mkdir failure
+# instead. A file named `category` does the same.
+#
+# STATIC_UNDER_PAGE: the inverse, a static DIRECTORY named
+# for a generated page. It fails on its own today, but with a
+# mkdir message rather than an explanation.
+#
+# No ancestor-walking needed: filter's % anchored by the /
+# does it in one pass each. Verified against the near-misses
+# that must not fire -- hello.htmlx and categoryextra.css.
+#
+STATIC_EXACT_COLLISIONS := $(filter $(GENERATED_PAGES),$(STATIC_PAGES))
+STATIC_SHADOWS_DIR := $(strip $(foreach s,$(STATIC_PAGES),$(if $(filter $(s)/%,$(GENERATED_PAGES)),$(s))))
+STATIC_UNDER_PAGE := $(strip $(foreach g,$(GENERATED_PAGES),$(if $(filter $(g)/%,$(STATIC_PAGES)),$(g))))
+CHECKED_STATIC_EXACT := $(if $(STATIC_EXACT_COLLISIONS),$(error static file and a generated page both build $(STATIC_EXACT_COLLISIONS); rename or remove the file in static/))
+CHECKED_STATIC_SHADOW := $(if $(STATIC_SHADOWS_DIR),$(error static file $(STATIC_SHADOWS_DIR) has the same path as a directory generated pages live in; rename or remove it))
+CHECKED_STATIC_UNDER := $(if $(STATIC_UNDER_PAGE),$(error static directory $(STATIC_UNDER_PAGE) has the same path as a generated page; rename or remove it))
+
+#
 # Because the category is in the filename but not the
 # URL, a page cannot be mapped back to its fragment by
 # turning slashes into hyphens. Search instead.

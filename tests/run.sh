@@ -3194,6 +3194,112 @@ EOF
 	assert_file build/category/home.html
 }
 
+test_static_collision_with_index_fails() {
+	sandbox static_collide_index
+	mkdir -p static
+	echo "<h1>Mine</h1>" > static/index.html
+	build_expect_fail || return
+	assert_out_grep "both build build/index.html"
+	assert_out_grep "rename or remove"
+}
+
+#
+# rss.xml is a reserved path whether or not the feed is
+# currently built. Gating this on FEED_PAGES would accept the
+# file today and break the build on the day url= gets set --
+# a failure whose cause was added weeks earlier. No url= here
+# on purpose.
+#
+test_static_collision_with_the_feed_fails_without_url() {
+	sandbox static_collide_feed
+	mkdir -p static
+	echo "nope" > static/rss.xml
+	build_expect_fail || return
+	assert_out_grep "both build build/rss.xml"
+}
+
+test_static_collision_with_a_post_page_fails() {
+	sandbox static_collide_post
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/2026/08/06
+	echo "<h1>Impostor</h1>" > static/2026/08/06/hello.html
+	build_expect_fail || return
+	assert_out_grep "both build build/2026/08/06/hello.html"
+}
+
+#
+# The silent one. static/2026 beside a 2026-dated post: the
+# first serial build exits 0 having never published the file
+# -- build/2026/ exists as a directory newer than the source,
+# so make judges the target up to date -- and after a touch,
+# cp copies INTO the directory and lands at build/2026/2026.
+# Exit 0 both times. Under -j4 it is a race-dependent mkdir
+# failure instead.
+#
+test_static_file_shadowing_a_page_directory_fails() {
+	sandbox static_shadow_dir
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "nope" > static/2026
+	build_expect_fail || return
+	assert_out_grep "same path as a directory generated pages live in"
+	assert_out_grep "build/2026"
+}
+
+test_static_directory_named_for_a_page_fails() {
+	sandbox static_under_page
+	mkdir -p static/index.html
+	echo "nope" > static/index.html/x.css
+	build_expect_fail || return
+	assert_out_grep "same path as a generated page"
+	assert_out_grep "build/index.html"
+}
+
+#
+# The near-misses that must NOT fire. filter's % is anchored
+# by the /, so these are clean -- if either errors, the
+# collision filters have lost their anchor.
+#
+test_static_names_near_a_generated_page_are_fine() {
+	sandbox static_near_miss
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/2026/08/06
+	echo "a" > static/2026/08/06/hello.htmlx
+	echo "b" > static/categoryextra.css
+	build || return
+	assert_file build/2026/08/06/hello.htmlx
+	assert_file build/categoryextra.css
+	assert_file build/2026/08/06/hello.html
+}
+
+#
+# The placement constraint, pinned rather than commented --
+# the sibling of test_character_error_precedes_the_date_error.
+# A name bad in BOTH ways must get the character message. With
+# the checks below build's prerequisite line, a : dies at make's
+# own "target pattern contains no '%'" instead.
+#
+test_static_character_error_precedes_the_collision_error() {
+	sandbox static_check_order
+	mkdir -p static
+	: > 'static/index:x.html'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_not_grep "target pattern contains no"
+}
+
 #
 # find static (no slash) prints only the symlink, so
 # STATIC_PAGES got the literal word `static`, which exists,
@@ -3668,6 +3774,13 @@ test_static_file_is_not_recopied_when_unchanged
 test_changed_static_file_is_recopied
 test_static_html_page_is_published
 test_static_html_page_in_category_dir_is_published
+test_static_collision_with_index_fails
+test_static_collision_with_the_feed_fails_without_url
+test_static_collision_with_a_post_page_fails
+test_static_file_shadowing_a_page_directory_fails
+test_static_directory_named_for_a_page_fails
+test_static_names_near_a_generated_page_are_fine
+test_static_character_error_precedes_the_collision_error
 test_symlinked_static_directory_is_published
 test_brace_in_a_static_name_builds
 test_build_works_without_a_static_directory
