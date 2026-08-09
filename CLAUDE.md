@@ -336,12 +336,24 @@ lose the flags, and the flags are not decoration — see the raw-HTML gotcha bel
 line is its own shell and `dialect` and `winner` have to survive to the write; the `while`
 loop runs in a subshell, so the winner is `echo`ed out of the pipeline and captured rather
 than assigned. The probe is a real render, not a `--version` check: each candidate is run
-against a freshly written `x <i>y</i>` and has to exit 0, keep the `<i>`, and *not* return a
-whole `<html>` document. That is what catches a flag that turns out to be wrong on the host —
-including for `comrak`, `multimarkdown` and `markdown-it`, whose rows were never executed
-during development and whose flags are inferred from family behaviour rather than observed.
-The probe file is rewritten **inside** the loop, per candidate: a candidate that truncates a
-shared file would make every candidate behind it fail the `<i>` check on empty input.
+against a freshly written `x <i>y</i> -- z` and has to exit 0, keep the `<i>`, keep the `--`,
+and *not* return a whole `<html>` document. That is what catches a flag that turns out to be
+wrong on the host — including for `comrak`, `multimarkdown` and `markdown-it`, whose rows were
+never executed during development and whose flags are inferred from family behaviour rather
+than observed. The probe file is rewritten **inside** the loop, per candidate: a candidate
+that truncates a shared file would make every candidate behind it fail the `<i>` check on
+empty input.
+
+The `--` check exists because the `<i>`/document checks say nothing about typography: a
+candidate whose smartypants flag is wrong passes both and quietly rewrites every post's `--`
+into an en dash. It checks the **dash only**, never the quote. `cmark`, `cmark-gfm` and
+`md2html` HTML-escape a `"` to `&quot;` in text content — that is escaping, not smartening,
+and it renders identically — so a literal `"` assertion would reject all three of those good
+processors. The dash has no such false positive among the candidates measured. The residual:
+a processor that smartens quotes but leaves `--` alone would still pass. No row in the table
+is known to do this — the claim that Python-Markdown's `smarty` extension behaves this way is
+from its documentation, not from an observed probe run, since the table's `markdown_py` row
+does not enable that extension.
 
 `setup` writes a per-process scratch file (`config.mk.$$$$`) and `mv`s it only when `cmp`
 says the content changed, so a no-op `make setup` does not bump the mtime — without that,

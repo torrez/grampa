@@ -1470,12 +1470,13 @@ setup: config
 			*/*) [ -x "$$probe" ] || continue;; \
 			*) command -v "$$probe" >/dev/null 2>&1 || continue;; \
 		esac; \
-		probefile=$$(mktemp); printf 'x <i>y</i>\n' > "$$probefile"; \
+		probefile=$$(mktemp); printf 'x <i>y</i> -- z\n' > "$$probefile"; \
 		out=$$($$cmd "$$probefile" 2>/dev/null </dev/null); rc=$$?; \
 		rm -f "$$probefile"; \
 		[ $$rc -eq 0 ] || continue; \
 		case "$$out" in *'<html'*|*'<HTML'*|*DOCTYPE*) continue;; esac; \
 		case "$$out" in *'<i>'*) ;; *) continue;; esac; \
+		case "$$out" in *'--'*) ;; *) continue;; esac; \
 		echo "$$cmd"; break; \
 	done); \
 	{ echo "DATE_DIALECT := $$dialect"; \

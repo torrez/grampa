@@ -632,6 +632,47 @@ test_stub_list_matches_the_candidate_table() {
 }
 
 #
+# A candidate whose smartypants flag is wrong renders the
+# author's -- as an en dash. The probe used to check only
+# exit status, the surviving <i>, and fragment-vs-document,
+# so such a tool won detection and quietly rewrote every
+# post's punctuation.
+#
+# The stub fails ONLY the punctuation check -- it exits 0,
+# keeps the <i>, and emits no document -- so this test
+# cannot pass for an unrelated reason.
+#
+test_probe_rejects_a_smartening_candidate() {
+	sandbox probe_smarty
+	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+}
+
+#
+# A TRIPWIRE, not a live guard, and it cannot fail today.
+#
+# cmark, cmark-gfm and md2html all HTML-escape a " in text
+# content to &quot;. That is escaping, not smartening -- it
+# renders identically -- but a literal " assertion cannot
+# tell the two apart and would skip all three. The probe
+# input therefore carries no quote at all, so this stub's
+# escaping never fires and the test passes trivially.
+#
+# It exists to bite the next person who adds a quote to the
+# probe input and a literal-" check alongside it. The stub
+# escapes CONDITIONALLY for that reason: one that emitted
+# &quot; unconditionally would test nothing in either world.
+#
+test_probe_accepts_escaped_quotes() {
+	sandbox probe_escaped_quotes
+	path_stub lowdown 'sed "s/\"/\&quot;/g" "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
 # The notice says which processor a build is using, once,
 # before any page is built.
 #
@@ -2988,6 +3029,8 @@ test_multi_word_override_keeps_its_flags
 test_hash_in_markdown_value_fails_the_rebuild
 test_uninstalled_detected_processor_fails_the_build
 test_stub_list_matches_the_candidate_table
+test_probe_rejects_a_smartening_candidate
+test_probe_accepts_escaped_quotes
 test_build_announces_the_processor
 test_build_announces_no_processor
 test_notice_marks_a_config_override
