@@ -45,13 +45,21 @@ call per build, a simply-expanded result, and a shared listing so no two consume
 about what the directory holds.
 
 ```make
-STATIC_LS    := find static ! -type d 2>/dev/null | sort
+STATIC_LS    := find static/ ! -type d 2>/dev/null | sort
 STATIC_SRC   := $(shell $(STATIC_LS))
 STATIC_PAGES := $(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))
 ```
 
 `! -type d` rather than `-type f`: a symlinked asset should be copied (`cp` follows the link),
 not silently skipped. Everything that is not a directory is an asset.
+
+**The trailing slash on `static/` is load-bearing**, and its absence is a silent-wrong-output
+bug rather than a style point. If `static` is itself a symlink to a directory — a plausible
+setup, with assets living outside the repo — then `find static` prints the symlink itself and
+nothing under it. `patsubst` leaves that unmatched word alone, so `STATIC_PAGES` acquires the
+literal word `static`, which exists as a prerequisite, and the build exits 0 having copied
+nothing and said nothing. `find static/` traverses it, and behaves identically to the bare form
+for a real directory and for a missing one. Verified all three cases.
 
 `sort` because `find` walks in directory order, which is neither stable across filesystems nor
 meaningful to a reader. A sorted list makes prerequisite order and error-message order
@@ -146,41 +154,80 @@ Neither check is gated on `BUILD_GOAL`, so both fire on `make clean` and `make s
 matches the existing post checks, and there is no deadlock to avoid of the kind `BUILD_GOAL`
 exists for: the cure is renaming a file, not running a recipe this Makefile owns.
 
+**All three checks — these two and the collisions in section 4 — must sit textually above the
+first rule that expands `STATIC_PAGES`.** This is the same class of constraint as
+`BAD_CHARS`-above-`BAD_POST_DATES`, and it is a guarantee about position in the file and
+nothing else. Verified: with the checks below `build`'s prerequisite line, a file named
+`static/a:b.css` dies at that line with make's own `target pattern contains no '%'` — the
+unhelpful message CLAUDE.md already documents a `:` producing for posts — instead of the
+character check's message naming the file and the character. It gets its own pinning test
+rather than a comment alone, exactly as `test_character_error_precedes_the_date_error` does.
+
 ### 3. The copy rule
 
 ```make
-$(BUILD_DIR)%: static/%
+$(STATIC_PAGES): $(BUILD_DIR)%: static/%
 	@echo "Copying $@"
-	@mkdir -p $(dir $@)
-	@cp $< $@
+	@mkdir -p '$(dir $@)'
+	@cp '$<' '$@'
 ```
 
-`$(STATIC_PAGES)` is appended to `build`'s prerequisite list at `Makefile:1186`.
+A **static pattern rule**, not a plain `$(BUILD_DIR)%` pattern rule. `$(STATIC_PAGES)` is also
+appended to `build`'s prerequisite list at `Makefile:1186`.
 
-A pattern rule whose target is `$(BUILD_DIR)%` matches every path under `build/`, which in a
-Makefile with this one's history deserves the argument written out. Four things contain it, and
-the comment block above the rule will carry all four:
+The first draft of this spec used a plain pattern rule and argued it was contained by
+shortest-stem selection. **That argument was false**, and the spec review disproved it by
+execution rather than by reading — the record is worth keeping, because it is the exact shape
+of mistake this repo's history is full of.
 
-1. **It is only applicable when `static/<stem>` exists.** Make drops a pattern rule whose
-   prerequisite neither exists nor can be built. On a tree with no `static/index.html` the rule
-   is simply not a candidate for `build/index.html`.
-2. **`build/index.html` and `build/rss.xml` have explicit rules**, and an explicit rule beats
-   every pattern rule outright regardless of stem length.
-3. **Shortest-stem selection covers the two pattern-matched families.** For
-   `build/2026/08/06/x.html` the competing stems are `2026/08/06/x.html` against `%.html`'s
-   `2026/08/06/x`; for `build/category/home.html` they are `category/home.html` against
-   `category/%.html`'s `home`. The existing rules win both, at every make version above the 4.2
-   floor. (Below it this would be makefile-order-dependent, which is why the floor guard
-   matters here too.)
-4. **`%` is in the rejected character set**, so no static filename can perturb stem matching.
+**What make actually does:** implicit-rule search orders candidate rules by stem length, but the
+first pass only accepts a rule whose prerequisites already exist or are themselves targets make
+knows how to make. Stem length orders the trial; *existence decides it*. So on any build where a
+post's `.tmp` fragment is not yet on disk, `$(BUILD_DIR)%.html` fails that first pass while a
+`$(BUILD_DIR)%` rule whose `static/` twin exists on disk passes it — and the longer stem wins.
+Verified: with a post `2026-08-06-home_hello.txt` and a twin `static/2026/08/06/hello.html`, and
+the section 4 check removed, the impostor shipped **at exit 0** in serial, under `-j8`, and when
+the page was requested by name.
 
-Point 1 means the collision check in section 4 is not merely a nicety: it is what guarantees
-the states where points 2 and 3 would be doing the work never arise in a build that runs at
-all.
+Only one of the original four points survives: an **explicit** rule beats every pattern rule
+outright, so `build/index.html` and `build/rss.xml` were never reachable this way (verified).
+The rest was wrong.
+
+Two changes follow from it.
+
+**The rule becomes a static pattern rule.** `$(STATIC_PAGES): $(BUILD_DIR)%: static/%` is an
+explicit rule for exactly the listed targets, so it does not compete on stem length with
+anything, and it is inert for every target not in `STATIC_PAGES` — `make build/nonexistent.css`
+still fails with make's own `No rule to make target`. An empty `$(STATIC_PAGES)` parses fine
+and builds clean, which is the tree with no `static/` at all (verified twice: empty directory,
+and no directory).
+
+That also fixes a straightforward behavioural bug the plain form had, which none of the
+originally proposed tests would have caught: under the plain form a perfectly legal,
+non-colliding `static/about.html` **broke the build**. `$(BUILD_DIR)%.html` beat `$(BUILD_DIR)%`
+for it — its prerequisites, an empty `tmp_for_page` plus `templates/base.txt` and `config`, all
+exist — and its unknown-page guard fired with `build/about.html: no post in posts/ builds this
+page`. So `/about.html`, and `/404.html` which GitHub Pages requires at the root, failed with a
+message about posts. Under the static pattern rule both publish correctly (verified, including
+`static/category/extra.html` against the category rule).
+
+**The collision check in section 4 is the sole containment, and must be described as such.**
+Under either rule form, a static twin of a generated page wins silently absent the check
+(verified for both forms). It is not a nicety backed by rule-selection reasoning; it is the
+whole defense. Section 6's CLAUDE.md note must say that, since the wrong version of this
+argument reaching CLAUDE.md is precisely the failure item 14 of `docs/backlog.md` catalogues.
+
+**The recipe is single-quoted.** `'$(dir $@)'`, `'$<'`, `'$@'`. The rejected character set is
+the minimal one by settled decision, so `{` `}` and `,` are all legal in a static filename — and
+`static/x{1,2}y.css` brace-expands in an unquoted `cp` on any host whose `/bin/sh` is bash,
+failing with `cp: target 'build/x2y.css': No such file or directory`. Loud rather than silent,
+but host-dependent: a dash `/bin/sh` builds it fine. Quoting closes it without adding characters
+to the rejected set, which keeps the settled decision intact. Verified both ways. `'` is already
+rejected, so nothing can escape the quotes.
 
 `$(STATIC_PAGES)` are named directly in `build`'s prerequisite list, so make never treats them
 as intermediates and `.SECONDARY` needs no entry — the same standing `RECENT_ITEMS` gives
-`.rssitem` files.
+`.rssitem` files. Verified: no re-copy on a no-op rebuild, and a by-name target still builds.
 
 Plain `cp`, not `cp -p`. The copy gets a current mtime, newer than its source, which is what
 make wants; preserving the source mtime would leave the two equal and rely on GNU make's
@@ -217,6 +264,31 @@ grampa: static/index.html and a generated page both build build/index.html; rena
 It must run after the character check: a static file with a broken name should be reported as a
 broken name, not surface as a collision or, worse, fail to collide because it word-split into
 something that matches nothing.
+
+**Exact equality is not the whole collision surface.** A static file whose published path equals
+a *directory* that generated pages live under is the same conflict one level up, and it is worse
+than the exact case because it is silent. With a 2026-dated post and a static file named `2026`:
+the first serial build exits 0 having **never published the file** — post pages build first, so
+`build/2026/` exists as a directory newer than the source and make judges the target up to date
+— and after the source is touched, the next build runs `cp static/2026 build/2026`, which copies
+*into* the directory. `build/2026/2026` appears, `/2026` never gets the content, exit 0 both
+times. Under `-j4` from clean it is instead a race-dependent `mkdir: cannot create directory
+'build/2026': Not a directory`. A file named `category` does the same. Verified.
+
+The check is two more `filter`s, both directions, and needs no ancestor-walking:
+
+```make
+STATIC_SHADOWS_DIR := $(strip $(foreach s,$(STATIC_PAGES),$(if $(filter $(s)/%,$(GENERATED_PAGES)),$(s))))
+STATIC_UNDER_PAGE  := $(strip $(foreach g,$(GENERATED_PAGES),$(if $(filter $(g)/%,$(STATIC_PAGES)),$(g))))
+```
+
+The first catches `static/2026`, `static/2026/08`, and `static/category`. The second catches the
+inverse — `static/index.html/x.css`, a static *directory* named for a generated page — which
+fails loudly on its own today but with a `mkdir` message rather than an explanation. Verified
+against both, and against the near-misses that must *not* fire: `static/2026/08/06/hello.htmlx`
+and `static/categoryextra.css` are clean, since `filter`'s `%` is anchored by the `/`.
+
+All three collision conditions share one message shape, naming both sides and picking no winner.
 
 ### 5. Setup, gitignore, template, stylesheet
 
@@ -257,17 +329,34 @@ until the author adds the link by hand. That is the same "install that predates 
 shape as the leftover `templates/index.txt`, and gets the same treatment: a documented note, not
 a migration.
 
+**The stylesheet is one build late on a virgin tree, and that is the `FEED_PAGES` gotcha again.**
+`STATIC_SRC` is snapshotted during the parse, before `setup`'s recipe has copied
+`.source/static/style.css` into place — so a first-ever serial `make setup all` (the combination
+CLAUDE.md blesses when `posts/` is empty) exits 0 having created `static/style.css` and never
+copied it, publishing a `build/` whose pages link a `/style.css` that is not there. The next
+`make` heals it. Verified end to end. This is the fifth member of the parse-time-vs-recipe-time
+family, reaching a `$(shell)` snapshot this time; it is documented, not fixed, for the same
+reason the others are, and the documented `make setup` then `make` flow never sees it.
+
 ### 6. Documentation
 
 - **README**: `static/` in Install (what `make setup` creates), a "Static files" section under
   Writing a post covering the root mirroring and the filename rules, `build/style.css` in "What
   it builds", and a Known-issues sentence for the deleted-asset fossil. Remove the "A home for
   static files" line from "Not done yet".
-- **CLAUDE.md**: `static/` in the Layout table; the enumeration and both checks alongside the
-  post filename rules; the pattern-rule containment argument from section 3, which is the piece
-  a future reader is most likely to need and least likely to reconstruct; the `FEED_PAGES`-vs-
-  unconditional-`rss.xml` reasoning as a Gotcha, since it is a fifth member of the
-  parse-time-vs-recipe-time family in spirit if not in mechanism.
+- **CLAUDE.md**: `static/` in the Layout table; the enumeration and all three checks alongside
+  the post filename rules; **section 3's corrected rule-selection account** — that stem length
+  orders the trial and prerequisite existence decides it, that the static pattern rule sidesteps
+  the contest entirely, and that the collision check is the sole containment — which is the piece
+  a future reader is least likely to reconstruct and the piece most likely to be re-derived
+  wrongly; the unconditional-`rss.xml` reasoning; the virgin-tree stylesheet lag as a new member
+  of the parse-time-vs-recipe-time family.
+
+  CLAUDE.md gets the *corrected* argument only. The falsified shortest-stem version stays in this
+  spec, where its record is useful, and must not reach the reference document in any form.
+
+- **README**: also a sentence for O1 — `static/` publishes everything in it, editor droppings
+  (`style.css~`, `.DS_Store`, swap files) included, since it is a copy and not a filter.
 
 ## Testing
 
@@ -291,10 +380,24 @@ in every sandbox with no harness change.
 | `test_build_works_without_a_static_directory` | exit 0, no `static/` present |
 | `test_setup_creates_static_with_the_stylesheet` | `static/style.css` exists after setup, and re-running setup does not clobber an edited one |
 
-The pattern-rule containment argument needs a test that would fail if the rule started winning
-where it should not: `test_static_collision_with_a_post_page_fails` covers the collision, and
-`test_static_file_is_copied` run in a tree that also has posts covers the converse — both rules
-active, each claiming its own targets.
+Five more, every one of them added because the spec review found a defect no test above would
+have caught:
+
+| Test | Asserts |
+| --- | --- |
+| `test_static_html_page_is_published` | `static/about.html` publishes — the plain-pattern-rule bug of section 3, which failed with a message about posts |
+| `test_static_html_page_in_category_dir_is_published` | `static/category/extra.html` likewise, against the category rule |
+| `test_static_file_shadowing_a_page_directory_fails` | `static/2026` with a 2026-dated post errors instead of silently vanishing then landing in `build/2026/2026` |
+| `test_static_character_error_precedes_the_collision_error` | a name bad in both ways gets the character message — the placement constraint of section 2, pinned the way `test_character_error_precedes_the_date_error` pins its sibling |
+| `test_symlinked_static_directory_is_published` | a `static` symlink copies its contents rather than exiting 0 having done nothing |
+
+`test_punctuation_in_a_static_name_fails` grows a `static/x{1,2}y.css` sibling that must
+*build*, covering the recipe quoting from section 3 — on a bash-`/bin/sh` host it fails without
+the quotes, and on a dash host it passes either way, so the test is honest about being
+host-conditional rather than claiming universal coverage.
+
+`test_static_file_is_not_recopied_when_unchanged` doubles as the `.SECONDARY` / intermediate-
+reaping guard and should be read as covering both.
 
 ## Review
 
@@ -304,5 +407,32 @@ end. The reviewer should be told the four settled decisions above are settled, a
 prove claims in a sandbox copied the way `tests/run.sh` does — including `tools/`, without which
 the suite reports 15 unrelated assertion failures on Linux.
 
-The reviewer's attention is most wanted on section 3: whether a `$(BUILD_DIR)%` pattern rule can
-be made to claim a generated page under any reachable state, `-j` included.
+### Spec-checkpoint review, 2026-08-09 (Fable)
+
+Two blocking findings, four recommended, three optional — all folded in, none argued down. The
+substantive ones:
+
+- **Section 3's containment argument was false.** Shortest-stem selection does not protect
+  generated pages; prerequisite existence decides the first pass. A static twin of a post page
+  shipped at exit 0 in serial, under `-j8`, and by name. Section 3 is rewritten, the rule is now
+  a static pattern rule, and the collision check is restated as the sole containment.
+- **A legal `static/about.html` broke the build** under the plain pattern rule, with a message
+  about posts. Fixed by the same rule change; two tests added.
+- **A static file shadowing a page *directory* was silent wrong output at exit 0** — the exact
+  failure class this project exists to prevent. Two more `filter`s in section 4, one test.
+- Symlinked `static/` published nothing at exit 0 (`find static/`); the unquoted `cp` broke on
+  brace-containing names on bash-`/bin/sh` hosts (quoted recipe); the check placement constraint
+  and the virgin-tree stylesheet lag are now written down and pinned.
+
+I independently re-verified the static pattern rule with an empty and a missing `static/`, the
+`about.html` publish, the quoted recipe against `x{1,2}y.css`, the symlink traversal, and all
+three collision `filter`s including their near-misses, before folding any of it in.
+
+The reviewer's list of what it actively verified — the mechanism basics, the twin states under
+both rule forms, the grep against 23 bad and 11 legal names on two greps, `,` safety end to end,
+the `GENERATED_PAGES` reconstruction matching `Makefile:1186` exactly, and the `.SECONDARY`
+claim — stands as covered ground for the plan and task checkpoints.
+
+The next reviewer's attention is most wanted on whether `GENERATED_PAGES` stays exhaustive: it
+is a hand-maintained restatement of what `build` produces, and a future page type that forgets
+to join it silently reopens every collision this design closes.
