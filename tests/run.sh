@@ -3037,6 +3037,76 @@ EOF
 }
 
 #
+# static/ filenames are checked with a deliberately narrower
+# set than posts use: only what breaks a make list, a make
+# target name, or an unquoted shell word. logo@2x.png is a
+# legal asset name and must keep building.
+#
+test_bad_character_in_a_static_name_fails() {
+	sandbox static_bad_char
+	mkdir -p static
+	: > 'static/a:b.css'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep "static/a:b.css"
+}
+
+test_space_in_a_static_name_fails() {
+	sandbox static_space
+	mkdir -p static
+	: > 'static/my photo.png'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep "static/my photo.png"
+}
+
+#
+# Rendered through cat -vt, so the byte reaches the terminal
+# as ^A rather than raw. Same trade CONTROL_CHAR_NAMES makes.
+#
+test_control_character_in_a_static_name_fails() {
+	sandbox static_control
+	mkdir -p static
+	: > "$(printf 'static/ctrl\001x.css')"
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_grep 'static/ctrl^Ax.css'
+}
+
+#
+# The hole the posts checks still have. A newline is
+# invisible to a line-based grep -- find prints the name as
+# two lines and neither matches -- so the existence check is
+# what catches it. Its message names a fragment, because a
+# fragment is all there is to name.
+#
+test_newline_in_a_static_name_fails() {
+	sandbox static_newline
+	mkdir -p static
+	: > "$(printf 'static/nl\nx.css')"
+	build_expect_fail || return
+	assert_out_grep "splits a make list"
+	assert_out_grep "static/nl"
+}
+
+#
+# The converse, and the reason the set is not BAD_CHARS:
+# every one of these is legal and must not error.
+#
+test_legal_static_names_are_accepted() {
+	sandbox static_legal_names
+	mkdir -p static/img
+	: > 'static/logo@2x.png'
+	: > 'static/style,min.css'
+	: > 'static/a+b.css'
+	: > 'static/café.jpg'
+	: > 'static/x~y.css'
+	: > 'static/img/deep.svg'
+	build || return
+	assert_out_not_grep "bad character in static filename"
+}
+
+#
 # ---------------------------------------------------
 # The date half. date -v already rejects every bad date
 # below and exits 1; nothing hears it, because
@@ -3458,5 +3528,10 @@ test_old_config_mk_fails_for_an_explicit_page_goal
 test_setup_recovers_an_old_config_mk
 test_probed_empty_config_mk_builds_fine
 test_clean_works_with_an_old_config_mk
+test_bad_character_in_a_static_name_fails
+test_space_in_a_static_name_fails
+test_control_character_in_a_static_name_fails
+test_newline_in_a_static_name_fails
+test_legal_static_names_are_accepted
 
 pass_fail_summary

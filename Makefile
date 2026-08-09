@@ -784,6 +784,118 @@ check_page_collisions = \
 CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(POST_PAGES)))),$(call check_page_collisions))
 
 #
+# static/ is copied into build/ verbatim, mirrored at the
+# site root: static/style.css publishes at /style.css. It is
+# the only source of a page grampa did not generate, which is
+# what makes /favicon.ico and /robots.txt reachable at all.
+#
+# The trailing slash on `find static/` is load-bearing. If
+# static is itself a symlink to a directory -- assets living
+# outside the repo -- then `find static` prints the symlink
+# and nothing under it. patsubst leaves that unmatched word
+# alone, so STATIC_PAGES acquires the literal word `static`,
+# which exists as a prerequisite, and the build exits 0
+# having copied nothing and said nothing. The slash traverses
+# it, and is transparent for a real directory and a missing
+# one. Verified all three.
+#
+# ! -type d rather than -type f so a symlinked asset is
+# copied -- cp follows the link -- rather than skipped.
+#
+# sort because find walks in directory order, which is
+# neither stable across filesystems nor meaningful to read.
+#
+# 2>/dev/null is what lets a tree with no static/ build clean
+# at exit 0, the same handling POST_LS gives a missing
+# posts/. Unlike posts, static/ has no rule that creates it:
+# nothing downstream requires it to exist.
+#
+# := throughout. STATIC_SRC is read by three checks and one
+# prerequisite list, and the lazy-expansion argument that
+# keeps CONFIG_NAME on = does not apply -- static/ needs no
+# recipe to have run first.
+#
+# STATIC_LS holds a shell fragment rather than a command that
+# runs, exactly as POST_LS does, so the character check below
+# shares the identical listing and the two cannot drift about
+# what the directory holds.
+#
+STATIC_LS := find static/ ! -type d 2>/dev/null | sort
+STATIC_SRC := $(shell $(STATIC_LS))
+STATIC_PAGES := $(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))
+
+#
+# A static filename may contain anything except whitespace, a
+# control character, and the punctuation that breaks make or
+# an unquoted shell word. This is deliberately NOT the
+# BAD_CHARS set posts use: logo@2x.png and style,min.css are
+# legal asset names that break nothing, and rejecting them
+# for symmetry's sake would be a rule with no failure behind
+# it. Non-ASCII is fine, so café.jpg and emoji names build.
+#
+# Three escaping layers stack on the grep line. $$ is make's
+# escape for a literal $, \# is make's for a literal #, and
+# '\'' is the shell's way to put a single quote inside a
+# single-quoted string. ] leads the bracket expression
+# because that is the only position where it is literal.
+#
+# \\ is chosen for portability rather than by test: POSIX
+# says a backslash is literal inside a bracket expression, so
+# \\ contributes one twice and harmlessly, while GNU reads it
+# as an escaped backslash and contributes it once. Both
+# readings yield the same set. Verified against 21 bad names
+# and 11 legal ones on GNU grep 3.12 and ugrep 7.5.0.
+#
+# It greps the directory listing rather than STATIC_SRC, and
+# that is load-bearing rather than tidy: a filename
+# containing a space cannot be an element of the list you
+# would be checking, because make splits on whitespace. A
+# check written over STATIC_SRC could not see the principal
+# thing it exists to catch. Same lesson as
+# CONTROL_CHAR_NAMES above.
+#
+# LC_ALL=C pins the classes to bytes, matching the control
+# check's definition -- 0x00-0x1F and 0x7F -- so U+0085
+# arrives as two bytes and builds, the same line café is on.
+#
+# cat -vt renders a control byte as ^A rather than spraying
+# it at a terminal. It renders non-ASCII the same way, so a
+# rejected café(1).jpg is named as cafM-CM-)(1).jpg -- ugly,
+# but it only ever applies to a name already being rejected.
+#
+# HASH exists because make's \# escape works in a plain
+# assignment but NOT inside a function argument: written
+# directly in the $(error) text it reaches the terminal as
+# \#. Verified. The backslash is named in words for the same
+# reason -- \\ in the message renders as \\ and there is no
+# assignment trick that fixes it.
+#
+HASH := \#
+BAD_STATIC_NAMES := $(shell $(STATIC_LS) | LC_ALL=C grep -e '[[:space:][:cntrl:]]' -e '[]:%$$\#\\*?[`()&'\''"|;<>=]' | cat -vt)
+CHECKED_STATIC_CHARS := $(if $(BAD_STATIC_NAMES),$(error bad character in static filename: $(BAD_STATIC_NAMES); shown rendered, so ^A is one byte. A static filename may not contain whitespace, a control character, or any of these: : % $$ $(HASH) * ? [ ] ` ( ) & ' " | ; < > = -- nor a backslash))
+
+#
+# The one hole the posts checks still have, closed here for
+# one line. A 0x0A inside a filename is invisible to a
+# line-based grep: find prints such a name as two lines and
+# neither matches the character class. Both halves then
+# word-split into STATIC_SRC entries that name no file on
+# disk, so a positive existence test catches what a denylist
+# structurally cannot.
+#
+# It runs second because its message is worse -- it names a
+# fragment, since a fragment is all that exists to name --
+# so the check with the good message gets first refusal.
+#
+# Residual, documented not cured: if a split fragment
+# coincidentally names a real path relative to the repo root,
+# that fragment passes here. It is then a source file the
+# copy rule cannot find, so the build still fails, just later
+# and less clearly.
+#
+CHECKED_STATIC_SPLIT := $(foreach f,$(STATIC_SRC),$(if $(wildcard $(f)),,$(error static filename splits a make list, most likely a newline in it: $(f) is not a file. Rename it.)))
+
+#
 # Because the category is in the filename but not the
 # URL, a page cannot be mapped back to its fragment by
 # turning slashes into hyphens. Search instead.
