@@ -1285,21 +1285,60 @@ Every bullet below was re-checked in the second sweep. Line anchors are current 
   rather than superstition: on APFS, make 3.81 truncates mtimes to whole seconds, so a
   sub-second-newer prerequisite rebuilds nothing (3 tries out of 3).
 
+  **Mechanism corrected, 2026-08-09.** The observation stands, but it is not a fact about make
+  3.81: a Linux source build of that same 3.81 *does* compare sub-second mtimes (verified with
+  `touch -d` at a fixed 0.5s delta, on every version 3.81 through 4.4.1). Make compares whole
+  seconds only when its own build did not detect nanosecond `stat(2)`, so this is a property of
+  the binary and the filesystem together — Apple's build on APFS truncates, this host's does
+  not. The `sleep 1` guards stay: raising the make floor does not remove them, and they are
+  cheap insurance against a same-tick collision even where resolution is fine.
+
   Original finding: **verified** (`grep -c 'touch templates/base.txt' tests/run.sh` → 0).
   `test_editing_post_template_rebuilds_fragments` guards the bare-dependency-line trap for
   `post.txt`; the identical trap existed for `base.txt` in three rules and nothing guarded
   it.
 
-- **The markdown branch's new make constructs have never run under make 3.81 — NEW.**
-  **read.** `README.md` puts the floor at 3.81 and the branch added `$(or)`, `$(and)`,
-  `$(origin)`, a parse-time `$(info)`, an `ifneq` around `:=` snapshots, and `$(wildcard)`
-  inside a prerequisite list. All of those exist in 3.81 — `$(or)` and `$(and)` were
-  *introduced* in it, which puts the branch exactly on the boundary rather than safely above
-  it — but every review, and the whole suite, ran on GNU make 4.4.1. Nothing here is
-  suspected broken; it is simply an unexercised claim in a repo that does not otherwise make
-  those. The cheap version is one CI-less manual run of `tests/run.sh` against a 3.81 build;
-  the real question behind it is whether 3.81 is still a floor worth keeping, which is a
-  decision, not a bug.
+- **The markdown branch's new make constructs have never run under make 3.81 — DONE,
+  2026-08-09.** **verified.** The suite was run against source builds of GNU make 3.81, 3.82,
+  4.0, 4.1, 4.2, 4.2.1 and 4.3, plus the host's 4.4.1. The new constructs were not the
+  problem — `$(or)`, `$(and)`, `$(origin)`, the parse-time `$(info)` and `$(wildcard)` in a
+  prerequisite list all behave on 3.81. Two other things were:
+
+  - **3.81: 352/353.** `test_unreadable_post_template_fails_the_build` fails because 3.81
+    silently voids `.DELETE_ON_ERROR` for any target named in `.SECONDARY` — isolated to
+    `.SECONDARY` in a six-line makefile, fixed in 3.82. Consequence verified end to end: after
+    one unreadable `templates/post.txt`, a second `make` publishes a post page with an **empty
+    body** at exit 0, where 4.4.1 rebuilds it correctly. The floor was not conservative, it
+    was false.
+  - **4.0: 350/353 + a crash.** `make` hangs or segfaults during the parse on a post filename
+    containing a 4-byte UTF-8 character (`🎉party`). Fixed in 4.1. Held loosely — 4.0 was
+    built from source here with glibc-compat flags, though 4.1 and 4.2 built identically are
+    clean.
+
+  3.82, 4.1, 4.2, 4.2.1, 4.3 and 4.4.1 are all 353/353. **The floor is now GNU make 4.2**,
+  enforced by a `$(MAKE_VERSION)` guard at the top of the Makefile: the lowest version that is
+  monotonically green *and* the one where `.SHELLSTATUS` arrives. The decision behind it —
+  that macOS ships 3.81 and Mac users will be asked to `brew install make` — was made by the
+  user on 2026-08-09.
+
+  The branch review caught one consequence the change had missed: `tests/run.sh` invoked a
+  bare `make` at every call site, and make does not export `MAKE`, so `gmake test` on a Mac
+  would have run the suite against Apple's 3.81 and failed *every* test at the new guard
+  rather than running at all. Fixed on the same branch — the suite drives `$MAKE`, the `test`
+  recipe passes `$(MAKE)` in, and run.sh checks the floor once up front by running the real
+  Makefile's guard rather than a second copy of the version test.
+
+- **`.SHELLSTATUS` is now available and `BAD_POST_DATES` does not use it — NEW, opportunity
+  rather than defect.** **verified** (`$(shell exit 3)$(.SHELLSTATUS)` → empty on 3.81/3.82/
+  4.0/4.1, `3` on 4.2 and up). The two-stage date check exists because `$(shell)` keeps
+  `date`'s output and throws its status away, and under the old 3.81 floor there was no way to
+  read that status. There is now. This is **not** a straight simplification: stage one also
+  exists to avoid forking at all for the common case (a corpus dated the 1st–28th forks zero
+  times), and that reason survives `.SHELLSTATUS` untouched. What could go is the awkward part
+  — inferring rejection from empty output rather than reading the exit code. Any rewrite has
+  to keep the ordering guarantee that `CHECKED_POST_NAMES` runs first, since the `$(shell)`
+  still interpolates filenames unquoted. Not started; the current form is the one the suite
+  covers.
 
 - **The no-op-setup test asserts `config.mk`'s mtime, not the `.staged` mtimes the spec named
   — NEW.** **verified** (the test passes and was watched failing). A recorded deviation
@@ -1702,16 +1741,19 @@ tree. All **verified** by execution unless marked otherwise:
 
 **Not verified — recorded here so the next reviewer does not have to rediscover the gap:**
 
-- **make 3.81.** Every review host, this one included, ran GNU make 4.4.1. The `.SECONDARY`
-  comment rewritten on this branch explicitly flags itself as a 4.4.1-only finding, and
-  `.SECONDARY`/intermediate-file reaping is exactly where 3.81 and 4.x have historically
-  differed most — this branch adds to that unexercised surface rather than closing it.
+- **make 3.81 — no longer a gap, 2026-08-09.** Closed by the item above: every version from
+  3.81 to 4.4.1 has now been built and run against the suite, and the floor moved to 4.2 as a
+  result. The `.SECONDARY` comment this bullet flagged as a 4.4.1-only finding was re-verified
+  by mutation on 4.2, the new floor, so the claim is now checked at both ends of the supported
+  range rather than at one.
 - **macOS/APFS directory-mtime semantics.** The `posts` fix (item 8) depends on a directory's
   mtime moving when an entry is created or removed inside it — true under POSIX and observed
   under Linux/ext4 on every review host here, but not observed on macOS/APFS. The existing
-  `test_editing_base_template_rebuilds_every_page` bullet already records that APFS truncates
-  mtimes to whole seconds under make 3.81, which is a related but distinct hazard from whether
-  the directory mtime moves at all.
+  `test_editing_base_template_rebuilds_every_page` bullet already records whole-second mtime
+  truncation observed with Apple's make 3.81 on APFS — see the mechanism correction there,
+  since it is a property of that binary rather than of the version — which is a related but
+  distinct hazard from whether the directory mtime moves at all. This one is not closed by the
+  new 4.2 floor: a Mac running `gmake` is still a Mac running APFS.
 - **The concurrent-`make-setup`-interleaving itself.** Item 10's fix removes the fixed
   filename that made two setups collide, but no test or manual run started two `make setup`
   processes against the same directory at once, either before or after the fix.

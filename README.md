@@ -13,7 +13,12 @@ frozen yet.
 
 ## Requirements
 
-- **GNU make** (3.81 or newer)
+- **GNU make 4.2 or newer** — checked at startup, with a clear error if it isn't.
+  **macOS ships 3.81**, the last release before the license change, so on a Mac this means
+  `brew install make` and running `gmake` instead of `make`. 3.81 is not merely old here: it
+  voids `.DELETE_ON_ERROR` for the intermediate files grampa builds, so a failed build can
+  leave a half-written fragment that the *next* build publishes as a post with an empty body,
+  at exit 0. Make 4.0 is excluded too — it crashes on emoji in a post filename.
 - **`bash`** at `/bin/bash` — the Makefile sets `SHELL` to it explicitly
 - **`awk`, `sed`, `date`, `cat`, `tail`, `grep`, `sort`** — whatever your system already ships
 
@@ -71,6 +76,7 @@ make            # incremental build into build/
 make clean      # wipe build/ and work/
 make deploy     # build, then run ./deploy.sh build/
 make test       # run the test suite in throwaway sandboxes
+                # (on a Mac, `gmake test` -- it tests whichever make ran it)
 ```
 
 `make` only reprocesses posts whose `.txt` changed, plus anything downstream of a template you

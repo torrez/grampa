@@ -120,14 +120,56 @@ FOO=bar awk 'BEGIN{ if ((getline l < "'"$tmp"'/tpl") > 0) printf "%s/%s\n", ENVI
 
 echo
 echo "=== make behaviour this repo depends on"
-cat > "$tmp/Makefile" <<'MK'
-all: sub/x.html
-sub/%.html: ; @echo "  specific rule won (correct on make 3.81)"
-%.html: ; @echo "  generic rule won (DIFFERENT from make 3.81)"
+printf 'make version:                         '
+make --version 2>/dev/null | head -1
+
+# The floor. Same test the Makefile itself makes.
+printf 'meets the GNU make 4.2 floor:         '
+cat > "$tmp/Makefile.floor" <<'MK'
+ifeq ($(filter 3.% 4.0 4.1,$(MAKE_VERSION)),$(MAKE_VERSION))
+$(error NO -- grampa needs GNU make 4.2 or newer, this is $(MAKE_VERSION))
+endif
+all: ; @echo "yes"
 MK
-(cd "$tmp" && make -s all 2>&1 | head -2)
-echo "  (grampa requires the specific rule to win -- see the"
-echo "   build/category/%.html ordering note in CLAUDE.md)"
+(cd "$tmp" && make -s -f Makefile.floor all 2>&1 | head -1)
+if ! (cd "$tmp" && make -s -f Makefile.floor all >/dev/null 2>&1); then
+	echo "  (this probes whichever make is first on PATH. On a Mac that is"
+	echo "   Apple's 3.81 -- brew install make, then re-run as: gmake test,"
+	echo "   and probe gmake with  PATH=\"\$(brew --prefix make)/libexec/gnubin:\$PATH\")"
+fi
+
+# .DELETE_ON_ERROR on a .SECONDARY target: the 3.81 defect
+# that set the floor. A "NO" here means a failed build can
+# leave a half-written fragment that the next build ships.
+printf 'DELETE_ON_ERROR vs .SECONDARY:        '
+cat > "$tmp/Makefile.doe" <<'MK'
+.DELETE_ON_ERROR:
+.SECONDARY: c.tmp
+all: c.out
+%.tmp: %.src
+	@printf 'half' > $@; exit 1
+%.out: %.tmp
+	@cp $< $@
+MK
+(cd "$tmp" && rm -f c.tmp c.out && : > c.src && \
+	make -s -f Makefile.doe all >/dev/null 2>&1; \
+	if [ -e "$tmp/c.tmp" ]; then \
+		echo "NO -- half-written file survived the failed recipe"; \
+	else echo "yes -- half-written file removed"; fi)
+
+# Shortest-stem pattern selection, arrived in 3.82. The
+# generic rule is deliberately first: with the specific one
+# first every version picks it and the probe proves nothing.
+printf 'shortest-stem pattern selection:      '
+cat > "$tmp/Makefile.stem" <<'MK'
+all: sub/x.html
+%.html: ; @echo "NO -- generic rule won (pre-3.82 order-wins behaviour)"
+sub/%.html: ; @echo "yes -- specific rule won on the shorter stem"
+MK
+(cd "$tmp" && make -s -f Makefile.stem all 2>&1 | head -1)
+echo "  (see the build/category/%.html note in CLAUDE.md --"
+echo "   grampa no longer depends on this, but it is what"
+echo "   the rule order in the Makefile used to be for)"
 
 echo
 echo "=== done. send this whole output back."
