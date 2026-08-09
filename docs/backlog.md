@@ -14,9 +14,16 @@ Findings from full-repo reviews. Two full sweeps and two branch reviews so far:
 - **Branch review**, 2026-08-08, of deletion staleness and the setup probe (`b2dc08c`) — same
   four-checkpoint method, closing items 8, 9 (probe half), 10, and the rejected-candidate
   Minor bullet, and adding items 11–14: a broken `make test` nobody had noticed (closed in
-  the same branch), an unguarded coverage gap in the rejected-candidate diagnostic (open), a
-  pre-existing category-rename lag (open), and a count of this branch's own recurring
-  confident-but-false-claim defect.
+  the same branch), a coverage gap in the rejected-candidate diagnostic, a category-rename
+  lag, and a count of this branch's own recurring confident-but-false-claim defect.
+- **Whole-branch review**, 2026-08-08, of the same branch before merge (`666ec7a`) — found that
+  items 12 and 13, written by the branch review directly above, were themselves each half
+  wrong in the way item 14 exists to catch, and that a third, unrewritten copy of an earlier
+  falsified claim survived in `tests/run.sh`. Item 12 is now closed rather than open: the real
+  gap was one branch, not two, and the last branch is now guarded too. Item 13's provenance is
+  corrected: the mtime mechanism is pre-existing, but the one-build lag it now produces exists
+  only because this branch's own fix (item 8) made the rest of a rename heal, where nothing did
+  before. Item 14's count moved from four to seven.
 
 Statuses below are current as of **this commit**, not as of the sweep: the sweep's CLAUDE.md
 findings were fixed in the same commit that records them, so several items read "CLAUDE.md
@@ -376,8 +383,22 @@ created or removed under `posts/` — an editor's swap file, an unrelated dotfil
 same rebuild of the index, every category page, and the feed, not only a `.txt` post. One
 cheap, self-healing rebuild; the next build is quiet again. Recorded as a known over-trigger,
 not a defect: narrowing it to `.txt` entries only would need `$(wildcard posts/*.txt)` as the
-prerequisite instead of the bare directory, which reintroduces exactly the "which fragment is
-missing" bookkeeping the directory mtime was chosen to avoid.
+prerequisite instead of the bare directory — and that is not a cheaper, more-precise version of
+the same fix, it is a **broken** one. A wildcard-expanded list is just a set of filenames at
+parse time; deleting a post removes its name from that list along with it, so nothing is left
+behind to compare against and be newer than the target. It cannot detect a deletion **at all**,
+which is the exact case this fix exists for. The bare directory is not a coarser tool bought at
+some bookkeeping cost — it is the only one of the two that works.
+
+**Credit belongs here too for a bug the entry never set out to fix.** The same `posts`
+prerequisite also closes the *rename* case, not only deletion: renaming a post into a different
+category with `mv`/`git mv` used to leave both the old and new category pages permanently
+wrong — verified on `main` at `82065e8`, three rebuilds deep, still wrong every time. On this
+branch both category pages now correct themselves on the very next `make`, the same rebuild that
+already fixes the index and the feed. See item 13, which the whole-branch review corrected after
+an earlier draft called the remaining one-build lag on the post's own page "pre-existing,
+unrelated to this branch" — backwards: that lag is residue *of* this same improvement, not
+something the improvement left untouched.
 
 Guarded by `test_deleting_a_post_heals_the_index`, `test_deleting_a_post_heals_the_category_page`,
 and `test_deleting_a_post_heals_the_feed_after_incremental_growth` — the last built specifically
@@ -579,54 +600,57 @@ Full suite after the fix, under `make test`: **352 passed, 0 failed.**
 
 ---
 
-### 12. STILL OPEN — the rejected-candidate diagnostic's `>&2` coverage gap is only half closed
+### 12. DONE — the rejected-candidate diagnostic's `>&2` coverage gap, and a self-review that understated its own closure by half
 
-From the branch review, 2026-08-08 (deletion staleness and setup probe). **verified**, by
-mutation.
+From the branch review, 2026-08-08 (deletion staleness and setup probe); the finding below
+corrected and closed by the whole-branch review that also produced item 14's count.
+**verified**, by mutation, at every stage.
 
 Dropping a single `>&2` from setup's probe loop — so a rejection reason lands on stdout
 instead of stderr — corrupts `config.mk` to `DETECTED_MARKDOWN := grampa: setup: <probe>:
 <reason>` instead of naming a real processor or being empty. That is exactly the silent,
 build-wrong-processor failure the diagnostic (the Minor bullet above) exists to avoid falling
-into by accident, and two tests aimed at this area both kept passing against the mutant:
+into by accident.
 
-- One captures `make setup 2>&1`, merging stdout and stderr, so it structurally cannot tell
-  which stream a line arrived on.
-- The other's two assertions — `assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"` and
-  `assert_grep config.mk "DETECTED_MARKDOWN :="` — both still match the corrupted line: it is
-  not `lowdown`, and `DETECTED_MARKDOWN :=` is a plain substring of it.
+**The original writeup of this item said the gap was two branches wide, and that neither test
+aimed at this area asserted anything about `config.mk`'s content. Both halves are false, and
+this entry is itself one of the seven counted in item 14.** `test_probe_skips_a_candidate_that_eats_raw_html`
+does assert content — `assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"` — and that
+assertion, incidentally, already catches the `drops raw HTML` mutation: dropping its `>&2`
+mangles `DETECTED_MARKDOWN` into a value carrying the leaked diagnostic ahead of the real
+winner, which no longer matches `cmark --unsafe`. Verified by mutation: the full suite fails
+352/1 with `FAIL: probe_raw_html: expected 'DETECTED_MARKDOWN := cmark --unsafe' in config.mk`.
+The protection is **incidental** — the test asserts a specific winner because the scenario
+needs one, not because anyone set out to guard the diagnostic stream — but incidental coverage
+is still coverage, and the original writeup's claim that this test "asserts nothing about
+`config.mk`'s content" was checkable and wrong.
 
-`test_setup_names_a_rejected_candidate` now pins `config.mk`'s `DETECTED_MARKDOWN` line to
-**exactly empty** (`assert_eq … "DETECTED_MARKDOWN :=" "$(grep '^DETECTED_MARKDOWN' config.mk
-| sed 's/[[:space:]]*$//')"`), which does catch the mutation — but **only on the `smartens
-punctuation` branch of the `case`**, the one that test happens to exercise via its `lowdown`
-stub.
+So the real residual gap was **one branch, not two**: `emits a whole document`, exercised by
+`test_probe_skips_a_whole_document_candidate`, which asserted only that `lowdown` was not
+chosen and nothing about what, if anything, won instead. **That branch is now closed too.**
+The test gained the same exactly-empty `DETECTED_MARKDOWN` assertion
+`test_setup_names_a_rejected_candidate` already used, watched RED first — dropping the
+branch's `>&2` in a scratch copy fails it with `FAIL: probe_document: no diagnostic leaked into
+the winner: expected [DETECTED_MARKDOWN :=] got [DETECTED_MARKDOWN := grampa: setup: lowdown:
+emits a whole document]` — then restored to GREEN.
 
-**The other two content branches — `emits a whole document` and `drops raw HTML` — remain
-unguarded against the identical one-character regression.** Dropping their `>&2` would corrupt
-`config.mk` the same way and no assertion in the suite would notice, because neither
-`test_probe_skips_a_candidate_that_eats_raw_html` nor `test_probe_skips_a_whole_document_candidate`
-asserts anything about `config.mk`'s content, only that the offending candidate is not chosen.
+The fourth branch, `not runnable`, still needs no such guard, for the reason the original
+writeup gave: it is the fall-through every non-candidate on `PATH` hits, so a normal sandbox
+reaches it roughly eleven times per `make setup` (once per unsatisfied row in the twelve-row
+table). A leaked `>&2` there would corrupt `config.mk` loudly and on essentially every test in
+the suite that calls `make setup`, not quietly on one.
 
-The fourth branch, `not runnable`, needs no such guard: it is the fall-through every
-non-candidate on `PATH` hits, so a normal sandbox reaches it roughly eleven times per `make
-setup` (once per unsatisfied row in the twelve-row table). A leaked `>&2` there would corrupt
-`config.mk` loudly and on essentially every test in the suite that calls `make setup`, not
-quietly on one.
-
-**Cost to close:** extend the two existing tests (or add two narrow ones) with the same
-exactly-empty `DETECTED_MARKDOWN` assertion, using stubs that fail specifically on those two
-branches. A few lines each; no new mechanism.
+Full suite: **353 passed, 0 failed.**
 
 ---
 
-### 13. STILL OPEN — a post page lags one build behind an mtime-preserving category rename
+### 13. STILL OPEN, but its own provenance claim was backwards — a post page lags one build behind an mtime-preserving category rename
 
-From the branch review, 2026-08-08 (deletion staleness and setup probe). **verified**, found
-by the Task 5 review while correcting the claims the `posts` prerequisite (item 8) falsified.
-Pre-existing — unrelated to anything this branch changed — and recorded here rather than in
-CLAUDE.md because CLAUDE.md's own review process (below) is what caught it drifting through
-three wrong descriptions before landing here as a plain fact.
+From the branch review, 2026-08-08 (deletion staleness and setup probe); its own "pre-existing,
+unrelated to this branch" framing corrected by the whole-branch review — the same review that
+wrote item 14's count, and this entry is one of the seven it counts. **verified** by direct
+comparison, both `main` at `82065e8` (this branch's own start point) and this branch, three
+rebuilds deep on each.
 
 Rename a post's category with `mv` or `git mv` — the direct, unaided way, as opposed to
 `tools/migrate-categories.sh` — and the renamed `.txt` keeps its **old** mtime, since neither
@@ -635,30 +659,49 @@ Rename a post's category with `mv` or `git mv` — the direct, unaided way, as o
 fragment's *name* changes with the rename (the category is embedded in the filename) but nothing
 forces the *page* to notice on the build immediately following the rename: make compares the
 renamed `.txt`'s mtime against the page's, finds the source no newer, and considers the page up
-to date. For exactly one build, the live page keeps linking to — and being reachable from — the
-old category's fossil page, and rebuilds correctly only on the *next* `make`.
+to date on that first build. **That mtime-comparison mechanism is pre-existing** — `mv`
+preserving timestamps is not something this branch touched.
 
-**`tools/migrate-categories.sh` does not have this problem, and that is the whole finding.**
-The script does not rename in place: at `tools/migrate-categories.sh` lines 99–117 it writes
-the renamed post fresh with `awk … > "$new"`, then `rm "$f"` removes the old file. The freshly
-written file is newer than everything downstream of it, so its page rebuilds on the very next
-`make` with no lag. The distinction is exact and mechanical: the lag turns on whether the
-renamed `.txt` is *older* than the page it feeds, not on whether a `.tmp` fragment is
+**What is not pre-existing is any of it *healing*, and that is exactly what the original
+writeup got backwards.** Reproduced on `main` at `82065e8`: rename `2026-01-03-home_p03.txt` to
+`2026-01-03-work_p03.txt`, then rebuild three times running — `build/category/home.html` still
+lists Post 03, `build/category/work.html` never gets it, and the post's own page keeps linking
+`category/home.html`, unchanged across all three rebuilds. Permanently stale; only
+`make clean` fixes it, same as the deleted-category gotcha. On this branch, the identical rename
+heals in two builds, not one: `posts` (the directory, item 8) is a prerequisite of every
+category page, so `build/category/home.html` and `build/category/work.html` already correct
+themselves on the very first rebuild after the rename. Only the post's *own* page lags — it
+still says `category/home.html` after that first rebuild — and updates on the second. **The
+one-build lag is real, but it is residue of an improvement this branch made, not a defect this
+branch introduced: before, nothing about a rename ever healed, on any target, at any number of
+rebuilds.** The mechanism that closes the lag on the second build is the same `posts`
+prerequisite: it is what forces the renamed post's *new* `.tmp` fragment into existence on the
+first rebuild (verified with `make --debug=v`: `work/2026-01-03-work_p03.tmp` is built during
+that first `make`), and having that fragment genuinely on disk, newer than the still-stale page,
+is what lets the second `make` rebuild the page correctly.
+
+**`tools/migrate-categories.sh` does not have this problem, and that part of the original
+finding stands.** The script does not rename in place: at `tools/migrate-categories.sh` lines
+99–117 it writes the renamed post fresh with `awk … > "$new"`, then `rm "$f"` removes the old
+file. The freshly written file is newer than everything downstream of it, so its page rebuilds
+on the very next `make` with no lag. The distinction is exact and mechanical: the lag turns on
+whether the renamed `.txt` is *older* than the page it feeds, not on whether a `.tmp` fragment is
 *missing* — a plausible-sounding alternative explanation that was tried and disproved during
 this branch's own review (see item 14 below). Verified both ways, including under `-j8`.
 
-Not fixed and not ranked here: it needs the same category of dependency-shape work as the
-feed/index/category self-heal problem this branch did fix (item 8), but for a different
-target (a post's own page, keyed on a rename rather than a deletion), and nothing on this
-branch's scope required it.
+Not fixed and not ranked here: closing the post page's own one-build lag needs the same category
+of dependency-shape work as the feed/index/category self-heal problem this branch did fix (item
+8), but for a different target (a post's own page, keyed on a rename rather than a deletion),
+and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect, counted — four more confident-but-false claims, two of them inside the commits meant to remove such claims
+### 14. The branch's own recurring defect, counted — seven confident-but-false claims, three found by the whole-branch review that checked this entry's own commit before merge
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
-formerly-true, empirically-false claim". It happened four more times on this branch — twice
-inside the very commits written to correct an earlier instance of itself:
+formerly-true, empirically-false claim". It happened four times on this branch before this
+entry was first written — twice inside the very commits written to correct an earlier instance
+of itself:
 
 1. **The implementation plan asserted `test_build_works_without_a_posts_directory` passes
    before the change.** It does not: `mkdir -p posts` lives only in `setup`'s recipe, so
@@ -680,6 +723,36 @@ inside the very commits written to correct an earlier instance of itself:
    the one rename mechanism that does **not** lag — see item 13 above, found in the same
    review pass: the script writes the renamed file fresh rather than renaming in place, so it
    is always newer, never older, than the page it feeds.
+
+**The whole-branch review that checked this branch before merge found three more, and the count
+above was itself already wrong by the time it said "four" — two of the three new ones are inside
+this entry's own commit (`666ec7a`, which wrote items 12, 13, and this item together):**
+
+5. **A third, unrewritten copy of a claim item 8's own fix falsified — a different claim from
+   1–4, and missed by every stage that caught the item-8 saga.** `tests/run.sh`'s comment above
+   `test_deleting_a_post_heals_the_feed` still said listing `RSSITEM_FILES` in `.SECONDARY`
+   "suppresses the rebuild" and the feed "goes stale instead of healing" — true before `posts`
+   became a prerequisite of `rss.tmp`, false after. The claim was rewritten in the two places
+   the spec named, the Makefile's own `.SECONDARY` comment and CLAUDE.md, but this third copy
+   survived spec, plan, implementation, and four review rounds untouched. Verified false by
+   mutation: appending `$(RSSITEM_FILES)` to `.SECONDARY` passes the full suite, this test
+   included, identically (353/0). Fixed in this pass.
+6. **Item 12's own first writeup**, inside `666ec7a`: it said the diagnostic-leak gap was two
+   branches wide and that neither of two named tests asserted anything about `config.mk`'s
+   content. Both false — one of the two tests already asserted content and, incidentally,
+   already caught one of the two branches; the real gap was one branch, not two. See item 12
+   above, corrected and closed in this pass.
+7. **Item 13's own first writeup**, also inside `666ec7a`: it called the post-rename lag
+   "Pre-existing — unrelated to anything this branch changed." Backwards — reproduced against
+   `main` at `82065e8`, a rename never heals at all, on any target, at any number of rebuilds;
+   this branch's own `posts`-prerequisite fix (item 8) is what makes the category pages heal on
+   the very next build and is what produces the one-build lag on the post's own page as a
+   residue of that improvement. See item 13 above, corrected in this pass.
+
+Three in one commit, in a file whose subject is not making this mistake, is the sharpest
+instance of the shape recorded below — and it is itself an instance of the shape: item 12 and
+item 13 each tried to state, confidently and in one pass, a fact about code that had just
+changed underneath them, without rerunning it against both the old and new state to check.
 
 **Record the shape, not just the count, because it is the same every time: one clause trying
 to cover deletion and renaming as though they behave the same way, when every attempt to say
@@ -1297,15 +1370,20 @@ prerequisite, the splitter's trailing blank line, and the `-j setup` failure —
 items 2 and 6 below: the feed's post-deletion self-heal, and the single-pass `fill()`. Neither
 was waiting on anyone to notice it. Both had their reasoning written down, both were real
 design rather than a fix, and both had a documented answer at the time (`make clean && make`
-for the first, a closed body case for the second). **This list briefly stopped being a pile of
-small things and became two open questions — and now it is back to one.** The
+for the first, a closed body case for the second). **This ranked list — the numbered 1–8 below,
+not the file as a whole — briefly stopped being a pile of small things and became two open
+questions, and now it is back to one.** The
 deletion-staleness-and-setup-probe branch closed ranked item 2: `posts` (the directory) is now
 a prerequisite of `work/index.tmp`, `work/rss.tmp`, and every `build/category/%.html`, so a
 directory mtime — not a stamp file, which this list's own item 8 entry once proposed and turned
 out not to need — does the job. See item 8 above for the full account, including that the
 entry closing it was two consumers short: it was filed as a feed bug, and the index and
 category page turned out never to have healed at all. Item 6, the single-pass `fill()`, is
-unaffected and remains the list's one open question.
+unaffected and remains this ranked list's one open question — a scope worth being explicit
+about, because that same branch review separately opened items 12 and 13 above, in the `##
+Important` numbering, not this one. Item 12 is closed as of this pass; item 13 is not, so the
+file's honest total across both numberings is one open ranked item plus one open `Important`
+item, not one flat.
 
 The four that closed did what everything on this list does: **three of the four were described
 wrongly by their own entries**, and the fourth was described rightly and then closed by a commit
@@ -1471,10 +1549,15 @@ whether that floor is still real — and it is still unanswered; see "Not verifi
 
 **What that same branch's own review added:** item 8's behaviour half (closed, see above and
 the ranked list), a broken `make test` nobody had noticed (item 11, closed), an unguarded
-coverage gap in the rejected-candidate diagnostic's own safety net (item 12, open), a
-pre-existing category-rename lag distinct from anything this list had recorded (item 13,
-open), and a count of the branch's own recurring defect — a confident, checkable, false claim,
-four more times, twice inside the commits meant to fix an earlier instance of it (item 14).
+coverage gap in the rejected-candidate diagnostic's own safety net (item 12, now also closed —
+the whole-branch review found the gap it fixed was itself only half-described, closed the
+remaining half, and corrected the writeup), a category-rename lag distinct from anything this
+list had recorded, whose *mechanism* is pre-existing but whose one-build residue exists only
+because this branch's own `posts`-prerequisite fix made everything else about renaming heal
+(item 13, still open), and a count of the branch's own recurring defect — a confident, checkable,
+false claim, seven times now, three of them inside the commits and entries meant to fix or
+record an earlier instance of it (item 14). Items 12 and 13 are numbered separately from the
+ranked list below and are not what "back to one" refers to — see that sentence's own scoping.
 
 ---
 
@@ -1582,9 +1665,13 @@ tree. All **verified** by execution unless marked otherwise:
 8. `config.mk.$$$$` leaves no scratch file behind after a normal, uninterrupted `make setup`
    (`ls config.mk.* | wc -l` is 0) (item 10).
 9. Dropping the `>&2` from the `smartens punctuation` branch of setup's probe loop corrupts
-   `config.mk`'s `DETECTED_MARKDOWN` line and is caught by the exactly-empty assertion; doing
-   the same to the `emits a whole document` or `drops raw HTML` branches corrupts it
-   identically and is **not** caught by any existing test — the residual gap item 12 records.
+   `config.mk`'s `DETECTED_MARKDOWN` line and is caught by the exactly-empty assertion. Doing
+   the same to the `drops raw HTML` branch corrupts it identically and is **also** caught,
+   incidentally, by `test_probe_skips_a_candidate_that_eats_raw_html`'s existing
+   `assert_grep config.mk "DETECTED_MARKDOWN := cmark --unsafe"` — verified by mutation, 352/1,
+   `FAIL: probe_raw_html: expected 'DETECTED_MARKDOWN := cmark --unsafe' in config.mk`. Only the
+   `emits a whole document` branch was genuinely uncaught; item 12 records that correction and
+   its closure.
 10. A post's category renamed with `mv`/`git mv` keeps its old mtime and its page rebuilds one
     `make` late, both serially and under `-j8`; the identical rename done through
     `tools/migrate-categories.sh` rebuilds on the very next `make`, with no lag, because the

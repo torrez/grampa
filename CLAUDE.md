@@ -600,6 +600,16 @@ more than a format-string swap.
   category is not part of it: the fossil's link points at a page that still exists, still
   renders, and is live, just filed under its new category now. `make clean` clears the
   fossil in either case.
+
+  That is the case where the category empties out. Renaming a single post out of a category
+  that still has others left in it is a different case and no longer stays wrong indefinitely:
+  the same `posts` prerequisite that heals deletion (below) makes both the old and the new
+  category page correct themselves on the very next `make` — verified against a pre-`posts`-
+  prerequisite tree, where neither ever healed, across any number of rebuilds. One page still
+  lags: the renamed post's own permalink page reads its category from a `.tmp` fragment that
+  `mv`/`git mv` leaves with the *renamed source's* old, preserved mtime, so it takes one extra
+  `make` — the build that follows the one where the fragment itself gets forced into
+  existence — before the post's own page notices. See `docs/backlog.md` item 13.
 - **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
   page existed — an untracked output, the same shape as the deleted-category gotcha above —
   and `make clean` is still what removes the file itself. What usually no longer lingers is

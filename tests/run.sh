@@ -1576,24 +1576,29 @@ test_build_works_without_a_posts_directory() {
 }
 
 #
-# Guards the decision NOT to list RSSITEM_FILES in
-# .SECONDARY. Adding them looks like an obvious tidy-up --
-# it matches what .tmp and .staged do and it passes every
-# other assertion in this file -- but it makes make tolerate
-# a missing .rssitem, which suppresses the rebuild that pulls
-# the next-oldest post into the window when one is deleted.
-# The feed goes stale instead of healing.
+# The all-at-once companion to the two heal tests above and
+# to test_deleting_a_post_heals_the_feed_after_incremental_growth
+# below: same mechanism (posts as a directory-level
+# prerequisite of rss.tmp), a different corpus shape, and the
+# one that end-to-end exercises the feed's ten-item window
+# actually dropping a title and pulling the next one in.
 #
-# Deleting a post is otherwise untested. Note the heal is
-# narrower than "more than ten posts": it needs the newly
-# in-window post to have NO .rssitem on disk, so that
-# building the missing one is what makes rss.tmp out of
-# date. A blog grown a post at a time past ten already has
-# that fragment from when the post was last in-window, and
-# goes stale until make clean -- see the deleted-post gotcha
-# in CLAUDE.md. This sandbox builds all twelve at once, so
-# posts 1 and 2 never got a fragment, which is the history
-# the heal needs.
+# It does NOT guard listing RSSITEM_FILES in .SECONDARY --
+# see the comment above that line in the Makefile. That used
+# to matter, back when rss.tmp's only prerequisites were the
+# .rssitem files themselves: marking them .SECONDARY let make
+# treat a missing one as tolerable, which suppressed exactly
+# the rebuild this test checks for. Now that posts is a
+# prerequisite of rss.tmp too, any change to the post set
+# makes rss.tmp out of date outright, and a target that must
+# be remade gets its missing secondary prerequisites built
+# regardless of .SECONDARY -- verified by mutation, appending
+# $(RSSITEM_FILES) to .SECONDARY passes this test and the full
+# suite identically. This sandbox still builds all twelve
+# posts at once, which is the one corpus shape where the heal
+# already worked before posts became a prerequisite -- the
+# incremental-growth test below is the one that covers the
+# shape where it did not.
 #
 test_deleting_a_post_heals_the_feed() {
 	sandbox feed_delete
@@ -2256,6 +2261,15 @@ test_probe_skips_a_whole_document_candidate() {
 	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
 	make setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	# Every other candidate is stubbed to exit 1 by
+	# hide_markdown_tools, so with lowdown rejected nothing
+	# else can win. Pin the line to exactly empty, the same
+	# shape as test_setup_names_a_rejected_candidate, so a
+	# rejection reason that leaks onto stdout (an errant
+	# missing >&2 on this branch) is caught here instead of
+	# only proving the wrong name was not chosen.
+	assert_eq "no diagnostic leaked into the winner" "DETECTED_MARKDOWN :=" \
+		"$(grep '^DETECTED_MARKDOWN' config.mk | sed 's/[[:space:]]*$//')"
 }
 
 #
