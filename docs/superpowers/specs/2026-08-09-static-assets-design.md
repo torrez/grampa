@@ -154,14 +154,22 @@ Neither check is gated on `BUILD_GOAL`, so both fire on `make clean` and `make s
 matches the existing post checks, and there is no deadlock to avoid of the kind `BUILD_GOAL`
 exists for: the cure is renaming a file, not running a recipe this Makefile owns.
 
-**All three checks — these two and the collisions in section 4 — must sit textually above the
-first rule that expands `STATIC_PAGES`.** This is the same class of constraint as
+**The character check must sit above the first rule that expands `STATIC_PAGES`; the collision
+checks of section 4 must sit below the character check.** This is the same class of constraint as
 `BAD_CHARS`-above-`BAD_POST_DATES`, and it is a guarantee about position in the file and
 nothing else. Verified: with the checks below `build`'s prerequisite line, a file named
 `static/a:b.css` dies at that line with make's own `target pattern contains no '%'` — the
 unhelpful message CLAUDE.md already documents a `:` producing for posts — instead of the
 character check's message naming the file and the character. It gets its own pinning test
 rather than a comment alone, exactly as `test_character_error_precedes_the_date_error` does.
+
+Corrected after the Task 3 review, which disproved the first version of this paragraph by
+execution: it claimed the *collision* checks also had to sit above the first expanding rule, for
+the same `:` reason. Moving the guard block below the copy rule leaves the `:` dying at the
+character check exactly as before, because that check did not move. What actually binds the
+collision checks is the opposite edge — they must be **below** the character check, since a
+space-bearing name word-splits `STATIC_PAGES` into a bogus `build/index.html` word and a `%` in a
+name would corrupt the `$(s)/%` filter patterns.
 
 ### 3. The copy rule
 
