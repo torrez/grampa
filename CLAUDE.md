@@ -311,7 +311,10 @@ the point — `logo@2x.png` and `style,min.css` are real asset names that break 
 `!`, `+`, `,`, `@`, `^`, `{`, `}`, `~` all build (verified by creating one file per ASCII
 punctuation character and running the build against each). `{`, `}` and `,` being legal is safe
 only because the copy recipe single-quotes `$<` and `$@`: `static/x{1,2}y.css` publishes under
-its own name rather than brace-expanding. Verified.
+its own name rather than brace-expanding. That is true on **every** host, not only where
+`/bin/sh` is bash — make runs recipes with `$(SHELL)`, and this Makefile sets
+`SHELL := /bin/bash` unconditionally, so `/bin/sh` never enters it. Verified with a probe recipe
+printing `$0`/`$BASH_VERSION` and by repointing `SHELL` and watching `$0` follow.
 
 In the two places posts are *weaker*, static is stronger. A space and a `0x0A` both get through
 the post rules and die later with the fragment message documented above; in `static/` a space is
@@ -359,9 +362,18 @@ the `GENERATED_PAGES`-and-guards block above the character check, which turns th
 `static file and a generated page both build build/index.html`. A `%` corrupts the guards the
 other way and more quietly: `$(s)/%` becomes a two-`%` pattern, and `$(filter build/2026%/%,…)`
 matches nothing where `$(filter build/2026/%,…)` matches the post pages — a silent hole rather
-than a false message. (An earlier claim that the *guards* had to be above the first expanding
-rule was disproven by moving the block; that is not a constraint. Only the character check has
-it.)
+than a false message. A `,` would empty the filter outright — `$(filter a,b c,a b c)` is empty,
+since the comma ends the first argument — but that one is unreachable, because `$(s)` and
+`$(g)` are never arbitrary: they are `build/<y>[/<m>[/<d>]]`, `build/category`, or a generated
+page path, none of which can hold a comma. (An earlier claim that the *guards* had to be above
+the first expanding rule was disproven by moving the block; that is not a constraint. Only the
+character check has it.)
+
+Both constraints are pinned by `test_static_character_error_precedes_the_collision_error`, and
+the second one only became pinned in this fix wave: the test shipped with a `static/index:x.html`
+fixture, which is bad in one way only — nothing generates `build/index:x.html`, so there was no
+collision to lose the race — and it therefore passed under both orderings. With
+`static/index.html x` the mutation is caught. Proved both directions.
 
 ```
 posts/2026-08-06-home_installing-a-doorbell.txt   →  /2026/08/06/installing-a-doorbell.html
@@ -537,15 +549,35 @@ static/style.css      → build/style.css
 static/img/logo.png   → build/img/logo.png
 ```
 
-`STATIC_LS` is `find static/ ! -type d 2>/dev/null | sort`, `STATIC_SRC` is that shell call,
-and `STATIC_PAGES` is `$(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))` — all `:=`, since
-nothing here needs a recipe to have run first. The trailing slash on `find static/` is
-load-bearing (it traverses a `static` that is itself a symlink to a directory; without it
-`find` prints the symlink and `patsubst` leaves that word alone, so `STATIC_PAGES` acquires the
-literal word `static`, which exists, and the build copies nothing at exit 0). `! -type d`
-rather than `-type f` so a symlinked *file* is copied. `2>/dev/null` is what lets a tree with
-no `static/` at all build clean — verified: `rm -rf static && make` exits 0. `static/` has no
-rule that creates it, unlike `posts`; nothing downstream requires it to exist.
+`STATIC_LS` is `find static/ \( -type f -o -type l \) 2>/dev/null | sort`, `STATIC_SRC` is that
+shell call, and `STATIC_PAGES` is `$(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))` — all `:=`,
+since nothing here needs a recipe to have run first. `STATIC_SRC` is read by exactly two things:
+`STATIC_PAGES`, from which the prerequisite list and all three collision guards descend, and
+`CHECKED_STATIC_SPLIT`. The character and type checks read the *listing*, not the list, because a
+name containing a space cannot be an element of a make list at all.
+
+The trailing slash on `find static/` is load-bearing: it traverses a `static` that is itself a
+symlink to a directory. Without it `find` prints the symlink and `patsubst` leaves that word
+alone, so `STATIC_PAGES` acquires the literal word `static` and the build copies nothing at exit
+0 — not quite silently, since `static` does not match the copy rule's `$(BUILD_DIR)%` target
+pattern and make prints one `target 'static' doesn't match the target pattern` line before
+carrying on. That line names neither `static/` nor the assets that vanished. (It *was* silent
+under the plain pattern rule the first two drafts used; both forms reproduced, and the stale
+"and said nothing" claim is item 14's shape again.)
+
+`\( -type f -o -type l \)` rather than `-type f`, so a symlinked *file* is still copied — and
+rather than the `! -type d` this shipped with through Task 5, which admitted every other file
+type there is. A FIFO in `static/` made `cp static/pipe build/pipe` block on a writer that never
+comes and **the build hung forever**, serially and under `-j8`. Anything the predicate now drops
+is named by `CHECKED_STATIC_TYPES`, a parse-time error, rather than skipped in silence; that
+check uses `find -L`, so a symlink *to* a FIFO — which hangs `cp` identically — is caught too.
+The other two symlink shapes are left alone and both still fail loud: a symlink to a directory
+at `cp: -r not specified`, and a dangling one at make's own `No rule to make target
+'static/dangle.css'`, before `cp` runs. Pinned by `test_fifo_in_static_does_not_hang`.
+
+`2>/dev/null` is what lets a tree with no `static/` at all build clean — verified: `rm -rf
+static && make` exits 0. `static/` has no rule that creates it, unlike `posts`; nothing
+downstream requires it to exist.
 
 There is no reverse map and none is needed: the copy rule is a **static pattern rule** over
 `STATIC_PAGES`, so each target's one prerequisite comes straight from the stem. Deleting a
@@ -793,73 +825,32 @@ more than a format-string swap.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
-- **The copy rule is a static pattern rule, and the reason is not style.** Read the conclusion
-  first, because the *mechanism* below is version-dependent and the conclusion is not. A static
-  pattern rule is an **explicit** rule for exactly its listed targets, and an explicit rule beats
-  a pattern rule on every version of make. A plain `$(BUILD_DIR)%` pattern rule is not explicit,
-  and on at least one supported version it loses a page to a static twin. So: **the three
-  collision guards are the sole containment on every supported version**, 4.2 through 4.4 alike.
-  Nothing below narrows that; it only explains what the rejected form would have done, and on
-  which make.
+- **The copy rule is a static pattern rule, and the reason is not style.** A static pattern rule
+  is an **explicit** rule for exactly its listed targets, and an explicit rule beats a pattern
+  rule on every version of make. A plain `$(BUILD_DIR)%` pattern rule is not explicit, and on at
+  least one supported version it loses a page to a static twin — silently, at exit 0. So: **the
+  three collision guards are the sole containment on every supported version**, 4.2 through 4.4
+  alike. They are not a backstop to a rule-selection argument; there is no rule-selection
+  argument to back up.
 
-  The first draft was that plain pattern rule, argued safe on the grounds that shortest-stem
-  selection would keep it away from generated pages. **That argument is false.** Stem length
-  only *orders* make's implicit-rule trial; which candidate the first pass accepts is decided by
-  its prerequisites, and **where make draws that line moved in 4.4**. Probed on three binaries —
-  GNU make 4.2.1, 4.3 and 4.4.1 — with the four-line makefile below:
+  The **mechanism** behind that is version-dependent even though the conclusion is not: which
+  candidate make's first implicit-rule pass accepts is decided by the candidate's
+  prerequisites, and where make draws that line moved in 4.4, which inverts the winner for
+  grampa's own rules. The full argument — the four-case table probed on 4.2.1, 4.3 and 4.4.1,
+  the four-line reproduction makefile, and the end-to-end confirmation that 4.4.1 ships the
+  impostor while 4.3 renders the real page — is written up in the comment above the copy rule
+  in the `Makefile`, and deliberately not repeated here. That comment is the copy nearest the
+  code; this one had been the second of three, and R-1 of the branch review is what a
+  three-copy argument costs — one copy re-run, two left asserting something that had stopped
+  being true. (The third copy is in the design spec, which is a record of its moment and stays
+  as written.)
 
-  | The `work/a.tmp` prerequisite is… | 4.2.1 | 4.3 | 4.4.1 |
-  | --- | --- | --- | --- |
-  | made only by another **pattern** rule | `IMPOSTOR` | `IMPOSTOR` | `IMPOSTOR` |
-  | an **explicit target** `work/a.tmp:` | `REAL` | `REAL` | `REAL` |
-  | listed in `.SECONDARY: work/a.tmp` | `REAL` | `REAL` | `IMPOSTOR` |
-  | a prerequisite of an unrelated target | `REAL` | `REAL` | `IMPOSTOR` |
-
-  Below 4.4, **any** mention of the file in the makefile counted as "ought to exist" and the
-  candidate passed; 4.4 narrowed that to mentions in the target being built, which is what its
-  NEWS describes. **That inverts the case for grampa**, because `TMP_FILES` is named in
-  `.SECONDARY` (Makefile:235) and the fragments are prerequisites of `work/index.tmp`: on 4.4+
-  neither mention counts and `$(BUILD_DIR)%.html` fails the first pass whenever the fragment is
-  off disk, while on 4.2/4.3 both count and it passes. Confirmed end to end in a grampa sandbox
-  with the rule reverted to the plain form and the guards disabled, an impostor at
-  `static/2026/08/06/hello.html`: **4.4.1 ships the impostor at exit 0** — in serial, under
-  `-j8`, and when the page is asked for by name — while **4.3 renders the real page**. So the
-  plain form was not merely unsafe, it was *inconsistently* unsafe, which is worse than either.
-
-  The four-line reproduction, outside this repo, is the thing to reach for if any of the above
-  is ever doubted again:
-
-  ```make
-  all: out/a.html
-  out/%.html: work/%.tmp      # short stem "a"
-  	@cp $< $@
-  out/%: src/%                # long stem "a.html"
-  	@cp $< $@
-  work/%.tmp:
-  	@echo REAL > $@
-  ```
-
-  With `src/a.html` holding `IMPOSTOR`: no `work/a.tmp` on disk gives `out/a.html = IMPOSTOR`,
-  and `work/a.tmp` on disk gives `out/a.html = REAL` — same two rules, same stems, opposite
-  winners, on all three binaries. The four variants above are the rest of the table. This is not
-  the *whole* boundary even on 4.4.1: an other-target mention still acts as a lower tier there.
-  With no competing rule at all, adding `other: work/a.tmp` changes 4.4.1's message from
-  `No rule to make target 'out/a.html'` to
-  `No rule to make target 'work/a.tmp', needed by 'out/a.html'` — the pattern rule *was*
-  accepted and then failed loud on the prerequisite. It loses to a competing rule whose
-  prerequisite is on disk; it is not ignored.
-
-  Being an **explicit** rule for exactly its listed targets, the static pattern rule
-  enters none of this, and it stays inert for anything else — a hand-typed
-  `make build/nope.css` still gets make's own `No rule to make target`, verified. It also fixed a
-  plain bug the pattern form had: a legal, non-colliding `static/about.html` *broke the build*,
-  because `%.html` beat `$(BUILD_DIR)%` for it — an empty `tmp_for_page` plus `templates/base.txt`
-  and `config` all exist — and fired the unknown-page guard; `/about.html` and the `/404.html`
-  GitHub Pages wants both failed with a message about posts. That one is version-independent —
-  reproduced identically on 4.3 and 4.4.1, since `%.html`'s prerequisites here are only
-  `templates/base.txt` and `config`, both on disk — and both pages publish fine under the static
-  pattern rule. Which returns to the top of this bullet: the guards are not a backstop to a
-  rule-selection argument. There is no rule-selection argument to back up.
+  One consequence is worth having here rather than only there, because it is about this
+  repo and not about make: the plain form also broke a legal, non-colliding
+  `static/about.html`, which `%.html` claimed and then failed with a message about posts —
+  `/about.html` and the `/404.html` GitHub Pages wants both died that way. That half is
+  version-independent, reproduced identically on 4.3 and 4.4.1, and both pages publish fine
+  under the static pattern rule.
 - **`GENERATED_PAGES` is hand-maintained, and a future page type that forgets to join it
   silently reopens every collision the three guards close.** It is written out longhand —
   `index.html`, `rss.xml`, the post pages, the category pages — because nothing in the Makefile

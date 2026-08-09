@@ -53,13 +53,31 @@ STATIC_PAGES := $(patsubst static/%,$(BUILD_DIR)%,$(STATIC_SRC))
 `! -type d` rather than `-type f`: a symlinked asset should be copied (`cp` follows the link),
 not silently skipped. Everything that is not a directory is an asset.
 
+> **Corrected after implementation.** "Everything that is not a directory is an asset" is
+> false: `! -type d` also admits FIFOs, sockets and device nodes, and `cp static/pipe
+> build/pipe` blocks on a writer that never comes — `mkfifo static/pipe && make` hangs
+> forever, serially and under `-j8`. Shipped as `\( -type f -o -type l \)` plus a
+> `CHECKED_STATIC_TYPES` parse-time error naming anything else, with `find -L` so a symlink to
+> a FIFO is caught too. See the Makefile comment; pinned by
+> `test_fifo_in_static_does_not_hang`.
+
 **The trailing slash on `static/` is load-bearing**, and its absence is a silent-wrong-output
 bug rather than a style point. If `static` is itself a symlink to a directory — a plausible
 setup, with assets living outside the repo — then `find static` prints the symlink itself and
 nothing under it. `patsubst` leaves that unmatched word alone, so `STATIC_PAGES` acquires the
 literal word `static`, which exists as a prerequisite, and the build exits 0 having copied
-nothing and said nothing. `find static/` traverses it, and behaves identically to the bare form
-for a real directory and for a missing one. Verified all three cases.
+nothing. `find static/` traverses it, and behaves identically to the bare form for a real
+directory and for a missing one. Verified all three cases.
+
+> **Corrected after implementation.** This paragraph originally ended "having copied nothing
+> **and said nothing**." That was true of the plain `$(BUILD_DIR)%` pattern rule this spec
+> assumed, where `static` names a file that exists and make has nothing to say — reproduced.
+> Task 3 replaced it with a static pattern rule, and `static` does not match that rule's
+> `$(BUILD_DIR)%` target pattern, so make prints
+> `Makefile:NNNN: target 'static' doesn't match the target pattern` and then exits 0 anyway.
+> Still nothing copied, no longer silent — one warning above the ordinary `Building` lines,
+> naming neither `static/` nor what went missing. The claim was not re-run when the rule form
+> changed under it; it is `docs/backlog.md` item 14's shape, and is listed there.
 
 `sort` because `find` walks in directory order, which is neither stable across filesystems nor
 meaningful to a reader. A sorted list makes prerequisite order and error-message order
@@ -72,6 +90,13 @@ creates it; `static/` has none, because nothing downstream requires it to exist.
 `:=` throughout, not `=`. `STATIC_SRC` is read by three checks and one prerequisite list, and
 the lazy-expansion argument that keeps `CONFIG_NAME` on `=` does not apply: `static/` needs no
 recipe to have run first.
+
+> **Corrected after implementation.** "three checks and one prerequisite list" never came true.
+> As built, `STATIC_SRC` has two readers: `STATIC_PAGES` (a `patsubst`, from which the
+> prerequisite list and all three collision guards descend) and `CHECKED_STATIC_SPLIT`. The
+> character and type checks read the *listing*, `STATIC_LS`/`STATIC_ODD_LS`, because a name
+> containing a space cannot be an element of a make list at all. The `:=` conclusion is
+> unaffected.
 
 `STATIC_LS` holds a shell fragment rather than a command that runs, exactly as `POST_LS` does,
 so the character check below can share the identical listing.
@@ -232,6 +257,15 @@ failing with `cp: target 'build/x2y.css': No such file or directory`. Loud rathe
 but host-dependent: a dash `/bin/sh` builds it fine. Quoting closes it without adding characters
 to the rejected set, which keeps the settled decision intact. Verified both ways. `'` is already
 rejected, so nothing can escape the quotes.
+
+> **Corrected after implementation.** "on any host whose `/bin/sh` is bash", and the
+> host-dependence that follows from it, are both false. Make runs recipes with `$(SHELL)`, and
+> `Makefile:40` sets `SHELL := /bin/bash` unconditionally — `/bin/sh` is never consulted, so
+> the brace expansion happens on **every** host and the quoting is universally load-bearing.
+> Verified with a probe recipe printing `$0`/`$BASH_VERSION`, and by repointing `SHELL` and
+> watching `$0` follow it. The consequence for section 8 below is that
+> `test_brace_in_a_static_name_builds` is universal coverage, not the host-conditional
+> coverage this spec asked it to describe itself as.
 
 `$(STATIC_PAGES)` are named directly in `build`'s prerequisite list, so make never treats them
 as intermediates and `.SECONDARY` needs no entry — the same standing `RECENT_ITEMS` gives
@@ -410,6 +444,10 @@ have caught:
 *build*, covering the recipe quoting from section 3 — on a bash-`/bin/sh` host it fails without
 the quotes, and on a dash host it passes either way, so the test is honest about being
 host-conditional rather than claiming universal coverage.
+
+> **Corrected after implementation** — see the note in section 3. `/bin/sh` is not the recipe
+> shell; `SHELL := /bin/bash` is. The test fails without the quotes on every host, so it is
+> universal coverage, and its shipped comment says so.
 
 `test_static_file_is_not_recopied_when_unchanged` doubles as the `.SECONDARY` / intermediate-
 reaping guard and should be read as covering both.
