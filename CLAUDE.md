@@ -392,8 +392,11 @@ intermediate `.tmp` the way the index does. Its fragment prerequisites are exact
 additional prerequisite on top of those exact fragments, and it is deliberately coarse: any
 change to the post set is a change to `posts`'s mtime, so deleting a `home` post rebuilds
 `build/category/work.html` too, not just `build/category/home.html`. That over-triggering is
-what lets a deleted post's fragment disappear from its own category page — see the "Deleting
-a post" gotcha below.
+what lets a deleted post's fragment disappear from its own category page — **unless the
+deleted post was that category's last one**, in which case `CATEGORY_SLUGS` no longer names
+the category at parse time, `build/category/home.html` is not a target at all, and nothing
+rebuilds it; the page fossilises with the deleted post's body and link still in it. See the
+"Deleting a post" and "Renaming or deleting a category" gotchas below.
 
 Because the category is in the filename but not the URL, a page cannot be mapped back to its
 fragment by turning slashes into hyphens — the stem `2026/08/06/first-post` has no way to
@@ -587,21 +590,30 @@ more than a format-string swap.
   reading of post contents. Renaming a category means renaming files — see
   `tools/migrate-categories.sh` for the pattern.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
-  post. `make clean` fixes it.
+  post. This happens whenever a category's *last* post goes away — `CATEGORY_SLUGS` is
+  derived from the filenames that exist at parse time, so a category with no posts left is
+  simply not in the target list, and nothing rebuilds or removes its page. The fossil is not
+  inert: it still renders the deleted or renamed post's body, and its link to that post's own
+  page (now equally orphaned) is exactly as dead. `make clean` fixes it.
 - **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
   page existed — an untracked output, the same shape as the deleted-category gotcha above —
-  and `make clean` is still what removes the file itself. What no longer lingers is
+  and `make clean` is still what removes the file itself. What usually no longer lingers is
   everything that *links* to it: the index, the post's own category page, and the feed all
-  now drop a deleted post on the very next `make`, because `posts` (the directory) is a
+  drop a deleted post on the very next `make`, because `posts` (the directory) is a
   prerequisite of `work/index.tmp`, every `build/category/%.html`, and `work/rss.tmp` — and
   that prerequisite is coarse on purpose: **any** entry created or removed in `posts/` moves
   the directory's mtime, not only a `.txt` post, so an editor's swap file or any other
   unrelated entry appearing or disappearing there triggers the same rebuild of all three
   targets, regardless of window position or `.rssitem` history, each rebuilding from the post
   set actually on disk. It is one cheap, self-healing rebuild and the next build is quiet
-  again. That closes the old feed condition entirely: it used to heal only
-  when the newly-in-window post's `.rssitem` was missing, and never with ten or fewer posts;
-  now it heals every time, in both of those cases included.
+  again. The one exception is the post's own category page when the post was that category's
+  **last** one: `build/category/%.html` is only a target for a category `CATEGORY_SLUGS`
+  still names, so deleting a category down to zero posts is the "leaves its old page in
+  `build/`" case just above, not this one — the category page fossilises with the deleted
+  post's body and link intact, and only `make clean` clears it. Barring that case, this
+  closes the old feed condition entirely: it used to heal only when the newly-in-window
+  post's `.rssitem` was missing, and never with ten or fewer posts; it now heals every time,
+  including both of those cases.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
@@ -636,14 +648,16 @@ more than a format-string swap.
   prefix is `grampa: setup:` and deliberately not `grampa: markdown:` — that prefix belongs to
   the build notice, and `test_clean_and_setup_print_no_notice` asserts it is absent from
   `make setup`'s output. One cosmetic consequence for the suite: `hide_markdown_tools` installs
-  executable exit-1 stubs for all eleven candidates, so in every `sandbox()`-only test all
-  eleven are found, probed, and rejected as `not runnable` — up to eleven such lines on
-  stderr per sandboxed `make setup`. Two tests, `test_probe_rejects_a_smartening_candidate`
-  and `test_setup_names_a_rejected_candidate`, overwrite the `lowdown` stub with `path_stub`
-  after `sandbox()` runs, replacing its exit-1 body with one that exits 0 and rewrites `--` to
-  an en dash — a real (if narrow) markdown processor rather than a non-runnable one — so in
-  those two `lowdown` is instead found, probed, and rejected as `smartens punctuation`, and
-  only the other ten still read `not runnable`. Harmless either way (`sandbox()` redirects
+  executable exit-1 stubs for all eleven candidates, and `sandbox()` itself runs `make setup`
+  once against them (output discarded), so in every test that call finds, probes, and rejects
+  all eleven as `not runnable` — up to eleven such lines on stderr, just not printed anywhere.
+  Two tests, `test_probe_rejects_a_smartening_candidate` and
+  `test_setup_names_a_rejected_candidate`, then overwrite the `lowdown` stub with `path_stub`
+  and run `make setup` a **second**, visible time, with the stub now exiting 0 and rewriting
+  `--` to an en dash — a real (if narrow) markdown processor rather than a non-runnable one.
+  It is only that second setup run, and only for `lowdown`, that reads `smartens punctuation`;
+  the other ten candidates, and `lowdown` itself on the first, hidden run, still read
+  `not runnable` throughout. Harmless either way (`sandbox()` redirects
   them, and `markdown_stub` only surfaces output on failure) and worth knowing before someone
   reads it as a regression.
 - **An install that predates detection fails loud, and the guard is gated on `BUILD_GOAL`.**
