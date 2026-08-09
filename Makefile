@@ -1295,7 +1295,7 @@ clean:
 #
 .PHONY: build
 build: templates/post.txt templates/rss-item.txt
-build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES)
+build: $(addprefix $(BUILD_DIR),$(html_post_files)) $(BUILD_DIR)index.html $(CATEGORY_PAGES) $(FEED_PAGES) $(STATIC_PAGES)
 	@if [ -z "$$SITE_URL" ]; then echo "No url= in config; skipping rss.xml. A previously built build/rss.xml, if any, is left in place."; fi
 	@echo "Build completed."
 
@@ -1413,6 +1413,69 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 		export PAGE_TITLE="$$BLOG_NAME"; \
 	fi; \
 	awk "$$WRAP_IN_BASE" $< > $@;
+
+#
+# static/ files, copied into build/ with their relative path
+# preserved. The whole feature, three lines of recipe.
+#
+# A STATIC PATTERN RULE, not a plain $(BUILD_DIR)% pattern
+# rule, and the difference is not style. The first draft was
+# plain, argued safe on the grounds that shortest-stem
+# selection would keep it away from generated pages. That
+# argument is FALSE. Make's implicit-rule search orders
+# candidates by stem length, but its first pass only accepts
+# a rule whose prerequisites already exist or are themselves
+# makeable. Stem length orders the trial; existence decides
+# it. So on any build where a post's .tmp fragment is not yet
+# on disk, $(BUILD_DIR)%.html fails that pass while a
+# $(BUILD_DIR)% rule whose static/ twin exists on disk passes
+# it -- and the LONGER stem wins. Verified: with a twin at
+# static/2026/08/06/hello.html and the collision guards
+# removed, the impostor shipped at exit 0, in serial, under
+# -j8, and when the page was asked for by name.
+#
+# A static pattern rule is an explicit rule for exactly the
+# listed targets, so it enters no such contest, and it is
+# inert for anything not in STATIC_PAGES -- a hand-typed
+# make build/nope.css still gets make's own "No rule to make
+# target". An empty STATIC_PAGES parses and builds fine,
+# which is the tree with no static/ at all.
+#
+# It also fixes a plain behavioural bug the pattern form had:
+# a legal, non-colliding static/about.html BROKE the build,
+# because %.html beat $(BUILD_DIR)% for it -- an empty
+# tmp_for_page plus templates/base.txt and config all exist
+# -- and fired the unknown-page guard. /about.html, and the
+# /404.html GitHub Pages wants at the root, failed with a
+# message about posts.
+#
+# The guards above are therefore the SOLE containment against
+# a static file claiming a generated page: under either rule
+# form the twin wins silently without them. They are not a
+# backstop to a rule-selection argument. There is no
+# rule-selection argument.
+#
+# Everything is single-quoted. The rejected character set is
+# the minimal one, so { } and , are legal in a static
+# filename, and static/x{1,2}y.css brace-expands in an
+# unquoted cp on any host whose /bin/sh is bash. ' is
+# rejected, so nothing can escape the quotes.
+#
+# Plain cp, not cp -p: the copy takes a current mtime, newer
+# than its source, which is what make wants. Preserving the
+# source mtime would leave the two equal and lean on make's
+# treatment of a tie.
+#
+# A symlink to a directory inside static/ (e.g.
+# static/sub -> ../elsewhere) is enumerated by
+# find static/ ! -type d as a single non-directory entry, so
+# cp refuses it and the build fails loud rather than
+# publishing wrong output.
+#
+$(STATIC_PAGES): $(BUILD_DIR)%: static/%
+	@echo "Copying $@"
+	@mkdir -p '$(dir $@)'
+	@cp '$<' '$@'
 
 #
 # If just building the index. cat needs /dev/null in

@@ -3106,6 +3106,135 @@ test_legal_static_names_are_accepted() {
 	assert_out_not_grep "bad character in static filename"
 }
 
+test_static_file_is_copied() {
+	sandbox static_copy
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "body{color:red}" > static/style.css
+	build || return
+	assert_file build/style.css
+	assert_grep build/style.css "body{color:red}"
+	assert_file build/2026/08/06/hello.html
+}
+
+test_static_subdirectory_is_preserved() {
+	sandbox static_subdir
+	mkdir -p static/img/deep
+	echo "svg" > static/img/deep/x.svg
+	build || return
+	assert_file build/img/deep/x.svg
+	assert_grep build/img/deep/x.svg "svg"
+}
+
+#
+# Doubles as the .SECONDARY / intermediate-reaping guard:
+# a reaped copy would be re-made every build.
+#
+test_static_file_is_not_recopied_when_unchanged() {
+	sandbox static_incremental
+	mkdir -p static
+	echo "a" > static/style.css
+	build || return
+	assert_out_grep "Copying build/style.css"
+	build || return
+	assert_out_not_grep "Copying build/style.css"
+}
+
+test_changed_static_file_is_recopied() {
+	sandbox static_changed
+	mkdir -p static
+	echo "a" > static/style.css
+	build || return
+	sleep 1
+	echo "b" > static/style.css
+	build || return
+	assert_out_grep "Copying build/style.css"
+	assert_grep build/style.css "b"
+}
+
+#
+# The bug a plain $(BUILD_DIR)% pattern rule had: %.html beat
+# it for build/about.html -- its prerequisites all exist --
+# and the unknown-page guard fired with a message about
+# posts. /about.html and the /404.html GitHub Pages wants at
+# the root both failed. The static pattern rule does not
+# compete on stem length at all.
+#
+test_static_html_page_is_published() {
+	sandbox static_html_page
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static
+	echo "<h1>About</h1>" > static/about.html
+	build || return
+	assert_file build/about.html
+	assert_grep build/about.html "<h1>About</h1>"
+	assert_out_not_grep "no post in posts/ builds this page"
+}
+
+test_static_html_page_in_category_dir_is_published() {
+	sandbox static_html_category
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	mkdir -p static/category
+	echo "<h1>Extra</h1>" > static/category/extra.html
+	build || return
+	assert_file build/category/extra.html
+	assert_grep build/category/extra.html "<h1>Extra</h1>"
+	assert_file build/category/home.html
+}
+
+#
+# find static (no slash) prints only the symlink, so
+# STATIC_PAGES got the literal word `static`, which exists,
+# and the build exited 0 having copied nothing.
+#
+test_symlinked_static_directory_is_published() {
+	sandbox static_symlink
+	mkdir -p assets
+	echo "body{color:blue}" > assets/style.css
+	ln -s assets static
+	build || return
+	assert_file build/style.css
+	assert_grep build/style.css "body{color:blue}"
+}
+
+#
+# { } and , are legal under the minimal set, and brace-expand
+# in an unquoted cp on a bash-/bin/sh host. Passes either way
+# on a dash host, so this is host-conditional coverage --
+# honest about that rather than claiming universal.
+#
+test_brace_in_a_static_name_builds() {
+	sandbox static_brace
+	mkdir -p static
+	echo "b" > 'static/x{1,2}y.css'
+	build || return
+	assert_file 'build/x{1,2}y.css'
+}
+
+test_build_works_without_a_static_directory() {
+	sandbox static_absent
+	add_post 2026-08-06-home_hello.txt <<'EOF'
+title: Hello
+-----------------------------------
+<p>Hi.</p>
+EOF
+	build || return
+	assert_file build/2026/08/06/hello.html
+	assert_no_file build/style.css
+}
+
 #
 # ---------------------------------------------------
 # The date half. date -v already rejects every bad date
@@ -3533,5 +3662,14 @@ test_space_in_a_static_name_fails
 test_control_character_in_a_static_name_fails
 test_newline_in_a_static_name_fails
 test_legal_static_names_are_accepted
+test_static_file_is_copied
+test_static_subdirectory_is_preserved
+test_static_file_is_not_recopied_when_unchanged
+test_changed_static_file_is_recopied
+test_static_html_page_is_published
+test_static_html_page_in_category_dir_is_published
+test_symlinked_static_directory_is_published
+test_brace_in_a_static_name_builds
+test_build_works_without_a_static_directory
 
 pass_fail_summary
