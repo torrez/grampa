@@ -598,12 +598,8 @@ more than a format-string swap.
   end described in the "Deleting a post" gotcha below. Rename it instead — the
   `tools/migrate-categories.sh` pattern — and the post keeps the exact same URL, since the
   category is not part of it: the fossil's link points at a page that still exists, still
-  renders, and is live, just filed under its new category now. One more wrinkle on
-  the rename path, pre-existing and not new on this branch: the renamed post's own page lags
-  one build behind — `make --debug=b` shows its `.tmp` fragment does not yet exist at rename
-  time, so `.SECONDARY` lets make judge the page up to date and it is rebuilt only on the
-  *next* `make`, so for one build the live post page still shows the old category and still
-  links back to the fossil. `make clean` clears the fossil in either case.
+  renders, and is live, just filed under its new category now. `make clean` clears the
+  fossil in either case.
 - **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
   page existed — an untracked output, the same shape as the deleted-category gotcha above —
   and `make clean` is still what removes the file itself. What usually no longer lingers is
