@@ -19,6 +19,31 @@ FAILED=0
 CURRENT=""
 
 #
+# make test runs this file as a recipe, and make exports
+# MAKELEVEL, MAKEFLAGS and MFLAGS into that recipe's environment.
+# Left alone, every sandbox `make` this suite shells out to
+# inherits them, sees MAKELEVEL=1, concludes it is a sub-make, and
+# auto-enables --print-directory -- so "make[1]: Entering
+# directory ..." becomes the first line of a captured build,
+# breaking test_build_announces_the_processor's assertion that the
+# markdown notice is the first line. That assertion is
+# load-bearing, not incidental: the notice's position is the whole
+# reason it is a parse-time $(info) and not a line in build's
+# recipe (see CLAUDE.md).
+#
+# The fix is not --no-print-directory on the test recipe or on the
+# suite's own `make` calls -- that would silence the symptom while
+# leaving MAKEFLAGS inherited, so `make -j4 test` or `make -s test`
+# would still hand sandboxes flags nobody chose, and -s would
+# silence the very output the assertions read. Unsetting all three
+# up front makes every sandbox `make` a top-level make no matter
+# how this file itself was invoked -- the same principle
+# hide_markdown_tools serves below: the suite's result must not
+# depend on the environment it inherits.
+#
+unset MAKELEVEL MAKEFLAGS MFLAGS
+
+#
 # Executable stubs that exit 1 for every PATH candidate in
 # the Makefile's table, so `make setup` finds nothing and
 # staging stays verbatim -- today's behaviour, and the same
@@ -607,6 +632,73 @@ test_stub_list_matches_the_candidate_table() {
 }
 
 #
+# A candidate whose smartypants flag is wrong renders the
+# author's -- as an en dash. The probe used to check only
+# exit status, the surviving <i>, and fragment-vs-document,
+# so such a tool won detection and quietly rewrote every
+# post's punctuation.
+#
+# The stub fails ONLY the punctuation check -- it exits 0,
+# keeps the <i>, and emits no document -- so this test
+# cannot pass for an unrelated reason.
+#
+test_probe_rejects_a_smartening_candidate() {
+	sandbox probe_smarty
+	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
+	make setup >/dev/null 2>&1
+	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	assert_grep config.mk "DETECTED_MARKDOWN :="
+}
+
+#
+# setup used to fall through a rejected candidate in
+# silence, so the build notice named a processor the user
+# did not expect and gave no hint why. The punctuation check
+# makes that more likely, not less.
+#
+# The prefix is deliberately NOT "grampa: markdown:" --
+# test_clean_and_setup_print_no_notice asserts that string
+# is absent from setup's output, because it belongs to the
+# build notice and setup must stay quiet about it.
+#
+test_setup_names_a_rejected_candidate() {
+	sandbox setup_reject
+	path_stub lowdown 'sed "s/--/\&ndash;/g" "$f"'
+	BUILD_OUT=$(make setup 2>&1)
+	assert_out_grep "grampa: setup: lowdown: smartens punctuation"
+	# BUILD_OUT merges stdout and stderr, so it cannot tell
+	# the diagnostic line above apart from a winner written to
+	# config.mk -- both start with "grampa:" and both contain
+	# "DETECTED_MARKDOWN :=" as a substring. Pin the actual
+	# file to an exactly-empty value so a diagnostic that
+	# leaks onto stdout (and so into config.mk) is caught.
+	assert_eq "no diagnostic leaked into the winner" "DETECTED_MARKDOWN :=" \
+		"$(grep '^DETECTED_MARKDOWN' config.mk | sed 's/[[:space:]]*$//')"
+}
+
+#
+# A TRIPWIRE, not a live guard, and it cannot fail today.
+#
+# cmark, cmark-gfm and md2html all HTML-escape a " in text
+# content to &quot;. That is escaping, not smartening -- it
+# renders identically -- but a literal " assertion cannot
+# tell the two apart and would skip all three. The probe
+# input therefore carries no quote at all, so this stub's
+# escaping never fires and the test passes trivially.
+#
+# It exists to bite the next person who adds a quote to the
+# probe input and a literal-" check alongside it. The stub
+# escapes CONDITIONALLY for that reason: one that emitted
+# &quot; unconditionally would test nothing in either world.
+#
+test_probe_accepts_escaped_quotes() {
+	sandbox probe_escaped_quotes
+	path_stub lowdown 'sed "s/\"/\&quot;/g" "$f"'
+	make setup >/dev/null 2>&1
+	assert_grep config.mk "DETECTED_MARKDOWN := lowdown"
+}
+
+#
 # The notice says which processor a build is using, once,
 # before any page is built.
 #
@@ -757,7 +849,7 @@ test_failing_markdown_fails_the_build() {
 	sandbox markdown_failure
 	# Unconditional exit 1 would fail setup's own probe --
 	# which runs this exact stub against a synthetic
-	# "x <i>y</i>" file -- so detection would reject the
+	# "x <i>y</i> -- z" file -- so detection would reject the
 	# candidate and DETECTED_MARKDOWN would come back empty,
 	# and the build below would then stage verbatim and
 	# succeed instead of failing. Passing the probe and only
@@ -1371,24 +1463,142 @@ EOF
 }
 
 #
-# Guards the decision NOT to list RSSITEM_FILES in
-# .SECONDARY. Adding them looks like an obvious tidy-up --
-# it matches what .tmp and .staged do and it passes every
-# other assertion in this file -- but it makes make tolerate
-# a missing .rssitem, which suppresses the rebuild that pulls
-# the next-oldest post into the window when one is deleted.
-# The feed goes stale instead of healing.
+# Deleting a post used to leave it on the FRONT PAGE, which
+# is worse than the feed case beside it and was undocumented.
 #
-# Deleting a post is otherwise untested. Note the heal is
-# narrower than "more than ten posts": it needs the newly
-# in-window post to have NO .rssitem on disk, so that
-# building the missing one is what makes rss.tmp out of
-# date. A blog grown a post at a time past ten already has
-# that fragment from when the post was last in-window, and
-# goes stale until make clean -- see the deleted-post gotcha
-# in CLAUDE.md. This sandbox builds all twelve at once, so
-# posts 1 and 2 never got a fragment, which is the history
-# the heal needs.
+# index.tmp is a cat of the newest-ten .tmp files, taken as
+# prerequisites -- so make asks whether any is newer, never
+# whether the set changed. Every post has a .tmp because
+# every post has a page, so the incoming fragment is always
+# already on disk and older, and index.tmp never re-cats.
+# That is why the feed sometimes healed and the index never
+# did.
+#
+test_deleting_a_post_heals_the_index() {
+	sandbox delete_index
+	local i
+	for i in 1 2 3; do
+		add_post "2026-01-0$i-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	assert_grep build/index.html "Post 3"
+	# Whole-second mtime resolution: posts/ must come out
+	# strictly newer than index.tmp or nothing re-cats.
+	sleep 1
+	rm posts/2026-01-03-home_post-3.txt
+	build || return
+	assert_not_grep build/index.html "Post 3"
+	assert_grep build/index.html "Post 2"
+}
+
+#
+# Same mechanism as the index, one target over. A category
+# page is an awk pass over every fragment in its category,
+# taken as prerequisites -- and it is not even windowed, so
+# a deleted post stays on it forever.
+#
+test_deleting_a_post_heals_the_category_page() {
+	sandbox delete_category
+	local i
+	for i in 1 2 3; do
+		add_post "2026-01-0$i-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	assert_grep build/category/home.html "Post 3"
+	sleep 1
+	rm posts/2026-01-03-home_post-3.txt
+	build || return
+	assert_not_grep build/category/home.html "Post 3"
+	assert_grep build/category/home.html "Post 2"
+}
+
+#
+# test_deleting_a_post_heals_the_feed builds all twelve
+# posts at once, which is the ONE corpus shape where the
+# heal already worked -- the eleventh-newest post has no
+# .rssitem, so deletion forces one to be built, which makes
+# rss.tmp out of date. That test passes against the unfixed
+# Makefile and covers none of the bug.
+#
+# A blog grown a post at a time is the normal shape, and
+# there every out-of-window post already has its fragment.
+# Nothing rebuilds and the deleted post's <item> survives.
+#
+test_deleting_a_post_heals_the_feed_after_incremental_growth() {
+	sandbox feed_delete_incremental
+	printf 'name=My Weblog\nurl=https://example.com\n' > config
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10 11; do
+		add_post "2026-01-$(printf '%02d' $i)-home_post-$i.txt" <<EOF
+title: Post $i
+-----------------------------------
+<p>Body $i.</p>
+EOF
+	done
+	build || return
+	sleep 1
+	add_post "2026-01-12-home_post-12.txt" <<EOF
+title: Post 12
+-----------------------------------
+<p>Body 12.</p>
+EOF
+	build || return
+	assert_grep build/rss.xml "<title>Post 12</title>"
+	sleep 1
+	rm posts/2026-01-12-home_post-12.txt
+	build || return
+	assert_eq "items in feed after delete" "10" "$(grep -c '<item>' build/rss.xml | tr -d ' ')"
+	assert_not_grep build/rss.xml "<title>Post 12</title>"
+	assert_grep build/rss.xml "<title>Post 2</title>"
+}
+
+#
+# A tree with no posts/ at all builds an empty site at exit
+# 0, and must keep doing so. Adding posts as a prerequisite
+# of index.tmp/rss.tmp/category pages would otherwise make
+# make die on its own "No rule to make target 'posts'", so
+# the posts: rule exists to recreate it.
+#
+test_build_works_without_a_posts_directory() {
+	sandbox no_posts_dir
+	rm -rf posts
+	build || return
+	assert_file build/index.html
+	assert_eq "posts/ recreated" "yes" "$([ -d posts ] && echo yes || echo no)"
+}
+
+#
+# The all-at-once companion to the two heal tests above and
+# to test_deleting_a_post_heals_the_feed_after_incremental_growth
+# below: same mechanism (posts as a directory-level
+# prerequisite of rss.tmp), a different corpus shape, and the
+# one that end-to-end exercises the feed's ten-item window
+# actually dropping a title and pulling the next one in.
+#
+# It does NOT guard listing RSSITEM_FILES in .SECONDARY --
+# see the comment above that line in the Makefile. That used
+# to matter, back when rss.tmp's only prerequisites were the
+# .rssitem files themselves: marking them .SECONDARY let make
+# treat a missing one as tolerable, which suppressed exactly
+# the rebuild this test checks for. Now that posts is a
+# prerequisite of rss.tmp too, any change to the post set
+# makes rss.tmp out of date outright, and a target that must
+# be remade gets its missing secondary prerequisites built
+# regardless of .SECONDARY -- verified by mutation, appending
+# $(RSSITEM_FILES) to .SECONDARY passes this test and the full
+# suite identically. This sandbox still builds all twelve
+# posts at once, which is the one corpus shape where the heal
+# already worked before posts became a prerequisite -- the
+# incremental-growth test below is the one that covers the
+# shape where it did not.
 #
 test_deleting_a_post_heals_the_feed() {
 	sandbox feed_delete
@@ -2051,6 +2261,15 @@ test_probe_skips_a_whole_document_candidate() {
 	path_stub lowdown 'echo "<html><body>x <i>y</i></body></html>"'
 	make setup >/dev/null 2>&1
 	assert_not_grep config.mk "DETECTED_MARKDOWN := lowdown"
+	# Every other candidate is stubbed to exit 1 by
+	# hide_markdown_tools, so with lowdown rejected nothing
+	# else can win. Pin the line to exactly empty, the same
+	# shape as test_setup_names_a_rejected_candidate, so a
+	# rejection reason that leaks onto stdout (an errant
+	# missing >&2 on this branch) is caught here instead of
+	# only proving the wrong name was not chosen.
+	assert_eq "no diagnostic leaked into the winner" "DETECTED_MARKDOWN :=" \
+		"$(grep '^DETECTED_MARKDOWN' config.mk | sed 's/[[:space:]]*$//')"
 }
 
 #
@@ -2078,7 +2297,13 @@ test_setup_with_no_processor_records_empty() {
 
 #
 # The cmp guard: a no-op setup must not bump the mtime, or
-# every setup re-stages every post once Task 4 lands.
+# every setup re-stages every post once Task 4 lands. The
+# scratch file setup writes and cmps against is named
+# config.mk.$$ (the PID), so no fixed name is knowable
+# statically -- a glob count is what stands in for
+# assert_no_file here, and it is what actually catches a
+# scratch file left behind, unlike a fixed name nothing
+# writes any more.
 #
 test_noop_setup_leaves_config_mk_untouched() {
 	sandbox setup_noop
@@ -2088,7 +2313,8 @@ test_noop_setup_leaves_config_mk_untouched() {
 	make setup >/dev/null 2>&1
 	after=$(stat -c %Y config.mk 2>/dev/null || stat -f %m config.mk)
 	assert_eq "config.mk mtime unchanged by a no-op setup" "$before" "$after"
-	assert_no_file config.mk.new
+	assert_eq "no scratch file survives setup" "0" \
+		"$(ls config.mk.* 2>/dev/null | wc -l | tr -d ' ')"
 }
 
 #
@@ -2956,6 +3182,9 @@ test_multi_word_override_keeps_its_flags
 test_hash_in_markdown_value_fails_the_rebuild
 test_uninstalled_detected_processor_fails_the_build
 test_stub_list_matches_the_candidate_table
+test_probe_rejects_a_smartening_candidate
+test_setup_names_a_rejected_candidate
+test_probe_accepts_escaped_quotes
 test_build_announces_the_processor
 test_build_announces_no_processor
 test_notice_marks_a_config_override
@@ -2984,6 +3213,10 @@ test_no_url_means_no_feed
 test_feed_is_built_when_url_is_set
 test_feed_escapes_titles_and_bodies
 test_feed_is_capped_at_ten_newest
+test_deleting_a_post_heals_the_index
+test_deleting_a_post_heals_the_category_page
+test_deleting_a_post_heals_the_feed_after_incremental_growth
+test_build_works_without_a_posts_directory
 test_deleting_a_post_heals_the_feed
 test_feed_with_zero_posts
 test_feed_is_byte_stable_across_rebuilds

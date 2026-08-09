@@ -152,8 +152,13 @@ to re-run. The one exception is `config.mk`, which is *generated* rather than co
 probes `date(1)` and the markdown candidates and rewrites it, which is what re-fixes the
 dialect if a checkout ever moves between OSes and what picks up a newly installed markdown
 processor. The rewrite is conditional on the content actually differing — setup writes
-`config.mk.new` and `cmp`s it — because `config.mk` is a prerequisite of `%.staged`, and an
-unconditional touch would re-stage every post on every setup.
+a per-process scratch file (`config.mk.$$$$` in the Makefile, which the shell receives as
+`config.mk.$$` and expands with its PID) and `cmp`s it — because `config.mk`
+is a prerequisite of `%.staged`, and an unconditional touch would re-stage every post on
+every setup. The per-process name is what keeps two concurrent setups from truncating each
+other's scratch file and promoting a half-written `config.mk`; the cost is that a setup
+aborted between the write and the `mv` leaks `config.mk.<pid>` indefinitely, which
+`/config.mk.*` ignores and `make clean` does not remove.
 
 ## config
 
@@ -331,16 +336,28 @@ lose the flags, and the flags are not decoration — see the raw-HTML gotcha bel
 line is its own shell and `dialect` and `winner` have to survive to the write; the `while`
 loop runs in a subshell, so the winner is `echo`ed out of the pipeline and captured rather
 than assigned. The probe is a real render, not a `--version` check: each candidate is run
-against a freshly written `x <i>y</i>` and has to exit 0, keep the `<i>`, and *not* return a
-whole `<html>` document. That is what catches a flag that turns out to be wrong on the host —
-including for `comrak`, `multimarkdown` and `markdown-it`, whose rows were never executed
-during development and whose flags are inferred from family behaviour rather than observed.
-The probe file is rewritten **inside** the loop, per candidate: a candidate that truncates a
-shared file would make every candidate behind it fail the `<i>` check on empty input.
+against a freshly written `x <i>y</i> -- z` and has to exit 0, keep the `<i>`, keep the `--`,
+and *not* return a whole `<html>` document. That is what catches a flag that turns out to be
+wrong on the host — including for `comrak`, `multimarkdown` and `markdown-it`, whose rows were
+never executed during development and whose flags are inferred from family behaviour rather
+than observed. The probe file is rewritten **inside** the loop, per candidate: a candidate
+that truncates a shared file would make every candidate behind it fail the `<i>` check on
+empty input.
 
-`setup` writes `config.mk.new` and `mv`s it only when `cmp` says the content changed, so a
-no-op `make setup` does not bump the mtime — without that, every setup would re-stage every
-post, `config.mk` being a staging prerequisite.
+The `--` check exists because the `<i>`/document checks say nothing about typography: a
+candidate whose smartypants flag is wrong passes both and quietly rewrites every post's `--`
+into an en dash. It checks the **dash only**, never the quote. `cmark`, `cmark-gfm` and
+`md2html` HTML-escape a `"` to `&quot;` in text content — that is escaping, not smartening,
+and it renders identically — so a literal `"` assertion would reject all three of those good
+processors. The dash has no such false positive among the candidates measured. The residual:
+a processor that smartens quotes but leaves `--` alone would still pass. No row in the table
+is known to do this — the claim that Python-Markdown's `smarty` extension behaves this way is
+from its documentation, not from an observed probe run, since the table's `markdown_py` row
+does not enable that extension.
+
+`setup` writes a per-process scratch file (`config.mk.$$$$`) and `mv`s it only when `cmp`
+says the content changed, so a no-op `make setup` does not bump the mtime — without that,
+every setup would re-stage every post, `config.mk` being a staging prerequisite.
 
 `.tmp` files are rendered post fragments and are the unit of reuse: the per-post page and
 the index are both just a `base.txt` wrapper around one or more `.tmp` files. `.rssitem`
@@ -350,8 +367,8 @@ are kept between builds via `.SECONDARY` — without that, make would treat them
 pattern-rule intermediates and delete them, forcing a full rebuild every time. `.rssitem`
 files need no such entry: `RECENT_ITEMS` names them as explicit prerequisites of the
 explicit target `work/rss.tmp`, and make only reaps files it never sees mentioned. Listing
-them in `.SECONDARY` anyway would be actively harmful — see the comment above `.SECONDARY`
-in the Makefile.
+them in `.SECONDARY` anyway is now unnecessary rather than harmful — see the comment above
+`.SECONDARY` in the Makefile for why that changed.
 
 The `%.html` rule names each page's own fragment as a prerequisite via `.SECONDEXPANSION`:
 the stem of `build/2026/08/06/first-post.html` is `2026/08/06/first-post`, and
@@ -370,8 +387,16 @@ work/2026-08-06-home_installing-a-doorbell.tmp
 ```
 
 The category page rule takes its fragments as multiple awk input files, so it needs no
-intermediate `.tmp` the way the index does. Its prerequisites are exact, because
-`CATEGORY_SLUGS` is derived from filenames at parse time.
+intermediate `.tmp` the way the index does. Its fragment prerequisites are exact, because
+`CATEGORY_SLUGS` is derived from filenames at parse time. `posts` (the directory) is an
+additional prerequisite on top of those exact fragments, and it is deliberately coarse: any
+change to the post set is a change to `posts`'s mtime, so deleting a `home` post rebuilds
+`build/category/work.html` too, not just `build/category/home.html`. That over-triggering is
+what lets a deleted post's fragment disappear from its own category page — **unless the
+deleted post was that category's last one**, in which case `CATEGORY_SLUGS` no longer names
+the category at parse time, `build/category/home.html` is not a target at all, and nothing
+rebuilds it; the page fossilises with the deleted post's body and link still in it. See the
+"Deleting a post" and "Renaming or deleting a category" gotchas below.
 
 Because the category is in the filename but not the URL, a page cannot be mapped back to its
 fragment by turning slashes into hyphens — the stem `2026/08/06/first-post` has no way to
@@ -565,19 +590,45 @@ more than a format-string swap.
   reading of post contents. Renaming a category means renaming files — see
   `tools/migrate-categories.sh` for the pattern.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
-  post. `make clean` fixes it.
-- **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
-  `make clean && make` after removing a post. The feed is only sometimes as forgiving, and
-  the condition is narrower than it looks: deleting a post heals the feed on a plain `make`
-  only when the post that becomes newly in-window has **no `.rssitem` on disk**. Then the
-  missing fragment must be built, which makes it newer than `work/rss.tmp`, which re-cats and
-  re-wraps. If that fragment already exists — because the post was in the window once before,
-  which is the case on any blog grown a post at a time past ten with the feed on — then every
-  prerequisite of `rss.tmp` exists and is older than it, nothing rebuilds, and the deleted
-  post's `<item>` stays in `build/rss.xml`. With ten or fewer posts there is no window edge to
-  cross at all and the stale `<item>` likewise persists. Verified all three ways;
-  `test_deleting_a_post_heals_the_feed` covers the healing case. `make clean && make` is the
-  reliable answer in every case.
+  post. This happens whenever a category's *last* post goes away — `CATEGORY_SLUGS` is
+  derived from the filenames that exist at parse time, so a category with no posts left is
+  simply not in the target list, and nothing rebuilds or removes its page. The fossil is not
+  inert, and deletion and renaming leave it pointing at two different things. Delete that
+  last post and the fossil's link goes to a page that is itself now orphaned — the same dead
+  end described in the "Deleting a post" gotcha below. Rename it instead — the
+  `tools/migrate-categories.sh` pattern — and the post keeps the exact same URL, since the
+  category is not part of it: the fossil's link points at a page that still exists, still
+  renders, and is live, just filed under its new category now. `make clean` clears the
+  fossil in either case.
+
+  That is the case where the category empties out. Renaming a single post out of a category
+  that still has others left in it is a different case and no longer stays wrong indefinitely:
+  the same `posts` prerequisite that heals deletion (below) makes both the old and the new
+  category page correct themselves on the very next `make` — verified against a pre-`posts`-
+  prerequisite tree, where neither ever healed, across any number of rebuilds. One page still
+  lags: after an `mv`/`git mv` rename the post's own permalink page takes one extra `make` to
+  notice its new category. `tools/migrate-categories.sh` does not have that lag. The mechanism
+  is written up in `docs/backlog.md` item 13 and deliberately not repeated here — three
+  attempts to compress it into this bullet each produced a claim that turned out to be false.
+- **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
+  page existed — an untracked output, the same shape as the deleted-category gotcha above —
+  and `make clean` is still what removes the file itself. What usually no longer lingers is
+  everything that *links* to it: the index, the post's own category page, and the feed all
+  drop a deleted post on the very next `make`, because `posts` (the directory) is a
+  prerequisite of `work/index.tmp`, every `build/category/%.html`, and `work/rss.tmp` — and
+  that prerequisite is coarse on purpose: **any** entry created or removed in `posts/` moves
+  the directory's mtime, not only a `.txt` post, so an editor's swap file or any other
+  unrelated entry appearing or disappearing there triggers the same rebuild of all three
+  targets, regardless of window position or `.rssitem` history, each rebuilding from the post
+  set actually on disk. It is one cheap, self-healing rebuild and the next build is quiet
+  again. The one exception is the post's own category page when the post was that category's
+  **last** one: `build/category/%.html` is only a target for a category `CATEGORY_SLUGS`
+  still names, so deleting a category down to zero posts is the "leaves its old page in
+  `build/`" case just above, not this one — the category page fossilises with the deleted
+  post's body and link intact, and only `make clean` clears it. Barring that case, this
+  closes the old feed condition entirely: it used to heal only when the newly-in-window
+  post's `.rssitem` was missing, and never with ten or fewer posts; it now heals every time,
+  including both of those cases.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
@@ -603,7 +654,29 @@ more than a format-string swap.
   `-smart`. This is why the table records field 2 and not field 1, and why the probe checks
   the `<i>` survives rather than just checking the exit status. An argv in the table must
   contain no `#` or `$`, which would truncate or misparse the `config.mk` line it is written
-  into.
+  into. A candidate that is *found* but then rejected by one of these checks is now named on
+  stderr with its reason — `grampa: setup: lowdown: smartens punctuation`, or `not runnable`,
+  `emits a whole document`, `drops raw HTML` for the other three — instead of falling through
+  in silence to a winner the user did not expect. A candidate not found at all (`command -v`
+  or `[ -x ]` miss) stays silent, on purpose: those misses are the common case, and naming all
+  eleven on a machine with one processor installed would print eleven lines on every setup. The
+  prefix is `grampa: setup:` and deliberately not `grampa: markdown:` — that prefix belongs to
+  the build notice, and `test_clean_and_setup_print_no_notice` asserts it is absent from
+  `make setup`'s output. One cosmetic consequence for the suite: `hide_markdown_tools` installs
+  executable exit-1 stubs for all eleven candidates, and `sandbox()` itself runs `make setup`
+  once against them (output discarded), so in every test that call finds, probes, and rejects
+  all eleven as `not runnable` — up to eleven such lines on stderr, just not printed anywhere.
+  Two tests, `test_probe_rejects_a_smartening_candidate` and
+  `test_setup_names_a_rejected_candidate`, then overwrite the `lowdown` stub with `path_stub`
+  and run `make setup` a **second** time, with the stub now exiting 0 and rewriting `--` to
+  an en dash — a real (if narrow) markdown processor rather than a non-runnable one. (Only
+  `test_setup_names_a_rejected_candidate` captures that second run's output for assertion;
+  the other test's second run is discarded too, same as the first.) It is only that second
+  setup run, and only for `lowdown`, that reads `smartens punctuation`; the other ten
+  candidates, and `lowdown` itself on the first, hidden run, still read
+  `not runnable` throughout. Harmless either way (`sandbox()` redirects
+  them, and `markdown_stub` only surfaces output on failure) and worth knowing before someone
+  reads it as a regression.
 - **An install that predates detection fails loud, and the guard is gated on `BUILD_GOAL`.**
   Such a tree has a `config.mk` holding only `DATE_DIALECT`. Nothing else would notice:
   `DATE_DIALECT` is set, so the loud date check is satisfied, and `DETECTED_MARKDOWN` is
