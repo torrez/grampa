@@ -837,10 +837,17 @@ CHECKED_POST_PAGES := $(if $(filter-out $(words $(POST_PAGES)),$(words $(sort $(
 # posts/. Unlike posts, static/ has no rule that creates it:
 # nothing downstream requires it to exist.
 #
-# := throughout. STATIC_SRC is read by three checks and one
-# prerequisite list, and the lazy-expansion argument that
-# keeps CONFIG_NAME on = does not apply -- static/ needs no
-# recipe to have run first.
+# := throughout. STATIC_SRC is read by exactly two things:
+# STATIC_PAGES, which derives the prerequisite list and the
+# three collision guards from it, and CHECKED_STATIC_SPLIT.
+# The character and type checks read the listing itself, not
+# this list, for the reason given at each. (This comment
+# claimed "three checks and one prerequisite list" from Task
+# 1, on the strength of a plan for Tasks 2-3 that ended up
+# building them over STATIC_LS and STATIC_PAGES instead.)
+# The lazy-expansion argument that keeps CONFIG_NAME on =
+# does not apply -- static/ needs no recipe to have run
+# first.
 #
 # STATIC_LS holds a shell fragment rather than a command that
 # runs, exactly as POST_LS does, so the character check below
@@ -1046,6 +1053,29 @@ GENERATED_PAGES := $(BUILD_DIR)index.html $(BUILD_DIR)rss.xml $(addprefix $(BUIL
 # No ancestor-walking needed: filter's % anchored by the /
 # does it in one pass each. Verified against the near-misses
 # that must not fire -- hello.htmlx and categoryextra.css.
+#
+# Two characters would break these two filters if they ever
+# reached $(s) or $(g), and both are held off upstream rather
+# than here. A % is the pattern wildcard itself, so $(s)/%
+# would stop meaning "anything under $(s)". A , ends the
+# filter's first argument: $(filter a,b c,a b c) is EMPTY,
+# not $(filter a,b c), so a comma silently empties the result
+# and the guard passes a collision it should have caught --
+# verified in a two-line makefile, along with the concrete
+# shape, $(filter build/x,y/%,build/x,y/z), also empty. The %
+# is rejected by CHECKED_STATIC_CHARS, so it never arrives.
+# The , is deliberately LEGAL in a static filename
+# (style,min.css), so nothing rejects it -- but it is
+# unreachable all the same, because $(s) and $(g) are not
+# arbitrary names: the shadow guard only matters when $(s)
+# equals a directory generated pages live in, which is
+# build/<y>[/<m>[/<d>]] or build/category, and the under
+# guard only when $(g) is a generated page path. A date
+# component cannot hold a comma and neither can the literal
+# `category`. Recorded because it is unreachable by an
+# argument about the OTHER operand, not by the rejected set
+# -- so a future page type whose path is author-supplied
+# reopens it.
 #
 STATIC_EXACT_COLLISIONS := $(filter $(GENERATED_PAGES),$(STATIC_PAGES))
 STATIC_SHADOWS_DIR := $(strip $(foreach s,$(STATIC_PAGES),$(if $(filter $(s)/%,$(GENERATED_PAGES)),$(s))))
@@ -1602,9 +1632,15 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 #
 # Below 4.4 ANY mention in the makefile counted as "ought to
 # exist"; 4.4 narrowed it to the target being built. That
-# inverts the case here, because TMP_FILES is in .SECONDARY
-# (see above) and the fragments are prerequisites of
-# work/index.tmp. So on 4.4+, a build where a post's .tmp is
+# inverts the case here, because TMP_FILES -- ALL of it -- is
+# in .SECONDARY (see above). The other mention is narrower
+# than it reads: only the newest ten fragments are
+# prerequisites of work/index.tmp, since that is what
+# RECENT_FILES selects, so with 12 posts index.tmp names 10
+# of the 12 (verified with make -pn). The .SECONDARY mention
+# covers every fragment on its own, which is why the argument
+# does not depend on the window. So on 4.4+, a build where a
+# post's .tmp is
 # not yet on disk has $(BUILD_DIR)%.html failing the pass
 # while a $(BUILD_DIR)% rule whose static/ twin exists passes
 # it -- the LONGER stem wins. On 4.2/4.3 both mentions count
@@ -1646,8 +1682,15 @@ $(BUILD_DIR)%.html: $$(call tmp_for_page,$$*) $$(call post_for_page,$$*) templat
 # Everything is single-quoted. The rejected character set is
 # the minimal one, so { } and , are legal in a static
 # filename, and static/x{1,2}y.css brace-expands in an
-# unquoted cp on any host whose /bin/sh is bash. ' is
-# rejected, so nothing can escape the quotes.
+# unquoted cp -- on EVERY host, not only where /bin/sh is
+# bash. SHELL := /bin/bash at the top of this file is what
+# make runs recipes with; /bin/sh never enters it. Verified
+# with a probe recipe printing $$0 and $$BASH_VERSION, and by
+# repointing SHELL and watching $$0 follow it. An earlier
+# version of this comment said "on any host whose /bin/sh is
+# bash" and its test called itself host-conditional; both
+# understated a guard that is universal. ' is rejected, so
+# nothing can escape the quotes.
 #
 # Plain cp, not cp -p: the copy takes a current mtime, newer
 # than its source, which is what make wants. Preserving the

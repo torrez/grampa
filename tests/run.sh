@@ -3300,15 +3300,40 @@ EOF
 # space-bearing name word-splits STATIC_PAGES into a bogus
 # extra word (false exact-collision match), and a % in a name
 # would corrupt the $(s)/% and $(g)/% filter patterns the
-# shadow/under-page guards use. Verified by moving the
-# collision block below the copy rule -- the : still dies at
-# the character check with the good message, since that check
-# did not move; the "target pattern contains no '%'" failure a
-# below-the-copy-rule placement was once thought to risk does
-# not occur, and crediting it to this ordering was wrong.
+# shadow/under-page guards use.
+#
+# The fixture is 'static/index.html x' and the space is the
+# whole point. This test shipped with static/index:x.html,
+# which is bad in ONE way only -- it collides with nothing,
+# since build/index:x.html is not a page grampa builds -- so
+# it passed under both orderings and pinned nothing. Moving
+# the GENERATED_PAGES block above the character check left
+# the suite at 419/0. With the space, the same mutation
+# splits the listing into `static/index.html` and `x`,
+# STATIC_PAGES gets build/index.html, and the mutated
+# Makefile dies at CHECKED_STATIC_EXACT with "static file and
+# a generated page both build build/index.html" while the
+# real one dies at the character check. Proved by mutation in
+# both directions.
+#
+# The second sandbox keeps the old : fixture for what it does
+# pin: the OTHER placement constraint, character-check above
+# the copy rule. Verified by moving the collision block below
+# the copy rule -- the : still dies at the character check
+# with the good message, since that check did not move; the
+# "target pattern contains no '%'" failure a below-the-copy-
+# rule placement was once thought to risk does not occur, and
+# crediting it to this ordering was wrong.
 #
 test_static_character_error_precedes_the_collision_error() {
 	sandbox static_check_order
+	mkdir -p static
+	: > 'static/index.html x'
+	build_expect_fail || return
+	assert_out_grep "bad character in static filename"
+	assert_out_not_grep "static file and a generated page both build"
+
+	sandbox static_check_order_colon
 	mkdir -p static
 	: > 'static/index:x.html'
 	build_expect_fail || return
