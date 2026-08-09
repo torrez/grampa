@@ -28,7 +28,7 @@ pre-merge reviews so far:
 - **Whole-branch review**, 2026-08-09, of static assets (`b769921`) — the four CLAUDE.md
   checkpoints across five tasks, then the whole branch before merge. It found one behaviour
   bug that had to be fixed before shipping (a FIFO in `static/` hung the build forever) and a
-  further run of item 14's defect, taking that count from eight to seventeen. Nothing it found
+  further run of item 14's defect, taking that count from eight to eighteen. Nothing it found
   endangers `posts/`. Its residuals are recorded in the section at the end of this file rather
   than as new numbered items: none of them is a fix waiting to be scheduled, they are decisions
   taken with their costs known.
@@ -704,7 +704,7 @@ and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect — seventeen confident-but-false claims across two branches, and the finding is that counting them was the wrong instrument
+### 14. The branch's own recurring defect — eighteen confident-but-false claims across two branches, and the finding is that counting them was the wrong instrument
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
 formerly-true, empirically-false claim". It happened four times on this branch before this
@@ -786,9 +786,9 @@ not, because the URL doesn't carry the category. A rename can still *lag* a buil
 only via the mtime-preservation mechanism that `mv`/`git mv` has and
 `tools/migrate-categories.sh` deliberately does not.
 
-**The static-assets branch produced nine more, 2026-08-09, taking the count from eight to
-seventeen — and the only finding that matters about them is how they were caught.** Every one
-was found by **running something**; not one was found by reading. The nine:
+**The static-assets branch produced ten more, 2026-08-09, taking the count from eight to
+eighteen — and the only finding that matters about them is how they were caught.** Every one
+was found by **running something**; not one was found by reading. The ten:
 
 9. **The spec's central design argument.** A plain `$(BUILD_DIR)%` pattern rule was argued safe
    because make's shortest-stem selection would keep it away from generated pages. False: stem
@@ -828,12 +828,23 @@ was found by **running something**; not one was found by reading. The nine:
     `! -type d`. False, and the only one of the nine that was a live hang rather than a wrong
     sentence: the predicate also admits FIFOs, and `cp` blocks on one forever. Caught by
     creating one.
+18. **"The four-line reproduction makefile … is written up in the comment above the copy rule."**
+    Written *by the fix wave for instances 9, 12 and 13* — the commit whose entire purpose was
+    collapsing the triplicated argument down to one copy plus a pointer. The pointer was wrong
+    in one element: the Makefile comment carries a prose *description* of the reproduction, and
+    the literal four-line makefile existed only in `CLAUDE.md`, so the collapse deleted the
+    repo's only copy while asserting it had been preserved elsewhere. Caught by the fix wave's
+    own re-review running `grep -rn "echo REAL"` across all three documents and getting nothing.
+    Fixed by describing the pointer's target accurately rather than restoring the four lines.
+    **The instructive part is where it landed**: a de-duplication written to cure this defect
+    introduced a fresh instance of it, which is the strongest available argument that the cure
+    for the class is not care but execution.
 
-**The pattern, and it is the whole finding: nine for nine were caught by execution, zero by
+**The pattern, and it is the whole finding: ten for ten were caught by execution, zero by
 inspection** — and several had survived multiple careful readings by reviewers who were
 specifically looking for this class, because a false claim about code reads exactly like a true
 one. Instance 16 is the sharpest case, since the thing that was false was a test's own claim to
-be testing something. What separates the nine from the earlier eight is not the rate but the
+be testing something, and instance 18 the most instructive. What separates the ten from the earlier eight is not the rate but the
 cure that now exists for their commonest cause: instances 9, 12 and 13 are all the same
 argument stated in three places — Makefile comment, `CLAUDE.md`, spec — where re-running it in
 one place left two copies asserting something that had stopped being true. That fix wave

@@ -836,8 +836,8 @@ more than a format-string swap.
   The **mechanism** behind that is version-dependent even though the conclusion is not: which
   candidate make's first implicit-rule pass accepts is decided by the candidate's
   prerequisites, and where make draws that line moved in 4.4, which inverts the winner for
-  grampa's own rules. The full argument — the four-case table probed on 4.2.1, 4.3 and 4.4.1,
-  the four-line reproduction makefile, and the end-to-end confirmation that 4.4.1 ships the
+  grampa's own rules. The full argument — the four-case table probed on 4.2.1, 4.3 and 4.4.1, a
+  description of the two-rule reproduction, and the end-to-end confirmation that 4.4.1 ships the
   impostor while 4.3 renders the real page — is written up in the comment above the copy rule
   in the `Makefile`, and deliberately not repeated here. That comment is the copy nearest the
   code; this one had been the second of three, and R-1 of the branch review is what a
