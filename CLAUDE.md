@@ -367,8 +367,8 @@ are kept between builds via `.SECONDARY` — without that, make would treat them
 pattern-rule intermediates and delete them, forcing a full rebuild every time. `.rssitem`
 files need no such entry: `RECENT_ITEMS` names them as explicit prerequisites of the
 explicit target `work/rss.tmp`, and make only reaps files it never sees mentioned. Listing
-them in `.SECONDARY` anyway would be actively harmful — see the comment above `.SECONDARY`
-in the Makefile.
+them in `.SECONDARY` anyway is now unnecessary rather than harmful — see the comment above
+`.SECONDARY` in the Makefile for why that changed.
 
 The `%.html` rule names each page's own fragment as a prerequisite via `.SECONDEXPANSION`:
 the stem of `build/2026/08/06/first-post.html` is `2026/08/06/first-post`, and
@@ -387,8 +387,13 @@ work/2026-08-06-home_installing-a-doorbell.tmp
 ```
 
 The category page rule takes its fragments as multiple awk input files, so it needs no
-intermediate `.tmp` the way the index does. Its prerequisites are exact, because
-`CATEGORY_SLUGS` is derived from filenames at parse time.
+intermediate `.tmp` the way the index does. Its fragment prerequisites are exact, because
+`CATEGORY_SLUGS` is derived from filenames at parse time. `posts` (the directory) is an
+additional prerequisite on top of those exact fragments, and it is deliberately coarse: any
+change to the post set is a change to `posts`'s mtime, so deleting a `home` post rebuilds
+`build/category/work.html` too, not just `build/category/home.html`. That over-triggering is
+what lets a deleted post's fragment disappear from its own category page — see the "Deleting
+a post" gotcha below.
 
 Because the category is in the filename but not the URL, a page cannot be mapped back to its
 fragment by turning slashes into hyphens — the stem `2026/08/06/first-post` has no way to
@@ -583,18 +588,20 @@ more than a format-string swap.
   `tools/migrate-categories.sh` for the pattern.
 - **Renaming or deleting a category leaves its old page in `build/`**, same as deleting a
   post. `make clean` fixes it.
-- **Deleting a post leaves its HTML behind.** Nothing knows the old page existed. Run
-  `make clean && make` after removing a post. The feed is only sometimes as forgiving, and
-  the condition is narrower than it looks: deleting a post heals the feed on a plain `make`
-  only when the post that becomes newly in-window has **no `.rssitem` on disk**. Then the
-  missing fragment must be built, which makes it newer than `work/rss.tmp`, which re-cats and
-  re-wraps. If that fragment already exists — because the post was in the window once before,
-  which is the case on any blog grown a post at a time past ten with the feed on — then every
-  prerequisite of `rss.tmp` exists and is older than it, nothing rebuilds, and the deleted
-  post's `<item>` stays in `build/rss.xml`. With ten or fewer posts there is no window edge to
-  cross at all and the stale `<item>` likewise persists. Verified all three ways;
-  `test_deleting_a_post_heals_the_feed` covers the healing case. `make clean && make` is the
-  reliable answer in every case.
+- **Deleting a post still leaves its own page behind in `build/`.** Nothing knows the old
+  page existed — an untracked output, the same shape as the deleted-category gotcha above —
+  and `make clean` is still what removes the file itself. What no longer lingers is
+  everything that *links* to it: the index, the post's own category page, and the feed all
+  now drop a deleted post on the very next `make`, because `posts` (the directory) is a
+  prerequisite of `work/index.tmp`, every `build/category/%.html`, and `work/rss.tmp` — and
+  that prerequisite is coarse on purpose: **any** entry created or removed in `posts/` moves
+  the directory's mtime, not only a `.txt` post, so an editor's swap file or any other
+  unrelated entry appearing or disappearing there triggers the same rebuild of all three
+  targets, regardless of window position or `.rssitem` history, each rebuilding from the post
+  set actually on disk. It is one cheap, self-healing rebuild and the next build is quiet
+  again. That closes the old feed condition entirely: it used to heal only
+  when the newly-in-window post's `.rssitem` was missing, and never with ten or fewer posts;
+  now it heals every time, in both of those cases included.
 - **Removing `url=` from `config` leaves a stale `build/rss.xml` behind**, same class as the
   two gotchas above — nothing deletes a page whose config went away, and `make deploy` would
   happily ship the stale feed. `make clean` fixes it.
@@ -629,10 +636,16 @@ more than a format-string swap.
   prefix is `grampa: setup:` and deliberately not `grampa: markdown:` — that prefix belongs to
   the build notice, and `test_clean_and_setup_print_no_notice` asserts it is absent from
   `make setup`'s output. One cosmetic consequence for the suite: `hide_markdown_tools` installs
-  executable exit-1 stubs for all eleven candidates, so in every sandbox all eleven are found,
-  probed, and rejected as `not runnable` — up to eleven such lines on stderr per sandboxed
-  `make setup`. Harmless (`sandbox()` redirects them, and `markdown_stub` only surfaces output
-  on failure) and worth knowing before someone reads it as a regression.
+  executable exit-1 stubs for all eleven candidates, so in every `sandbox()`-only test all
+  eleven are found, probed, and rejected as `not runnable` — up to eleven such lines on
+  stderr per sandboxed `make setup`. Two tests, `test_probe_rejects_a_smartening_candidate`
+  and `test_setup_names_a_rejected_candidate`, overwrite the `lowdown` stub with `path_stub`
+  after `sandbox()` runs, replacing its exit-1 body with one that exits 0 and rewrites `--` to
+  an en dash — a real (if narrow) markdown processor rather than a non-runnable one — so in
+  those two `lowdown` is instead found, probed, and rejected as `smartens punctuation`, and
+  only the other ten still read `not runnable`. Harmless either way (`sandbox()` redirects
+  them, and `markdown_stub` only surfaces output on failure) and worth knowing before someone
+  reads it as a regression.
 - **An install that predates detection fails loud, and the guard is gated on `BUILD_GOAL`.**
   Such a tree has a `config.mk` holding only `DATE_DIALECT`. Nothing else would notice:
   `DATE_DIALECT` is set, so the loud date check is satisfied, and `DETECTED_MARKDOWN` is

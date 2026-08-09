@@ -166,22 +166,37 @@ RSSITEM_FILES = $(addprefix $(WORK_DIR), $(POST_NAMES:.txt=.rssitem))
 # incremental builds; .staged is kept for the same
 # reason, and because more than one consumer reads it.
 #
-# .rssitem files are deliberately NOT listed here. They
-# don't need .SECONDARY -- RECENT_ITEMS names them as
-# explicit prerequisites of the explicit target work/rss.tmp,
-# and make only reaps files it never sees mentioned -- and
-# listing them would be actively harmful: with 12 posts,
-# deleting the newest should drop it from the window and
-# pull the next-oldest post in as the new tenth item, which
-# requires building that newly-in-window .rssitem and
-# re-cat'ing rss.tmp. Marking .rssitem as .SECONDARY makes
-# make tolerate that file being *missing* as long as the
-# target is up to date against its prerequisites'
-# prerequisites, which suppresses exactly that rebuild -- the
-# feed goes stale instead of self-healing. Verified
-# empirically both ways; see the design doc, and
-# test_deleting_a_post_heals_the_feed in tests/run.sh,
-# which was watched failing against exactly that edit.
+# .rssitem files are deliberately NOT listed here, but not
+# because listing them would break anything -- they simply
+# don't need .SECONDARY. RECENT_ITEMS names them as explicit
+# prerequisites of the explicit target work/rss.tmp, and make
+# only reaps files it never sees mentioned.
+#
+# Listing them here used to be actively harmful, back when
+# rss.tmp's only prerequisites were the .rssitem files
+# themselves: with 12 posts, deleting the newest should drop
+# it from the window and pull the next-oldest post in as the
+# new tenth item, which requires building that newly-in-window
+# .rssitem. Marking .rssitem as .SECONDARY made make tolerate
+# that file being *missing* as long as rss.tmp was up to date
+# against its prerequisites' prerequisites, which suppressed
+# exactly that rebuild -- the feed went stale instead of
+# self-healing.
+#
+# Since posts (the directory) became a prerequisite of
+# rss.tmp, that no longer applies: any change to the set of
+# posts makes rss.tmp out of date outright, and once a target
+# must be remade, make builds its missing secondary
+# prerequisites anyway regardless of .SECONDARY. So appending
+# $(RSSITEM_FILES) here is now unnecessary rather than
+# harmful -- verified by mutation, both the deletion-heals
+# behaviour above and the full suite (including
+# test_deleting_a_post_heals_the_feed, which no longer
+# distinguishes the two forms) pass identically with it
+# appended. Verified on GNU make 4.4.1; .SECONDARY and
+# intermediate-file reaping are where 3.81 and 4.x have
+# historically differed most, so this is the claim to re-check
+# if that floor is still real.
 #
 .SECONDARY: $(TMP_FILES) $(STAGED_FILES)
 
@@ -1417,13 +1432,14 @@ $(WORK_DIR)%.rssitem: $(WORK_DIR)%.staged templates/rss-item.txt config
 # stdin -- the same reason index.tmp's does.
 #
 # posts is also a prerequisite, same reasoning as index.tmp:
-# RECENT_ITEMS names the newest ten .rssitem fragments, and
-# those are only ever absent for a post that was never in the
-# window. A post grown past the window and later deleted
-# already has its fragment on disk, unchanged and older, so
-# without this nothing would notice it left the set. A
-# directory's mtime moves on entry creation or removal, which
-# records exactly that.
+# RECENT_ITEMS names the newest ten .rssitem fragments, and in
+# an incrementally built tree -- one that has not just seen a
+# `make clean` -- a fragment is only ever absent for a post
+# that was never in the window. A post grown past the window
+# and later deleted already has its fragment on disk, unchanged
+# and older, so without this nothing would notice it left the
+# set. A directory's mtime moves on entry creation or removal,
+# which records exactly that.
 #
 $(WORK_DIR)rss.tmp: $(RECENT_ITEMS) posts
 	@mkdir -p $(WORK_DIR)
