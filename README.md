@@ -13,18 +13,45 @@ frozen yet.
 
 ## Requirements
 
-- **GNU make 4.2 or newer** — checked at startup, with a clear error if it isn't.
-  **macOS ships 3.81**, the last release before the license change, so on a Mac this means
-  `brew install make` and running `gmake` instead of `make`. 3.81 is not merely old here: it
-  voids `.DELETE_ON_ERROR` for the intermediate files grampa builds, so a failed build can
-  leave a half-written fragment that the *next* build publishes as a post with an empty body,
-  at exit 0. Make 4.0 is excluded too — it crashes on emoji in a post filename.
+- **GNU make 4.2 or newer** — checked at startup, so if yours is too old you get one clear
+  line saying so rather than a strange failure later. See below if you are on a Mac.
 - **`bash`** at `/bin/bash` — the Makefile sets `SHELL` to it explicitly
 - **`awk`, `sed`, `date`, `cat`, `tail`, `grep`, `sort`** — whatever your system already ships
 
 Both BSD/macOS and GNU userlands work. The only real difference between them is `date`, and
 `make setup` probes for the dialect you have and records it in a generated `config.mk`. The
 `bash` requirement is the one to check on a stock BSD, which doesn't ship it at that path.
+
+### On a Mac, you need a newer make
+
+macOS ships **GNU make 3.81**, from 2006 — the last release before make moved to GPLv3, which
+is why Apple has never updated it. Grampa does not run on it. Install a current one:
+
+```sh
+brew install make
+```
+
+Homebrew installs it as **`gmake`**, leaving Apple's `make` alone. So every command in this
+README is `gmake` on a Mac:
+
+```sh
+gmake setup
+gmake
+gmake deploy
+```
+
+If you would rather just type `make`, put Homebrew's version first on your `PATH`:
+
+```sh
+export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+```
+
+**3.81 is not merely old here.** It voids `.DELETE_ON_ERROR` for the intermediate files grampa
+builds, so a build that fails partway leaves a half-written fragment behind — and the *next*
+build treats that fragment as current and publishes the post with an empty body, at exit 0.
+That is a wrong page shipped silently, which is the one failure this project works hardest to
+prevent. Make 4.0 is rejected too, for an unrelated reason: it crashes on an emoji in a post
+filename. `tools/probe-platform.sh` will tell you what your machine has.
 
 Optional: a **markdown processor**, to write post bodies in Markdown instead of HTML. You do
 not have to pick one — `make setup` looks for these, in this order, and uses the first it
@@ -76,8 +103,11 @@ make            # incremental build into build/
 make clean      # wipe build/ and work/
 make deploy     # build, then run ./deploy.sh build/
 make test       # run the test suite in throwaway sandboxes
-                # (on a Mac, `gmake test` -- it tests whichever make ran it)
 ```
+
+On a Mac these are `gmake`, not `make` — see [above](#on-a-mac-you-need-a-newer-make).
+`gmake test` tests whichever make ran it, so it exercises the one you will actually build
+with.
 
 `make` only reprocesses posts whose `.txt` changed, plus anything downstream of a template you
 edited. `make -j` is safe. Reach for `make clean` when you want to be certain nothing stale
