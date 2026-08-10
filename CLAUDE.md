@@ -303,9 +303,14 @@ Six things to know:
   filename already in `posts/` kills the invocation before it can write a good one. The tool
   that prevents bad names cannot run in a directory that already has one.
 - **`$(…)` in `TITLE` or `DATE` is expanded by make before the recipe runs.** `make new
-  TITLE='$(shell echo PWNED)'` prints `PWNED` and titles the post `x`. Command-line variables
-  are expanded when make exports them, so no quoting in the recipe can help; it is the same
-  trust level as `markdown=` in `config`. `DATE` carries the identical hole for the identical
+  TITLE='$(shell echo PWNED)' CATEGORY=home DATE=2026-05-04` runs `echo PWNED` during make's
+  expansion of the recipe line — before any recipe text exists for a shell to read — and the
+  *result* of that command becomes the title: `Created posts/2026-05-04-home_pwned.txt`, with
+  `title: PWNED` in the front matter and `pwned` in the slug. Nothing separate is printed to
+  the terminal; `$(shell …)`'s captured stdout **is** the value `TITLE` takes on. Command-line
+  variables are expanded when make exports them, so no quoting in the recipe can help; it is
+  the same trust level as `markdown=` in `config`. `DATE` carries the identical hole for the
+  identical
   reason — `DATE='$(shell touch pwned)'` creates `./pwned` too, since `$(DATE)` is expanded by
   make inside `$(if)`/`$(call)` before any shape check runs, and the post still gets written
   dated today, because `$(shell …)` prints nothing so `$(DATE)` expands empty and the recipe's

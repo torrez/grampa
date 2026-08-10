@@ -325,6 +325,22 @@ squeeze-and-trim of the resulting spaces, applied to the title as it is written 
 `test_new_keeps_the_front_matter_on_one_line`. Recorded here because the plan's self-review
 already flagged it as "one thing the spec missed," and this is that fold-back.
 
+**Known limits' `TITLE='$(shell echo PWNED)'` line is also false, and is the item-14-class
+defect the Fable review of the Task 6 documentation caught.** It says the payload "prints
+`PWNED` and titles the post `x`". Neither half is true. `$(shell echo PWNED)` captures the
+command's stdout into the make variable rather than printing it anywhere — the only terminal
+output from `make new TITLE='$(shell echo PWNED)' CATEGORY=home DATE=2026-05-04` is
+`Created posts/2026-05-04-home_pwned.txt` — and the post is titled `PWNED`, with slug `pwned`,
+not titled `x`. Verified. The claim traces to an earlier scratch reproduction that used a
+two-part payload, `$(shell echo PWNED >&2; echo x)`: the `>&2` is what printed `PWNED` to the
+terminal and the trailing `echo x` is what made the title `x`. Somewhere between that
+experiment and this document the payload was simplified to `$(shell echo PWNED)` while both of
+its effects were kept in the prose, and neither still applies. The underlying point — that
+`$(…)` in `TITLE` is expanded by make before the recipe runs, and that the *result* becomes the
+title — is real and unaffected; only the worked example was wrong. The `DATE` line in the same
+CLAUDE.md bullet (`DATE='$(shell touch pwned)'` creates `./pwned` and expands empty) was
+checked again here and holds.
+
 ## Out of scope
 
 Deliberately not built, to keep this one target: a `SLUG=` override, a `category=` config key
