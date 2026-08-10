@@ -4099,6 +4099,24 @@ test_new_trims_edge_hyphens_from_category() {
 	assert_file build/category/a--b.html
 }
 
+#
+# The dup glob can match a DIRECTORY sharing this date and
+# title slug, not just another post file. Bare `ls` on a
+# directory argument lists its CONTENTS, not its own name, so
+# an EMPTY directory made the check see no output and new wrote
+# a second, colliding file at exit 0 -- the exact duplicate
+# permalink tree the check exists to refuse. `ls -d` is what
+# closes it, by naming the directory itself instead of
+# listing into it.
+#
+test_new_refuses_a_duplicate_permalink_that_is_a_directory() {
+	sandbox new_refuses_duplicate_directory
+	mkdir -p posts/2026-04-02-work_d.txt
+	build_expect_fail new TITLE=D CATEGORY=home DATE=2026-04-02 || return
+	assert_out_grep "2026-04-02-work_d.txt"
+	assert_no_file posts/2026-04-02-home_d.txt
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -4273,5 +4291,6 @@ test_new_accepts_an_all_hyphen_title
 test_new_refuses_an_existing_post
 test_new_refuses_a_duplicate_permalink
 test_new_trims_edge_hyphens_from_category
+test_new_refuses_a_duplicate_permalink_that_is_a_directory
 
 pass_fail_summary

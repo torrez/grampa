@@ -2111,6 +2111,22 @@ posts:
 # for the same permalink leaves posts/ holding exactly the one
 # file the first call wrote.
 #
+# -e dereferences, so it does not by itself catch $f being a
+# DANGLING symlink -- but the dup glob below matches $f's own
+# name regardless of what's at the far end of the link, so a
+# dangling symlink at $f is still refused, just via the second
+# check's message rather than the first's. Verified.
+#
+# ls -d, not bare ls: the glob can match an existing DIRECTORY
+# sharing this date and title slug (a category's post published
+# as a directory by some other tool, or by hand), and bare ls on
+# a directory argument lists its CONTENTS, not its name. Verified
+# the failure mode this closes: with a bare ls, an EMPTY such
+# directory made the dup check see no output, so the refusal
+# never fired and new wrote a second, colliding file at exit 0 --
+# the exact duplicate-permalink tree this check exists to refuse.
+# -d makes ls name the directory itself, so head -1 sees it.
+#
 # The glob is unquoted, which is safe for slug: * ? [ ] are all
 # BAD_CHARS members, so the slugifier has already translated them
 # out of it before this line ever runs. day is not closed the
@@ -2120,10 +2136,11 @@ posts:
 # posts/2026-01-*-home_hello.txt today, and DATE with a space
 # writes a file whose name contains that space, both at exit 0.
 # Neither is a shell-injection hole -- day is only ever used as
-# data, never evaluated -- but it means the "day can't carry a
-# glob" property this comment would like to claim does not hold
-# yet for a hand-supplied DATE. It holds for the common case,
-# DATE left unset, where day is date(1)'s own %Y-%m-%d output.
+# data, never evaluated as a command -- but it means the "day
+# can't carry a glob" property this comment would like to claim
+# does not hold yet for a hand-supplied DATE. It holds for the
+# common case, DATE left unset, where day is date(1)'s own
+# %Y-%m-%d output.
 #
 .PHONY: new
 new: posts
@@ -2142,7 +2159,7 @@ new: posts
 	f="posts/$$day-$${cslug}_$${slug}.txt"; \
 	if [ -e "$$f" ]; then \
 		echo "grampa: new: already exists -- $$f" >&2; exit 1; fi; \
-	dup=$$(ls posts/$$day-*_$${slug}.txt 2>/dev/null | head -1); \
+	dup=$$(ls -d posts/$$day-*_$${slug}.txt 2>/dev/null | head -1); \
 	if [ -n "$$dup" ]; then \
 		echo "grampa: new: $$dup already builds that permalink" >&2; exit 1; fi; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
