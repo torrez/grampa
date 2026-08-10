@@ -340,27 +340,42 @@ Seven things to know:
   `posts/2026-01-02-._x.txt` builds the identical page today, on `main`, with no generator
   involved — `.` is simply a legal category slug. `CATEGORY='-.-'` reaches the same state once
   its edge hyphens are trimmed.
-- **A `DATE` with an edge or doubled hyphen, or a trailing or interior space, is refused, and
-  getting that right took two tries.** `date_shape_bad` word-counts on hyphen boundaries, and
-  make's word-splitting collapses a run of separators the same way `$(words "a  b")` is 2 not
-  3 — so `2026-01-02-`, `-2026-01-02`, `2026-01--02` and `2026--01-02` all count 3 words,
-  indistinguishable from a clean date at that stage. Stage two used to erase the decoration
-  along with the count (`$(subst -,,...)`), so all four wrote their raw, decorated string
-  straight into the filename at exit 0 — one of them collided with an existing post's
-  permalink and then wedged every later `make new` in the directory at parse time. The fix
-  compares the digit-stripped string against the word `--` with `$(filter-out)` rather than
-  erasing hyphens outright — but `$(filter-out)` is itself word-based, so on its own it swaps
-  one collapse for another: a *trailing* space in `DATE` is not a hyphen, survives to the
-  digit-stripped form as `-- ` (two hyphens, one space), and `$(filter-out --,...)` treats
-  that as the single word `--` and removes it, wrongly accepting a space into the filename.
-  The actual fix adds `$(findstring $(space),$(1))`, a plain substring search against the
-  *unstripped* `DATE` that cannot collapse anything, so a trailing or interior space is caught
-  independently of the hyphen logic. (Leading whitespace never reaches the check at all — make
-  strips it from a command-line variable before any of this runs.) See the comment above
-  `date_shape_bad` in the Makefile for the full derivation, including the naive
-  `$(subst --,,...)` alternative that fixes the whitespace hole but reopens a different one:
-  `-2026-01-02-`, decorated on *both* edges, digit-strips to `----`, and `$(subst)` removes
-  all non-overlapping `--` pairs in one pass, collapsing `----` straight to empty.
+- **A `DATE` with an edge or doubled hyphen, an all-hyphen field, or any whitespace byte
+  anywhere in it is refused, and getting that right took three tries, the third caught only by
+  a scoped re-review after the second had already shipped.** `date_shape_bad` word-counts on
+  hyphen boundaries, and make's word-splitting collapses a run of separators the same way
+  `$(words "a  b")` is 2 not 3 — so `2026-01-02-`, `-2026-01-02`, `2026-01--02` and
+  `2026--01-02` all count 3 words, indistinguishable from a clean date at that stage. Stage two
+  used to erase the decoration along with the count (`$(subst -,,...)`), so all four wrote
+  their raw, decorated string straight into the filename at exit 0 — one of them collided with
+  an existing post's permalink and then wedged every later `make new` in the directory at parse
+  time. Try one compared the digit-stripped string against the word `--` with `$(filter-out)`
+  rather than erasing hyphens outright — but `$(filter-out)` is itself word-based, so on its own
+  it swaps one collapse for another: a *trailing* space in `DATE` survives digit-stripping as
+  `-- ` (two hyphens, one space), and `$(filter-out --,...)` treats that as the bare word `--`
+  and removes it, wrongly accepting the space. Try two added `$(findstring $(space),$(1))`, a
+  plain substring search against the *unstripped* `DATE` — this shipped, and was the
+  regression: `$(space)` is only the literal byte `0x20`, but `$(filter-out)`'s word-splitting
+  treats **every** whitespace byte as a separator — tab, CR, LF, VT, FF too — and
+  `$(findstring $(space),...)` tests for none of them, so a trailing tab still slipped through
+  exactly the way a trailing space had, and the write-then-wedge sequence repeated through a new
+  door: a tab in a filename is a control character, which fails `CHECKED_POST_NAMES` at parse
+  time on every later `make` and `make new`. The fix that actually closes it concatenates
+  `$(subst -,,$(call strip_digits,$(1)))` alongside `$(filter-out)` rather than either one
+  alone: `$(subst)` removes only hyphens, byte by byte, so *any* leftover byte that is neither a
+  digit nor a hyphen — every whitespace flavor, or a stray letter — survives it and forces a
+  non-empty (refused) result on its own, independent of what `$(filter-out)` does with the
+  hyphens. (`$(subst -,,...)` alone has its own hole — `-2026-01-02-`, decorated on *both*
+  edges, digit-strips to `----`, and `$(subst)` removes all non-overlapping `--` pairs in one
+  pass, collapsing it straight to empty — which is why both terms run, not one in place of the
+  other.) `$(findstring)` turned out to be fully redundant once `$(subst -,,...)` was in place —
+  an A-B comparison across 426 mutated `DATE` shapes showed zero behavioural difference with or
+  without it — and was removed. The word-count wrapper this whole check opens with is *not*
+  redundant: strip an all-hyphen `DATE` like `--` of its digits and both stage-two terms already
+  agree on empty, so only the wrapper's own else-branch (return `$(1)` unchanged) refuses it; a
+  mutant that deletes the wrapper wrote `posts/---home_x.txt`. Leading whitespace never reaches
+  any of this — make strips it from a command-line variable before the check ever runs. See the
+  comment above `date_shape_bad` in the Makefile for the full derivation and the fuzz counts.
 
 Some legal slugs are ugly and stay legal: `TITLE='.'` builds `..html`, a leading or trailing
 hyphen survives, `'- - -'` gives `-----.html`. All five checks accept them.

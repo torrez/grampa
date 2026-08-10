@@ -455,10 +455,12 @@ rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %
 
 #
 # Empty when $(1) is three hyphen-separated runs of digits
-# with no edge or doubled hyphen and no embedded whitespace,
-# non-empty otherwise. make new checks DATE= with this BEFORE
-# date_select is expanded, and that order is the whole point
-# rather than tidiness.
+# with no edge or doubled hyphen, no all-hyphen field, and no
+# byte anywhere that is not a digit or one of the two separator
+# hyphens -- which is what rules out every whitespace byte, not
+# just a plain space. Non-empty otherwise. make new checks
+# DATE= with this BEFORE date_select is expanded, and that
+# order is the whole point rather than tidiness.
 #
 # The word-count filter alone is not enough to reject a
 # decorated string like "2026-01-02-", "-2026-01-02" or
@@ -467,76 +469,108 @@ rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %
 # 3, so $(subst -,$(space),...) turns an edge or doubled
 # hyphen into an edge or doubled space that $(words) then
 # collapses -- all four decorated shapes above count 3 words,
-# indistinguishable from a clean date at this stage. The old
-# second stage then made it worse: $(subst -,,...) after
-# strip_digits erases hyphens outright, so a decorated string
-# that stripped to nothing but hyphens (e.g. "---" for
-# "2026-01-02-") went to "" -- the same empty-is-good result
-# as a real date -- while the *raw, decorated* string was what
-# got written into the post filename. Stage two was validating
-# a shape stage one had already normalized away, so the two
+# indistinguishable from a clean date at this stage. The
+# original second stage then made it worse: $(subst -,,...)
+# after strip_digits erased hyphens outright, so a decorated
+# string that stripped to nothing but hyphens (e.g. "---" for
+# "2026-01-02-") went to "" -- the same empty-is-good result as
+# a real date -- while the *raw, decorated* string was what got
+# written into the post filename. Stage two was validating a
+# shape stage one had already normalized away, so the two
 # stages agreed with each other about a string neither of them
-# was actually holding.
+# was actually holding. Verified against a minimal makefile:
+# 2026-01-02-, -2026-01-02, 2026-01--02, 2026--01-02 and
+# -2026-01-02- (decorated on both edges) all went from empty
+# (wrongly accepted) to non-empty once fixed, while
+# 2026-01-02, 2026-7-4, 26-7-4 (all three shapes the grammar
+# actually accepts) and 2026-02 (a wrong field count) were
+# unaffected.
 #
-# The fix keeps the word-count filter (still needed to refuse
-# a wrong FIELD count, e.g. "2026-01") and tightens stage two:
-# $(filter-out --,$(call strip_digits,$(1))) instead of
-# $(subst -,,...). After digit-stripping, a clean 3-field date
-# leaves exactly the two separator hyphens as one word, "--",
-# which $(filter-out) removes, giving empty; any edge or
-# doubled hyphen leaves a different word ("---", or worse) that
-# $(filter-out) passes through unchanged, so the result is
-# non-empty and the date is refused. A malformed non-digit
-# field (e.g. "20xx-ab-cd") still comes out non-empty either
-# way, just with its hyphens now intact ("xx-ab-cd" instead of
-# "xxabcd") rather than stripped -- $(if) only tests for
-# emptiness, so that difference does not matter to the caller.
-# Verified against a minimal makefile: 2026-01-02, 2026-7-4,
-# 26-7-4 and 2026-02 (a wrong field count, still correctly
-# refused) are unaffected; 2026-01-02-, -2026-01-02,
-# 2026-01--02 and 2026--01-02 go from empty (wrongly accepted)
-# to "---" (refused).
+# Getting stage two right took three tries, because two
+# plausible single-term fixes each closed the hole above while
+# quietly opening a different one, and both were caught only by
+# fuzzing hundreds of mutated DATE shapes against a from-scratch
+# regex ground truth, not by reading the code:
 #
-# $(filter-out) alone is not quite enough, and fuzzing it
-# against a from-scratch regex ground truth (163 mutated
-# dates, every single- and double-hyphen insertion plus
-# leading/trailing/doubled space, 0 mismatches with the fix
-# below) is what found the gap: $(filter-out) is WORD-based,
-# so it collapses whitespace the same way $(words) does, one
-# more level down. DATE=2026-01-02 (a clean date with one
-# TRAILING space) still counts 3 words at the filter stage --
-# that space was never a hyphen -- and its digit-stripped form
-# is "-- " (two hyphens, one trailing space). $(filter-out
-# --,...) treats "-- " as the single word "--" (the trailing
-# space is a word separator, not content, and a word list with
-# nothing after the last separator has no empty trailing word),
-# so it matches and is removed, leaving genuinely empty --
-# wrongly ACCEPTED. Naive substring removal
-# ($(subst --,,...) instead of $(filter-out)) fixes that one
-# but breaks a different shape: -2026-01-02- (both a leading
-# AND a trailing hyphen) digit-strips to "----", and $(subst)
-# removes ALL non-overlapping "--" matches in one pass, not
-# just the first, so "----" collapses in two bites to "" --
-# also wrongly accepted, and by a shape at the heart of this
-# finding.
+# $(filter-out --,$(call strip_digits,$(1))) alone: after
+# digit-stripping, a clean date leaves exactly "--", which
+# $(filter-out) removes, giving empty; any edge or doubled
+# hyphen leaves a different word ("---" or worse) that survives,
+# non-empty, refused. But $(filter-out) is itself WORD-based, so
+# it collapses whitespace the same way $(words) does one level
+# up: a DATE with a single TRAILING byte of whitespace --
+# space, tab, CR, LF, VT or FF, all of them, not just space --
+# still counts 3 words at the filter stage (that byte was never
+# a hyphen) and digit-strips to "--<whitespace>", which
+# $(filter-out --,...) treats as the bare word "--" (trailing
+# whitespace is a separator, not content) and removes, leaving
+# genuinely empty -- wrongly ACCEPTED, and the accepted byte
+# lands straight in a post filename. Worse, the very first
+# case of this (a literal tab) reopens Finding 1's wedge through
+# a new door: the write succeeds at exit 0, and the control
+# character then fails CHECKED_POST_NAMES at PARSE time on every
+# later build or `make new` in the same directory, before either
+# can print anything of its own.
 #
-# The fix is $(findstring $(space),$(1)) prepended, unrelated
-# to strip_digits entirely: findstring does a plain substring
-# search, so unlike filter-out/words it does not collapse or
-# reorder anything, and it runs against $(1) itself -- the
-# UNSTRIPPED date -- not the digit-stripped, hyphen-mangled
-# derivative the rest of the check works from. If $(1) contains
-# a literal space anywhere, findstring returns that space and
-# the whole expression is non-empty regardless of what
-# filter-out does with the hyphens, so a trailing or interior
-# space is caught before the hyphen logic ever gets a vote. It
-# only needs to catch TRAILING and INTERIOR space: make already
-# strips LEADING whitespace from a command-line variable before
-# this function ever runs, the same fact the $(1) comment
-# earlier in this block relies on for the injection case.
-# filter-out's word-based match is then safe to keep for the
-# hyphen shapes, because by construction $(1) has no whitespace
-# left to collapse by the time filter-out runs on it.
+# $(subst --,,$(call strip_digits,$(1))) instead of
+# $(filter-out): fixes the whitespace case, since $(subst) is a
+# plain substring replace and never collapses anything a
+# whitespace byte sits next to -- but $(subst) removes ALL
+# non-overlapping "--" matches in one pass, not just one, so
+# -2026-01-02- (decorated on BOTH edges) digit-strips to "----",
+# which $(subst) empties in two bites -- wrongly ACCEPTED, and by
+# a shape at the heart of the original finding.
+#
+# The fix keeps $(filter-out --,...) for the hyphen shapes (it
+# does not have the both-edges hole) and ADDS
+# $(subst -,,$(call strip_digits,$(1))) as a second, concatenated
+# term rather than swapping one for the other: $(subst -,,...)
+# removes only hyphens, character by character, so any leftover
+# byte that is neither a digit nor a hyphen -- any whitespace
+# byte, or a stray letter from a malformed field like
+# "20xx-ab-cd" -- survives it untouched and makes that term
+# non-empty on its own, independent of whatever $(filter-out)
+# does with the hyphens. A clean date's stripped form is only
+# ever digits and exactly two hyphens, so both terms go empty
+# together and only then does concatenating them stay empty.
+# Verified: the 402-case fuzz below has zero mismatches against
+# a regex ground truth, and a from-only/without-only A-B
+# comparison across the same 402 cases plus every hyphen
+# decoration is identical in both directions -- see the next
+# paragraph for what that comparison was checking.
+#
+# A third, EARLIER draft of this fix used
+# $(findstring $(space),$(1)) instead of the $(subst -,,...)
+# term -- a plain substring search for a literal space in the
+# unstripped $(1), reasoning that $(filter-out)'s collapsing was
+# specific to whitespace. That missed that $(filter-out)'s
+# word-splitting treats EVERY whitespace byte as a separator, not
+# only $(space)'s literal 0x20 -- tab, CR, LF, VT and FF all
+# collapse the same way, and $(findstring $(space),...) tests for
+# none of them. $(subst -,,...) has no such gap, because it does
+# not classify bytes into separators and content at all; it only
+# ever removes the two literal bytes this check is built around,
+# digits and hyphens, leaving every other byte -- whichever kind
+# of whitespace, or none -- as evidence. $(findstring) was
+# removed rather than kept alongside the working fix: an A-B
+# comparison of the formula with and without it, run across 426
+# mutated DATE shapes (every hyphen decoration from above, every
+# one of the six whitespace bytes as a prefix/interior/trailing
+# decoration, and DATE='--'), came back with zero behavioural
+# difference in either direction -- $(subst -,,...) alone already
+# catches everything $(findstring) was added to catch, and more.
+#
+# The word-count filter is not redundant with either stage-two
+# term, and DATE='--' is the assertion that pins it: stripped of
+# a wrapping $(if $(filter 3,...),...,...), stage two alone
+# accepts it -- strip_digits leaves "--" unchanged (there are no
+# digits to remove), $(subst -,,"--") empties it, and
+# $(filter-out --,"--") empties it too, so both terms agree on
+# empty and the concatenation is empty. Only the word-count
+# filter's own else-branch, $(1) itself, catches an all-hyphen
+# DATE: "--" splits into zero words after hyphens become spaces
+# and collapse, $(filter 3,0) is empty, and the $(if) falls to
+# returning "--" unchanged, non-empty, refused.
 #
 # date_select interpolates its argument into RECIPE TEXT --
 # it is the one date site whose input is not a filename that
@@ -578,7 +612,7 @@ rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %
 # way this file's own $(space) is built, so a lone leftover
 # space would still refuse rather than silently pass. Verified.
 #
-date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(findstring $(space),$(1))$(filter-out --,$(call strip_digits,$(1))),$(1))
+date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(subst -,,$(call strip_digits,$(1)))$(filter-out --,$(call strip_digits,$(1))),$(1))
 
 #
 # Post filenames are y-m-d-<category>_<title>.txt.

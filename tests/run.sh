@@ -4270,17 +4270,103 @@ test_new_refuses_a_both_edges_hyphen_date() {
 # hyphens, one trailing space) is just the word "--" to
 # $(filter-out), which removes it, leaving genuinely empty and
 # wrongly accepting a DATE that would write a SPACE into a post
-# filename. The fix prepends $(findstring $(space),$(1)), a
-# plain substring search against the UNSTRIPPED date that does
-# not collapse anything, so a trailing (or interior) space is
-# caught before the hyphen logic runs at all. This is the
-# regression the brief's own proposed one-line patch does not
-# close; caught by fuzzing 163 mutated DATE shapes against a
+# filename. caught by fuzzing 163 mutated DATE shapes against a
 # from-scratch regex ground truth, not by the brief's table.
+#
+# A first fix for this used $(findstring $(space),$(1))
+# prepended -- a plain substring search against the UNSTRIPPED
+# date that cannot collapse anything, so a trailing or interior
+# space would be caught before the hyphen logic ran. That fix
+# shipped and was itself found to be a regression: $(space) is
+# only the literal byte 0x20, but $(filter-out)'s word-splitting
+# treats TAB, CR, LF, VT and FF as separators too, and
+# $(findstring $(space),...) tests for none of them -- so a
+# trailing TAB, for instance, still slipped through exactly the
+# same way a trailing space had. The actual fix, verified below
+# and in the Makefile comment above date_shape_bad, concatenates
+# $(subst -,,$(call strip_digits,$(1))) instead: $(subst) removes
+# only hyphens, byte by byte, so ANY leftover byte that is
+# neither a digit nor a hyphen -- every whitespace byte, not
+# just space -- survives it and makes the term non-empty on its
+# own. $(findstring) came out; an A-B comparison across 426
+# mutated shapes (every hyphen decoration plus every whitespace
+# byte as a prefix, interior, or trailing decoration) showed
+# zero behavioural difference with or without it.
 #
 test_new_refuses_a_trailing_space_date() {
 	sandbox new_trailing_space_date
 	build_expect_fail new TITLE="Never" CATEGORY=home DATE="2026-01-02 " || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# Tab, CR and LF siblings of the trailing-space test above,
+# pinning the actual regression: at a00ce7a (the $(findstring
+# $(space),...) fix), all three of these were wrongly ACCEPTED
+# at exit 0, writing the raw control byte into a post filename
+# -- and the tab case is Finding 1's poison through a new door,
+# since a control character in a filename then fails
+# CHECKED_POST_NAMES at PARSE time on every later `make` and
+# `make new` in the same directory. Confirmed against a00ce7a
+# before writing the fix: all three created a file. LF is
+# passed as a single command-line token carrying an embedded
+# newline byte, not as a shell-level newline -- $(printf ...)
+# below builds that token the same way `TITLE="$(printf
+# 'Two\nlines')"` already does above for the title tests.
+#
+test_new_refuses_a_trailing_tab_date() {
+	sandbox new_trailing_tab_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$(printf '2026-01-02\t')" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_trailing_cr_date() {
+	sandbox new_trailing_cr_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$(printf '2026-01-02\r')" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# LF can't use the plain $(printf ...) form the tab and CR
+# tests above use: command substitution strips ALL trailing
+# newlines from what it captures, so $(printf '2026-01-02\n')
+# silently hands DATE the already-clean "2026-01-02" and this
+# test would pass even against the unfixed a00ce7a Makefile --
+# caught by running it there first and seeing it fail for the
+# wrong reason (an accepted, undecorated date) rather than the
+# right one. A trailing sentinel byte, stripped after capture,
+# is what keeps the newline: $(printf '...\nX') captures with
+# the newline still in the middle of the string, and ${…%X}
+# then removes only the sentinel.
+#
+test_new_refuses_a_trailing_lf_date() {
+	sandbox new_trailing_lf_date
+	local d
+	d=$(printf '2026-01-02\nX')
+	d=${d%X}
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$d" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The word-count filter ($(filter 3,$(words ...))) is not
+# redundant with the two stage-two terms: strip a DATE of its
+# digits and "--" is unchanged (there were none to remove), and
+# both $(subst -,,"--") and $(filter-out --,"--") empty it, so
+# stage two alone would accept an all-hyphen DATE. Only the
+# word-count filter's else-branch catches it, by returning $(1)
+# itself unchanged. A mutant that deletes the word-count wrapper
+# entirely still passes every other DATE= assertion in this
+# suite; this is the one that catches it, and it wrote
+# posts/---home_x.txt before this test existed to stop it.
+#
+test_new_refuses_an_all_hyphen_date() {
+	sandbox new_all_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE='--' || return
 	assert_out_grep "YYYY-MM-DD"
 	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
 }
@@ -4530,6 +4616,10 @@ test_new_refuses_a_leading_doubled_hyphen_date
 test_new_recovers_after_a_refused_trailing_hyphen_date
 test_new_refuses_a_both_edges_hyphen_date
 test_new_refuses_a_trailing_space_date
+test_new_refuses_a_trailing_tab_date
+test_new_refuses_a_trailing_cr_date
+test_new_refuses_a_trailing_lf_date
+test_new_refuses_an_all_hyphen_date
 test_new_does_not_execute_an_injected_date
 test_new_works_without_config_mk
 test_new_with_date_needs_config_mk
