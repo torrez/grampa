@@ -454,13 +454,6 @@ date_from_filename = $(shell date $(call date_select,$(1)) "+%B %d, %Y")
 rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %b %Y %H:%M:%S %z")
 
 #
-# The ten digit characters, removed. make has no character
-# classes, so the enumeration is the check -- the same shape
-# BAD_CHARS uses further down, and closed the same way.
-#
-strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1)))))))))))
-
-#
 # Empty when $(1) is three hyphen-separated runs of digits,
 # non-empty otherwise. make new checks DATE= with this
 # BEFORE date_select is expanded, and that order is the
@@ -489,6 +482,22 @@ strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,
 # It accepts an unpadded 2026-7-4, because the grammar does.
 # A generator that refused a name the build accepts would be
 # wrong in the other direction.
+#
+# strip_digits is reused, not redefined -- it already exists
+# below (YEAR_SHAPES' helper, further down this file) with
+# make having no character classes, so the enumeration is the
+# check either way. Both callers are recursively-expanded
+# (=), so the reference resolves at call time regardless of
+# which definition comes first in the file; verified with a
+# minimal makefile where the caller textually precedes the
+# callee and still resolves correctly.
+#
+# A space-separated DATE (2026 01 02, no hyphens) is refused
+# by the word-count filter alone, before strip_digits ever
+# runs on it -- but even if that filter's guard were removed,
+# $(if) treats a whitespace-only expansion as true, the same
+# way this file's own $(space) is built, so a lone leftover
+# space would still refuse rather than silently pass. Verified.
 #
 date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(subst -,,$(call strip_digits,$(1))),$(1))
 

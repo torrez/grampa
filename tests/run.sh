@@ -4160,7 +4160,19 @@ test_new_refuses_a_malformed_date() {
 # not into the environment, so unlike TITLE it is not
 # protected by the export discipline. Under the gnu twin
 # that text is -d "<date> 00:00:00" and one " escapes it.
-# Verified before the fix: this payload created the file.
+# Verified before the fix, with the shape check removed: this
+# payload created the file.
+#
+# The payload has no space in it on purpose. date_words/
+# date_select word-split their argument and rejoin the pieces
+# with a literal hyphen no matter what whitespace originally
+# separated them, so a space-bearing payload like
+# 'x";touch PWNED;"' becomes the single token "touch-PWNED" --
+# a command that does not exist -- and never creates PWNED
+# even with the shape check removed. That would make this
+# test pass against genuinely vulnerable code. ">" needs no
+# space to redirect, so it survives the rejoin and still
+# proves the escape.
 #
 # The shape check is what closes it, and it has to be
 # make-level: $(if) expands only the branch it takes, so a
@@ -4169,7 +4181,7 @@ test_new_refuses_a_malformed_date() {
 #
 test_new_does_not_execute_an_injected_date() {
 	sandbox new_injected_date
-	build_expect_fail new TITLE="Never" CATEGORY=home DATE='x";touch PWNED;"' || return
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE='x";>PWNED;"' || return
 	assert_no_file PWNED
 	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
 }
