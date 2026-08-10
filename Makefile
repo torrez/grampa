@@ -2053,6 +2053,32 @@ posts:
 # the same class of bug the .staged recipe's && chain exists
 # to prevent.
 #
+# A TITLE or CATEGORY that slugifies to nothing is refused
+# before f is composed, both with "has no usable characters".
+# TITLE="!!!" and CATEGORY="???" are the two shapes: every
+# character SLUGIFY sees is punctuation it strips, and an
+# empty slug would otherwise publish build/<y>/<m>/<d>/.html
+# or die on check_post_name's empty-category clause.
+#
+# The category check is not a bare -z. CATEGORY="-" slugifies
+# to a non-empty "-", which -z does not catch -- but
+# category_slug re-parses the filename by splitting on
+# hyphens, and an all-hyphen field collapses back to zero
+# words there, so the written file dies on the same
+# empty-category clause anyway. Worse, it dies at PARSE time,
+# before any recipe runs, which means every LATER make new in
+# the same directory dies with it: the generator would have
+# produced the one name its own successor cannot survive.
+# Verified: CATEGORY=- once wrote posts/2026-01-02--_x.txt at
+# exit 0, and the next make new in that directory then failed
+# with "empty category in filename" before printing anything
+# of its own. Stripping every hyphen from cslug and checking
+# THAT for emptiness catches both the plain-empty case and the
+# hyphen-only one in a single test, and does not touch slug:
+# an all-hyphen TITLE is legitimate and documented -- TITLE='-
+# - -' builds -----.html -- so only the category gets the
+# stricter check.
+#
 .PHONY: new
 new: posts
 	@if [ -z "$$TITLE" ]; then \
@@ -2062,6 +2088,10 @@ new: posts
 	day="$${DATE:-$$(date +%Y-%m-%d)}"; \
 	slug=$$(printf '%s' "$$TITLE" | $(SLUGIFY)); \
 	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
+	if [ -z "$$slug" ]; then \
+		echo "grampa: new: TITLE has no usable characters" >&2; exit 1; fi; \
+	if [ -z "$$(printf '%s' "$$cslug" | tr -d '-')" ]; then \
+		echo "grampa: new: CATEGORY has no usable characters" >&2; exit 1; fi; \
 	f="posts/$$day-$${cslug}_$${slug}.txt"; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
 	  cat .source/splitter.txt; } > "$$f" && \

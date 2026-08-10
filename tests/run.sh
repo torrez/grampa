@@ -3907,10 +3907,13 @@ test_new_keeps_non_ascii() {
 }
 
 #
-# The hostile title. Nothing executes, and the title lands
-# in the front matter byte for byte -- which is also a test
-# of fill(), since & in a replacement is the bug fill()
-# exists to avoid.
+# The hostile title. Nothing executes, and the value the
+# SHELL receives lands in the front matter byte for byte --
+# which is also a test of fill(), since & in a replacement is
+# the bug fill() exists to avoid. "The shell receives" is
+# deliberate and not "typed": $HOME below does not survive as
+# typed, only as make hands it to the shell -- see the note
+# further down.
 #
 #
 # $HOME is deliberately in here too, and it does NOT survive
@@ -3933,6 +3936,80 @@ test_new_survives_a_hostile_title() {
 	assert_grep posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt '`whoami`'
 	build || return
 	assert_grep build/2026/01/02/tom-jerry-s-ome-whoami-z.html 'Tom &'
+}
+
+#
+# The blocking finding of the spec review. Control bytes
+# are not in BAD_CHARS and nothing else in the pipeline
+# touches them, so before the [:cntrl:] stage a tab wrote a
+# filename the build rejects -- and a newline wrote one that
+# breaks every LATER make in the directory, which is why the
+# second half of this test builds afterwards rather than
+# only checking the filename.
+#
+test_new_strips_control_characters() {
+	sandbox new_control_chars
+	build new TITLE="$(printf 'Two\nlines')" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_two-lines.txt
+	build new TITLE="$(printf 'a\tb')" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_a-b.txt
+	build || return
+	assert_file build/2026/01/02/two-lines.html
+	assert_file build/2026/01/03/a-b.html
+}
+
+#
+# The front matter is one line, so a newline in the title
+# has to be flattened there too -- not only in the slug.
+# Without it PARSE_FRONT_MATTER reads the tail of the title
+# as something it is not.
+#
+test_new_keeps_the_front_matter_on_one_line() {
+	sandbox new_one_line_front_matter
+	build new TITLE="$(printf 'Two\nlines')" CATEGORY=home DATE=2026-01-02 || return
+	assert_grep posts/2026-01-02-home_two-lines.txt "title: Two lines"
+	assert_eq "front matter line count" "1" "$(grep -c '^title: ' posts/2026-01-02-home_two-lines.txt)"
+	build || return
+	assert_grep build/2026/01/02/two-lines.html "<h4>Two lines</h4>"
+}
+
+#
+# An empty title slug publishes build/<y>/<m>/<d>/.html and
+# is rejected by check_post_name; an empty category is
+# rejected by its sibling clause. Neither can reach the
+# build, because new refuses first -- and refuses without
+# writing.
+#
+test_new_refuses_a_title_with_no_usable_characters() {
+	sandbox new_empty_title_slug
+	build_expect_fail new TITLE="!!!" CATEGORY=home || return
+	assert_out_grep "no usable characters"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_category_with_no_usable_characters() {
+	sandbox new_empty_category_slug
+	build_expect_fail new TITLE="Hello there" CATEGORY="???" || return
+	assert_out_grep "no usable characters"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# CATEGORY="-" slugifies to a non-empty "-", so the
+# empty-string check above does not see it -- but the
+# category is re-parsed by splitting the filename on
+# hyphens, so it collapses back to empty and the build
+# dies with "empty category in filename". Worse, so does
+# every LATER make new, the parse failing before any recipe
+# runs: the generator would have produced the one name its
+# own successor cannot survive.
+#
+test_new_refuses_a_hyphen_only_category() {
+	sandbox new_hyphen_only_category
+	build_expect_fail new TITLE="Hello there" CATEGORY="-" || return
+	assert_out_grep "no usable characters"
+	build_expect_fail new TITLE="Hello there" CATEGORY="- -" || return
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
 }
 
 mkdir -p "$TMPROOT"
@@ -4100,5 +4177,10 @@ test_new_slugifies_a_title
 test_new_slugifies_a_category
 test_new_keeps_non_ascii
 test_new_survives_a_hostile_title
+test_new_strips_control_characters
+test_new_keeps_the_front_matter_on_one_line
+test_new_refuses_a_title_with_no_usable_characters
+test_new_refuses_a_category_with_no_usable_characters
+test_new_refuses_a_hyphen_only_category
 
 pass_fail_summary
