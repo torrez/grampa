@@ -101,6 +101,7 @@ make            # incremental build into build/
 make clean      # wipe build/ and work/
 make deploy     # build, then run ./deploy.sh build/
 make test       # run the test suite in throwaway sandboxes
+make new TITLE="A title" CATEGORY=home   # write a new post stub and stop
 ```
 
 On a Mac these are `gmake`, not `make` — see [above](#on-a-mac-you-need-a-newer-make).
@@ -147,6 +148,18 @@ A filename may contain letters, digits, and `-`, `_`, `.` — and nothing else. 
 ASCII punctuation character is rejected, so `2026-01-02-home_what's-up.txt` is a build error
 that names the file and the offending character. Non-ASCII is fine, so accents, CJK, and emoji
 all work.
+
+You do not have to type any of that. `make new` builds the filename for you:
+
+```sh
+make new TITLE="Installing a doorbell" CATEGORY=home
+make new TITLE="Old news" CATEGORY=home DATE=2026-07-04
+```
+
+It slugifies the title and the category, refuses anything that would collide with a post you
+already have, prints the path, and stops — so you open the file and start writing. It can't
+produce a filename the rules above reject, which is the point of it. Accents and CJK survive
+into the slug, since the rules allow them.
 
 The contents of the file are a title line, a delimiter of 35 hyphens, and the body:
 

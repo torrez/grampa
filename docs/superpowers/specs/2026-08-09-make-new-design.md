@@ -298,6 +298,33 @@ prerequisite, and that a range of ugly-but-legal slugs are accepted by all five 
 The BSD `tr` padding question remains unverified for want of a macOS host, at both the design
 and the review. It is the standing item for the branch review.
 
+## Corrections, 2026-08-10
+
+**The `DATE` injection payload asserted twice above — in "`DATE` is validated twice" and in
+Tests item 8 — is false.** Both say `make new DATE='x";touch PWNED;"'` created `PWNED`. It does
+not: `date_select` rejoins whatever it split on `-` with a literal hyphen regardless of what
+whitespace originally separated the pieces, so the payload's shell text becomes
+`touch-PWNED` — a command that does not exist — and no file is created. The escape through the
+GNU dialect's `-d "<date> 00:00:00"` is still real; it needs a **space-free** payload to
+demonstrate. `DATE='x";>PWNED;"'` does create `PWNED` against a build with the shape check
+removed, since `>` needs no space to redirect and survives the rejoin intact. This is what
+`test_new_does_not_execute_an_injected_date` in `tests/run.sh` now uses, and what the Task 6
+documentation cites. The original false claim traced back to a scratch reproduction run against
+a broken local redefinition of `space`, not against this Makefile's own.
+
+**This spec also never mentions `SANITIZE_TITLE`, and it should have.** The front-matter line
+`make new` writes is `printf 'title: %s\n' "$$TITLE"` — one line — so a title containing a
+newline would split the front matter in two, and `PARSE_FRONT_MATTER` would read the second
+line as something it is not (a stray body line preceding the real delimiter, or worse, text
+indistinguishable from a second `title:`). Step 1 of Slugification above removes control
+characters from the *slug*, but says nothing about the *front matter*, which is a separate
+string built from the raw `$$TITLE`. The implementation plan caught this gap and added
+`SANITIZE_TITLE` — the same `tr '[:cntrl:]' '[ *]'` translation as slug step 1, followed by a
+squeeze-and-trim of the resulting spaces, applied to the title as it is written into
+`title: …`, independent of and in addition to the slugification pipeline. It is pinned by
+`test_new_keeps_the_front_matter_on_one_line`. Recorded here because the plan's self-review
+already flagged it as "one thing the spec missed," and this is that fold-back.
+
 ## Out of scope
 
 Deliberately not built, to keep this one target: a `SLUG=` override, a `category=` config key

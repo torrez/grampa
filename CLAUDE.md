@@ -18,6 +18,8 @@ make clean     # wipe build/ and work/
 make build     # the build half of the default target (see below — it no longer skips anything)
 make deploy    # builds, then runs ./deploy.sh build/
 make test      # run tests/run.sh in throwaway sandboxes
+make new TITLE="A title" CATEGORY=home [DATE=2026-07-04]
+               # write posts/<date>-<category>_<slug>.txt and stop
 ```
 
 Builds are incremental: `make` only reprocesses posts whose `.txt` changed, plus anything
@@ -272,6 +274,70 @@ element for the same reason a control byte cannot. Within the control-character 
 residual really is one byte and not a category — CR is caught and renders `^M` — but the
 ruleset as a whole still has these two. Third, a **`:`** dies earlier and less helpfully, at
 `.SECONDARY`'s prerequisite list, with make's own `target pattern contains no '%'`.
+
+**`make new` writes a filename none of these rules can reject**, which is the whole reason it
+exists. `make new TITLE="Installing a doorbell" CATEGORY=home` writes
+`posts/<today>-home_installing-a-doorbell.txt` — a `title:` line and the delimiter `cat`ted
+from `.source/splitter.txt`, nothing else — prints the path, and stops. `DATE=` backdates.
+`TITLE` and `CATEGORY` are required; there is no default category and no `SLUG=` override.
+
+Slugification is bytewise under `LC_ALL=C`: control characters and every `BAD_CHARS` member
+plus `_` become spaces (`'` and `"` are deleted instead, so `Tom's` is `toms`), `A-Z` is
+lowercased, runs of spaces collapse, and spaces become hyphens. The `tr` sets are derived from
+`$(BAD_CHARS)` rather than retyped, so the generator strips exactly what the checker rejects.
+Non-ASCII survives — `Café notes` becomes `café-notes` and `日記` stays — because the grammar
+accepts it. So does `.`, so `Version 2.0 notes` keeps its dot. `CATEGORY` goes through the same
+pipeline and then has its edge hyphens trimmed — `CATEGORY='-x'` writes category `x`, because
+`category_slug` re-parses the filename by splitting on hyphens and a leading or trailing empty
+field drops out the same way `a-`.split(`-`) drops its trailing empty string; an *interior* run
+survives, so `CATEGORY='a--b'` keeps `a--b`.
+
+It refuses, before writing anything, on: a missing `TITLE` or `CATEGORY`, a title or category
+that slugifies to nothing (`!!!`), an existing file at that path, a post in another category
+that already builds the same permalink, and a `DATE` that is not three runs of digits or not a
+real calendar date.
+
+Six things to know:
+
+- **A pre-existing malformed post blocks it.** `make new` parses the whole Makefile, so a bad
+  filename already in `posts/` kills the invocation before it can write a good one. The tool
+  that prevents bad names cannot run in a directory that already has one.
+- **`$(…)` in `TITLE` or `DATE` is expanded by make before the recipe runs.** `make new
+  TITLE='$(shell echo PWNED)'` prints `PWNED` and titles the post `x`. Command-line variables
+  are expanded when make exports them, so no quoting in the recipe can help; it is the same
+  trust level as `markdown=` in `config`. `DATE` carries the identical hole for the identical
+  reason — `DATE='$(shell touch pwned)'` creates `./pwned` too, since `$(DATE)` is expanded by
+  make inside `$(if)`/`$(call)` before any shape check runs, and the post still gets written
+  dated today, because `$(shell …)` prints nothing so `$(DATE)` expands empty and the recipe's
+  own `day="$${DATE:-$$(date +%Y-%m-%d)}"` falls back exactly as it would for an unset `DATE`.
+  A literal `$(` in a title or date is typed by hand.
+- **`DATE` is also the one input that reaches the shell as recipe text, which is a second and
+  different hole from the one above.** `date_select` interpolates it, so unlike `TITLE` — which
+  is read from the environment as `$$TITLE` and is safe with `"`, `'`, `` ` `` and `&` — it
+  needs the `date_shape_bad` check, which runs in the `$(if)` branch that decides whether
+  `date_select` is expanded at all. Before that check existed, a `DATE` of `x";>PWNED;"`
+  created `PWNED` under the GNU dialect, where `date_select`'s text is `-d "<date> 00:00:00"`
+  and the `"` escapes the quoted string. (A space-bearing payload does not work as a demo here:
+  `date_select` rejoins whatever it split on `-` with a literal hyphen, so
+  `DATE='x";touch PWNED;"'` becomes the single token `touch-PWNED` — a command that does not
+  exist — regardless of the shape check. `>` needs no space to redirect, which is why the
+  working payload above uses it instead.)
+- **An unconfigured tree is asymmetric, and correctly so.** The default date is
+  `date +%Y-%m-%d` and expands no date helper, so `make new` works with no `config.mk`;
+  `DATE=` goes through `date_select` and says ``run `make setup` first``.
+- **A `TITLE` long enough to overflow the filesystem's name limit fails loud, but not in this
+  project's own voice.** A ~300-character `TITLE` dies with bash's own `File name too long` and
+  a `make: *** [Makefile:…: new] Error 1` — safe (nothing is written) but not a
+  `grampa: new:` refusal, because nothing here checks length before handing the composed name
+  to the shell.
+- **`CATEGORY='.'` is legal and builds a dot-hidden category page**, `build/category/..html` —
+  invisible to a bare `ls` of that directory. This is not new to `make new`: a hand-written
+  `posts/2026-01-02-._x.txt` builds the identical page today, on `main`, with no generator
+  involved — `.` is simply a legal category slug. `CATEGORY='-.-'` reaches the same state once
+  its edge hyphens are trimmed.
+
+Some legal slugs are ugly and stay legal: `TITLE='.'` builds `..html`, a leading or trailing
+hyphen survives, `'- - -'` gives `-----.html`. All five checks accept them.
 
 **The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
 `2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit (rendered year `0026`
@@ -941,7 +1007,7 @@ more than a format-string swap.
   load-bearing rather than symmetry with the build notice: the error says to run `make setup`,
   and `setup` parses this same Makefile, so without the gate it dies before its recipe can
   rewrite `config.mk` — the same deadlock already documented for `BAD_POST_DATES` and
-  `date_select`. `BUILD_GOAL` is a **denylist** (`NONBUILD_GOALS := clean setup test config`),
+  `date_select`. `BUILD_GOAL` is a **denylist** (`NONBUILD_GOALS := clean setup test config new`),
   not an allowlist: `make build/index.html` and `make work/X.staged` are ordinary builds that
   an allowlist of `all`/`build`/`deploy` would score as non-builds, leaving both the guard and
   the notice silent for exactly the targeted invocations someone debugging reaches for. A
@@ -950,6 +1016,13 @@ more than a format-string swap.
   of this file: it dies at this guard, during the parse, before `setup`'s recipe can rewrite
   `config.mk` — so the answer there is the same as everywhere else, `make setup` on its own
   and then `make`. Verified.
+
+  `new` is the first goal added to that list since it was written, and it is the case the
+  "fails loud on an unlisted future goal" line was describing: unlisted, `make new` prints the
+  markdown notice above `Created …` and dies on this very guard on an install predating
+  detection. Verified both halves by removing `new` from the list: on an ordinary install the
+  notice prints above `Created posts/…` at exit 0; on a `config.mk` holding only `DATE_DIALECT`
+  it dies at this `$(error)` before printing anything at all.
 - **`$(wildcard config.mk)` in `%.staged`'s prerequisites is the fifth member of the
   parse-time-vs-recipe-time family.** `config.mk` has no rule that builds it, so a bare
   prerequisite makes an unconfigured tree die with make's own

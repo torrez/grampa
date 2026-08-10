@@ -2090,6 +2090,19 @@ posts:
 # escapes the quoted string -- verified with the shape check
 # removed, see strip_digits/date_shape_bad above.
 #
+# DATE is ALSO make-expanded before any of that, the same $
+# gotcha as TITLE and CATEGORY above and not a second hole:
+# $(DATE) appears inside $(if), $(call date_shape_bad,$(DATE))
+# and $(call date_select,$(DATE)), all make-level, so
+# DATE='$(shell touch pwned)' runs touch right there, during
+# expansion, before date_shape_bad or date_select ever sees a
+# value. Verified: it creates ./pwned and still writes a post
+# dated today, because $(shell touch pwned) prints nothing, so
+# $(DATE) expands empty and the recipe's own
+# day="$${DATE:-$$(date +%Y-%m-%d)}" falls back the same way an
+# unset DATE does. Self-inflicted, same trust level as
+# markdown= in config and as TITLE's own $(shell) case.
+#
 # So DATE gets its own check, date_shape_bad, run BEFORE
 # date_select is ever called: $(if) expands only the branch it
 # takes, so a bad shape means date_select's argument never
@@ -2214,8 +2227,14 @@ posts:
 # refuses anything that is not three hyphen-separated runs of
 # digits, so a hand-supplied DATE can no longer carry a glob
 # character or a space into this line either. Verified post-fix:
-# DATE='2026-01-*' and a DATE containing a space are both refused
-# by the shape check, exit 1, before day is ever assigned. (This
+# DATE='2026-01-*' is refused by the shape check, exit 1, before
+# day is ever assigned. A DATE containing a space is refused or
+# stripped, never passed through: make strips LEADING whitespace
+# from a command-line variable before the shape check ever sees
+# it, so DATE=' 2026-01-02' reaches this line as a clean
+# 2026-01-02 -- but a TRAILING or INTERIOR space survives that
+# stripping and the shape check refuses it, exit 1, the same as
+# the glob case. Verified all three. (This
 # used to be open -- DATE had no validation before Task 5, and
 # both shapes above reached this line unquoted and wrote a file
 # at exit 0. Neither was ever a shell-injection hole here --
