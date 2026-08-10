@@ -3974,11 +3974,15 @@ test_new_keeps_the_front_matter_on_one_line() {
 }
 
 #
-# An empty title slug publishes build/<y>/<m>/<d>/.html and
-# is rejected by check_post_name; an empty category is
-# rejected by its sibling clause. Neither can reach the
-# build, because new refuses first -- and refuses without
-# writing.
+# An empty title slug never reaches the build: written
+# directly it dies at PARSE time on check_post_name's
+# empty-title-slug clause, before any recipe runs and before
+# anything publishes -- verified against a hand-written
+# posts/2026-01-02-home_.txt. An empty category dies the same
+# way on the sibling clause. new refuses first instead, and
+# refuses without writing, so neither of those parse-time
+# deaths -- which would also poison every LATER make new in
+# the same directory -- is ever reached.
 #
 test_new_refuses_a_title_with_no_usable_characters() {
 	sandbox new_empty_title_slug
@@ -4029,6 +4033,70 @@ test_new_accepts_an_all_hyphen_title() {
 	assert_file posts/2026-01-02-home_-----.txt
 	build || return
 	assert_file build/2026/01/02/-----.html
+}
+
+#
+# Never clobber. Everything else in this Makefile copies
+# with `yes n | cp -i`; this is that rule where cp is not
+# what does the writing. The assertion is on the OLD
+# CONTENT, not the exit status, so it fails against a
+# recipe that writes first and complains after.
+#
+test_new_refuses_an_existing_post() {
+	sandbox new_refuses_existing
+	build new TITLE="Hello there" CATEGORY=home DATE=2026-01-02 || return
+	printf 'title: Edited by hand\n-----------------------------------\n<p>MINE</p>\n' \
+		> posts/2026-01-02-home_hello-there.txt
+	build_expect_fail new TITLE="Hello there" CATEGORY=home DATE=2026-01-02 || return
+	assert_out_grep "already exists"
+	assert_grep posts/2026-01-02-home_hello-there.txt "MINE"
+}
+
+#
+# The category is not in the URL, so two posts sharing a
+# date and title slug in different categories both want
+# /2026/01/02/dup.html. CHECKED_POST_PAGES errors naming
+# both files; new refuses before the second one exists.
+#
+test_new_refuses_a_duplicate_permalink() {
+	sandbox new_refuses_duplicate
+	build new TITLE="Dup" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_dup.txt
+	build_expect_fail new TITLE="Dup" CATEGORY=work DATE=2026-01-02 || return
+	assert_out_grep "2026-01-02-home_dup.txt"
+	assert_no_file posts/2026-01-02-work_dup.txt
+	build || return
+	assert_file build/2026/01/02/dup.html
+}
+
+#
+# category_slug re-parses the filename by splitting on
+# hyphens, which drops a leading or trailing empty field the
+# same way `a-`.split("-") drops its trailing "". Untrimmed,
+# CATEGORY='-x' would write posts/<date>--x_t.txt -- a name
+# that parses to category "x", not "-x": the filename and the
+# category the post actually lands under would disagree. The
+# recipe trims cslug's edge hyphens after the hyphen-only
+# check runs (not before), so CATEGORY='-x', 'x-', and
+# '- x -' all collapse to the same file and the same category
+# page. An INTERIOR run is a different case and is left alone:
+# CATEGORY='a--b' keeps "a--b" in both the filename and the
+# page, matching category_slug's own handling of interior
+# hyphen runs.
+#
+test_new_trims_edge_hyphens_from_category() {
+	sandbox new_trims_edge_hyphens
+	build new TITLE=T CATEGORY='-x' DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-x_t.txt
+	build new TITLE=T2 CATEGORY='x-' DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-x_t2.txt
+	build new TITLE=T3 CATEGORY='- x -' DATE=2026-01-04 || return
+	assert_file posts/2026-01-04-x_t3.txt
+	build new TITLE=T4 CATEGORY='a--b' DATE=2026-01-05 || return
+	assert_file posts/2026-01-05-a--b_t4.txt
+	build || return
+	assert_file build/category/x.html
+	assert_file build/category/a--b.html
 }
 
 mkdir -p "$TMPROOT"
@@ -4202,5 +4270,8 @@ test_new_refuses_a_title_with_no_usable_characters
 test_new_refuses_a_category_with_no_usable_characters
 test_new_refuses_a_hyphen_only_category
 test_new_accepts_an_all_hyphen_title
+test_new_refuses_an_existing_post
+test_new_refuses_a_duplicate_permalink
+test_new_trims_edge_hyphens_from_category
 
 pass_fail_summary

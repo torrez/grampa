@@ -2082,6 +2082,49 @@ posts:
 # - -' builds -----.html -- so only the category gets the
 # stricter check.
 #
+# Past that check, cslug still has its EDGE hyphens trimmed --
+# CATEGORY='-x' slugifies to "-x", which is not all-hyphens, so
+# the check above lets it through, but category_slug re-parses
+# the filename by splitting on hyphens and takes a wordlist,
+# which drops a leading or trailing empty field the same way
+# `a-` splits to just "a". Untrimmed, the file is named
+# posts/<date>--x_t.txt but the category it parses to is "x",
+# so the name on disk and the category the post actually lands
+# in disagree. Trimming here makes the filename say what
+# category_slug will read: posts/<date>-x_t.txt for
+# CATEGORY='-x', 'x-', or '- x -' alike (slugify turns each
+# space into a hyphen first, so '- x -' is "--x--" before this
+# trim). An INTERIOR run is untouched -- sed only strips
+# leading and trailing hyphens, so CATEGORY='a--b' keeps its
+# "a--b" in both the filename and the category page, matching
+# category_slug's own preservation of interior runs. Verified
+# all four shapes end-to-end, filename and built category page
+# alike.
+#
+# f is composed, then two refusals run before anything is
+# written: -e and not -f, because a directory or a symlink at
+# that path is still something new must not write through; then
+# a glob over posts/ for any OTHER file already claiming the
+# same date-and-title-slug permalink, since the category is not
+# part of the URL. Both fire before the write, not after --
+# verified by hand, not just by exit status: a second `make new`
+# for the same permalink leaves posts/ holding exactly the one
+# file the first call wrote.
+#
+# The glob is unquoted, which is safe for slug: * ? [ ] are all
+# BAD_CHARS members, so the slugifier has already translated them
+# out of it before this line ever runs. day is not closed the
+# same way -- DATE= has no validation yet (that is Task 5), so a
+# DATE containing a space or a glob character reaches this line
+# unquoted too. Verified: DATE='2026-01-*' writes
+# posts/2026-01-*-home_hello.txt today, and DATE with a space
+# writes a file whose name contains that space, both at exit 0.
+# Neither is a shell-injection hole -- day is only ever used as
+# data, never evaluated -- but it means the "day can't carry a
+# glob" property this comment would like to claim does not hold
+# yet for a hand-supplied DATE. It holds for the common case,
+# DATE left unset, where day is date(1)'s own %Y-%m-%d output.
+#
 .PHONY: new
 new: posts
 	@if [ -z "$$TITLE" ]; then \
@@ -2095,7 +2138,13 @@ new: posts
 		echo "grampa: new: TITLE has no usable characters" >&2; exit 1; fi; \
 	if [ -z "$$(printf '%s' "$$cslug" | LC_ALL=C tr -d '-')" ]; then \
 		echo "grampa: new: CATEGORY has no usable characters" >&2; exit 1; fi; \
+	cslug=$$(printf '%s' "$$cslug" | sed 's/^-*//; s/-*$$//'); \
 	f="posts/$$day-$${cslug}_$${slug}.txt"; \
+	if [ -e "$$f" ]; then \
+		echo "grampa: new: already exists -- $$f" >&2; exit 1; fi; \
+	dup=$$(ls posts/$$day-*_$${slug}.txt 2>/dev/null | head -1); \
+	if [ -n "$$dup" ]; then \
+		echo "grampa: new: $$dup already builds that permalink" >&2; exit 1; fi; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
 	  cat .source/splitter.txt; } > "$$f" && \
 	echo "Created $$f"
