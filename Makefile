@@ -528,9 +528,10 @@ bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 # The backslash is DOUBLED, and that is not decoration: a
 # literal \ in a tr set is an escape introducer, so the
 # undoubled set spends it escaping the ] beside it and
-# leaves a backslash in the title untranslated. Verified --
-# a\b^c]d came through as a\b c d before the doubling and
-# a-b-c-d after.
+# leaves a backslash in the title untranslated. Verified
+# through the whole SLUGIFY pipeline -- a\b^c]d came through
+# as a\b-c-d before the doubling (the backslash surviving
+# untouched) and a-b-c-d after.
 #
 SLUG_DELETE := \047\042
 SLUG_XLAT := $(subst \,\\,$(subst $(space),,$(filter-out ' ",$(BAD_CHARS))))_
@@ -2041,6 +2042,17 @@ posts:
 # than printfed, so those 35 hyphens keep exactly one
 # authority -- the %.staged recipe reads the same file.
 #
+# The write and the final echo are joined with && rather than
+# ;, on purpose: this shell runs without -e, so a ; would let
+# a failed cat .source/splitter.txt -- an unreadable or
+# missing file -- still print "Created" at exit 0, leaving a
+# delimiter-less post that a later build silently renders with
+# an empty body. Verified both ways: with ;, chmod 000
+# .source/splitter.txt made new print Created and exit 0 over
+# a title-only file; && makes the same case fail loud instead,
+# the same class of bug the .staged recipe's && chain exists
+# to prevent.
+#
 .PHONY: new
 new: posts
 	@if [ -z "$$TITLE" ]; then \
@@ -2052,7 +2064,7 @@ new: posts
 	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
 	f="posts/$$day-$${cslug}_$${slug}.txt"; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
-	  cat .source/splitter.txt; } > "$$f"; \
+	  cat .source/splitter.txt; } > "$$f" && \
 	echo "Created $$f"
 
 #

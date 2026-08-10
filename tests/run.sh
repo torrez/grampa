@@ -46,9 +46,14 @@ unset MAKELEVEL MAKEFLAGS MFLAGS
 # An exported host TITLE or CATEGORY would otherwise satisfy
 # make new's required-variable check on its own, making
 # test_new_requires_a_title/_category fail depending on what
-# the caller's shell happened to have set.
+# the caller's shell happened to have set. DATE joins them for
+# the same reason: every test that calls `new` today passes
+# DATE= explicitly and so is unaffected, but new also reads a
+# bare $$DATE straight from the environment, and an inherited
+# host value would otherwise silently win for any future test
+# that omits it.
 #
-unset TITLE CATEGORY
+unset TITLE CATEGORY DATE
 
 #
 # Which make the suite drives. Every call below goes through
