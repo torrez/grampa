@@ -510,6 +510,93 @@ BAD_CHARS := ! " \# $$ % & ' ( ) * + , / : ; < = > ? @ [ \ ] ^ ` { | } ~
 bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
 
 #
+# The two tr sets make new slugifies with, derived from
+# BAD_CHARS rather than retyped. A second, independently
+# written copy of that list is the drift date_select is
+# factored to avoid: a generator that strips a different set
+# than the checker rejects is the same class of defect as no
+# generator at all.
+#
+# SLUG_DELETE is the two quote characters, written as tr's
+# own octal escapes because no single shell quoting handles
+# both at once. They are DELETED rather than translated, so
+# "Tom's doorbell" becomes toms-doorbell and not
+# tom-s-doorbell.
+#
+# SLUG_XLAT is everything else in BAD_CHARS, plus the _ that
+# separates category from slug and which new writes itself.
+# The backslash is DOUBLED, and that is not decoration: a
+# literal \ in a tr set is an escape introducer, so the
+# undoubled set spends it escaping the ] beside it and
+# leaves a backslash in the title untranslated. Verified --
+# a\b^c]d came through as a\b c d before the doubling and
+# a-b-c-d after.
+#
+SLUG_DELETE := \047\042
+SLUG_XLAT := $(subst \,\\,$(subst $(space),,$(filter-out ' ",$(BAD_CHARS))))_
+
+#
+# The slug pipeline, as one shell fragment, used twice --
+# once for the title and once for the category. Written as a
+# variable rather than twice in the recipe for the same
+# reason the tr sets are derived: two copies drift.
+#
+# Every stage is LC_ALL=C, which is what makes it UTF-8
+# safe. A multi-byte character's continuation bytes are all
+# >= 0x80 and can never collide with the ASCII punctuation
+# being stripped, so café and 日記 survive into filenames
+# the grammar already accepts. The lowercase stage is
+# A-Z only for the same reason: a bytewise tr cannot
+# case-fold É, so it leaves it alone rather than mangling
+# it.
+#
+# The [:cntrl:] stage is FIRST, and it is a separate stage
+# rather than a BAD_CHARS clause -- mirroring the split
+# between bad_chars_in above and CONTROL_CHAR_NAMES below,
+# and for the same reason: a control byte cannot be an
+# element of a make list. Without it the invariant is simply
+# false. Control bytes are not in BAD_CHARS, nothing else
+# here touches them, and a lone tab is not an empty slug, so
+# a tab in a title wrote posts/...home_a<TAB>b.txt at exit
+# 0 and a NEWLINE wrote a name that breaks every LATER
+# build: ls prints it as two lines, the grep drops one, and
+# the check dies naming posts/lines.txt, a file that does
+# not exist. The generator built the one name its own
+# successor cannot survive. Reproduced end to end.
+#
+# Translated to a space rather than deleted, so a pasted
+# two-line title becomes two-lines and not twolines.
+#
+# tr's set2 is written '[ *]' and not ' ': GNU tr pads a
+# short set2 with its last character, POSIX leaves that to
+# the implementation, and this project treats macOS as
+# first-class. Verified on GNU; the BSD leg is the standing
+# item for the branch review.
+#
+SLUGIFY := LC_ALL=C tr '[:cntrl:]' '[ *]' \
+	| LC_ALL=C tr -d '$(SLUG_DELETE)' \
+	| LC_ALL=C tr '$(SLUG_XLAT)' '[ *]' \
+	| LC_ALL=C tr 'A-Z' 'a-z' \
+	| LC_ALL=C tr -s ' ' \
+	| sed 's/^ *//; s/ *$$//' \
+	| LC_ALL=C tr ' ' '-'
+
+#
+# The title as it goes into the front matter: kept verbatim
+# except that control characters become spaces.
+#
+# That exception is load-bearing rather than tidy. The front
+# matter is ONE LINE -- printf 'title: %s\n' -- so a newline
+# in the title splits it in two, and PARSE_FRONT_MATTER
+# reads the second line as something it is not. Squeezing
+# runs of spaces afterwards keeps a pasted multi-line title
+# from becoming a line of gaps.
+#
+SANITIZE_TITLE := LC_ALL=C tr '[:cntrl:]' '[ *]' \
+	| LC_ALL=C tr -s ' ' \
+	| sed 's/^ *//; s/ *$$//'
+
+#
 # Control characters, rejected before anything tries to
 # make sense of the filename's shape.
 #
@@ -1921,9 +2008,11 @@ posts:
 # parse-time errors a hand-typed filename can trip, and this
 # target must be incapable of emitting a name that trips any
 # of them -- its output set is a subset of the grammar's
-# accepted set. Every refusal below holds that line, and
-# each one happens BEFORE anything is written, so a refused
-# new leaves posts/ byte-identical.
+# accepted set. Every refusal below holds that line, and each
+# one happens BEFORE anything is written, so a refused new
+# writes nothing into posts/. (posts is still a prerequisite,
+# so its mkdir -p runs first -- on a virgin tree a refused new
+# does leave behind an empty posts/, not a byte-identical one.)
 #
 # TITLE and CATEGORY are read from the ENVIRONMENT, not
 # interpolated into the recipe text. Make exports
@@ -1948,13 +2037,23 @@ posts:
 # this work on a tree that has never built. config is not
 # needed -- no config key is read here.
 #
+# The delimiter is catted from .source/splitter.txt rather
+# than printfed, so those 35 hyphens keep exactly one
+# authority -- the %.staged recipe reads the same file.
+#
 .PHONY: new
 new: posts
 	@if [ -z "$$TITLE" ]; then \
 		echo "grampa: new: TITLE= is required" >&2; exit 1; fi; \
 	if [ -z "$$CATEGORY" ]; then \
 		echo "grampa: new: CATEGORY= is required" >&2; exit 1; fi; \
-	echo "Created posts/PLACEHOLDER"
+	day="$${DATE:-$$(date +%Y-%m-%d)}"; \
+	slug=$$(printf '%s' "$$TITLE" | $(SLUGIFY)); \
+	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
+	f="posts/$$day-$${cslug}_$${slug}.txt"; \
+	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
+	  cat .source/splitter.txt; } > "$$f"; \
+	echo "Created $$f"
 
 #
 # config.mk is generated, not copied: setup probes date(1)

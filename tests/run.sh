@@ -42,6 +42,13 @@ CURRENT=""
 # depend on the environment it inherits.
 #
 unset MAKELEVEL MAKEFLAGS MFLAGS
+#
+# An exported host TITLE or CATEGORY would otherwise satisfy
+# make new's required-variable check on its own, making
+# test_new_requires_a_title/_category fail depending on what
+# the caller's shell happened to have set.
+#
+unset TITLE CATEGORY
 
 #
 # Which make the suite drives. Every call below goes through
@@ -3821,6 +3828,108 @@ test_new_works_with_a_file_named_new() {
 	assert_out_grep "Created posts/"
 }
 
+#
+# The round trip. The one test that proves the invariant end
+# to end rather than in pieces: whatever name new chose, the
+# build accepts it and publishes the permalink it implies.
+#
+test_new_creates_a_post_that_builds() {
+	sandbox new_round_trip
+	build new TITLE="Installing a Doorbell" CATEGORY=home DATE=2026-08-06 || return
+	assert_file posts/2026-08-06-home_installing-a-doorbell.txt
+	assert_grep posts/2026-08-06-home_installing-a-doorbell.txt "title: Installing a Doorbell"
+	assert_grep posts/2026-08-06-home_installing-a-doorbell.txt "-----------------------------------"
+	build || return
+	assert_file build/2026/08/06/installing-a-doorbell.html
+	assert_grep build/2026/08/06/installing-a-doorbell.html "<h4>Installing a Doorbell</h4>"
+	assert_file build/category/home.html
+}
+
+#
+# The slug table from the spec, one assertion per class.
+# Each title is run in its own sandbox because a failure
+# that leaves a bad filename behind poisons every later
+# make in the same directory.
+#
+test_new_slugifies_a_title() {
+	sandbox new_slugify
+	build new TITLE="Tom & Jerry: part 2" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_tom-jerry-part-2.txt
+	build new TITLE="Tom's doorbell" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_toms-doorbell.txt
+	build new TITLE="A/B testing" CATEGORY=home DATE=2026-01-04 || return
+	assert_file posts/2026-01-04-home_a-b-testing.txt
+	build new TITLE="Version 2.0 notes" CATEGORY=home DATE=2026-01-05 || return
+	assert_file posts/2026-01-05-home_version-2.0-notes.txt
+	build new TITLE="  spaced   out  " CATEGORY=home DATE=2026-01-06 || return
+	assert_file posts/2026-01-06-home_spaced-out.txt
+	build new TITLE="Under_scored" CATEGORY=home DATE=2026-01-07 || return
+	assert_file posts/2026-01-07-home_under-scored.txt
+	build || return
+	assert_file build/2026/01/05/version-2.0-notes.html
+}
+
+#
+# The category goes through the same pipeline, so a
+# two-word category becomes the hyphenated slug the
+# Makefile's category rules already understand.
+#
+test_new_slugifies_a_category() {
+	sandbox new_slugify_category
+	build new TITLE="Backup script" CATEGORY="Project Ideas" DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-project-ideas_backup-script.txt
+	build || return
+	assert_file build/category/project-ideas.html
+}
+
+#
+# Non-ASCII is legal in a grampa filename, so the slugifier
+# must not eat it. Every tr stage is LC_ALL=C and therefore
+# bytewise, which is exactly what keeps a multi-byte
+# character intact: its continuation bytes are all >= 0x80
+# and cannot collide with the ASCII punctuation being
+# stripped. ASCII is lowercased; É is not, because a
+# bytewise tr cannot case-fold it.
+#
+test_new_keeps_non_ascii() {
+	sandbox new_non_ascii
+	build new TITLE="Café notes" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_café-notes.txt
+	build new TITLE="日記 #1" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_日記-1.txt
+	build || return
+	assert_file build/2026/01/02/café-notes.html
+}
+
+#
+# The hostile title. Nothing executes, and the title lands
+# in the front matter byte for byte -- which is also a test
+# of fill(), since & in a replacement is the bug fill()
+# exists to avoid.
+#
+#
+# $HOME is deliberately in here too, and it does NOT survive
+# as typed: TITLE is a command-line variable, so make expands
+# it while building the recipe's environment -- before the
+# shell that reads "$$TITLE" starts -- and $H is make's own
+# reference to the (undefined) one-letter variable H, which
+# vanishes and leaves OME behind. That is the same $ gotcha
+# documented above the new rule (a bare $5 vanishes the same
+# way), not a bug in the slugifier; verified with a two-line
+# makefile that only echoes "$$TITLE", independent of this
+# feature. The expected names below say "ome", not "home",
+# for that reason.
+#
+test_new_survives_a_hostile_title() {
+	sandbox new_hostile_title
+	build new TITLE='Tom & "Jerry" '"'"'s $HOME `whoami` \z' CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt
+	assert_grep posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt 'Tom & "Jerry"'
+	assert_grep posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt '`whoami`'
+	build || return
+	assert_grep build/2026/01/02/tom-jerry-s-ome-whoami-z.html 'Tom &'
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -3981,5 +4090,10 @@ test_new_requires_a_title
 test_new_requires_a_category
 test_new_prints_no_markdown_notice
 test_new_works_with_a_file_named_new
+test_new_creates_a_post_that_builds
+test_new_slugifies_a_title
+test_new_slugifies_a_category
+test_new_keeps_non_ascii
+test_new_survives_a_hostile_title
 
 pass_fail_summary
