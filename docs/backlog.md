@@ -862,6 +862,49 @@ correctly in three tries.
 
 ---
 
+### 15. NEW, STILL OPEN — a hand-typed doubled-hyphen date in a post filename silently clobbers a same-permalink post's page at exit 0, on `main` today, no `make new` involved
+
+Found during the `make new` branch's pre-merge fix wave, while reproducing the DATE=
+validation finding below it (a `date_shape_bad` hole that let `make new` *write* a filename
+of this shape). This entry is the other half: `page_for`/`CHECKED_POST_PAGES`, the machinery
+that turns a filename into a build target and catches colliding permalinks, are untouched by
+that branch, so the same clobber is reachable today on `main` by typing the filename by hand —
+no generator, no `DATE=`, nothing branch-specific. **Verified** against a plain checkout with
+`make setup` run and nothing else changed.
+
+```sh
+printf 'title: Real\n-----------------------------------\n<p>REAL BODY</p>\n' \
+  > posts/2026-01-02-home_x.txt
+make                                            # publishes build/2026/01/02/x.html, "REAL BODY"
+printf 'title: Evil\n-----------------------------------\n<p>EVIL BODY</p>\n' \
+  > posts/2026-01--02-evil_x.txt                # note the doubled hyphen before "02"
+make
+```
+
+The second `make` exits **0** and prints `Building build/2026/01//02/x.html` — the doubled
+hyphen survives `date_and_category`/`category_slug`'s hyphen-splitting into a **double slash**
+in the target path, since paths are built straight from the filename's date fields with no
+normalization. `build/2026/01//02/x.html` and `build/2026/01/02/x.html` are the same file on
+every POSIX filesystem — the kernel collapses a repeated `/` — but `CHECKED_POST_PAGES`
+compares the two path *strings* byte-exactly with `$(filter)`, which does not, so no collision
+is ever reported. Whichever post's rule runs last wins the write; in this reproduction that is
+the "evil" post, and `cat build/2026/01/02/x.html` afterward shows `EVIL BODY`, not `REAL
+BODY` — the real post's page silently replaced, at exit 0, with `make deploy` shipping exactly
+that.
+
+Same family as "The guards compare byte-exactly, and on a case-insensitive filesystem that is
+a hole" (`CLAUDE.md`, static-file guards) and its sibling two-post-slugs-differing-only-in-case
+gotcha for posts (`2026-08-07-home_dup.txt` / `2026-08-07-work_Dup.txt`, both documented as
+publishing side by side rather than colliding) — a third instance of the same root cause,
+byte-exact comparison where the filesystem (or, here, the URL-path normalization every server
+and browser does) does not agree that the two strings name different things. Not fixed here
+and not ranked: it predates this branch, `page_for`/`CHECKED_POST_PAGES` were not touched by
+it, and closing it needs the collision check to normalize (or reject) repeated hyphens the same
+deliberate way the character check already rejects other shapes a filename could take —
+scoped work for its own task, not a side effect of validating `make new`'s input.
+
+---
+
 ## Minor
 
 Every bullet below was re-checked in the second sweep. Line anchors are current as of

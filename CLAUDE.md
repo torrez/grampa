@@ -297,7 +297,7 @@ that slugifies to nothing (`!!!`), an existing file at that path, a post in anot
 that already builds the same permalink, and a `DATE` that is not three runs of digits or not a
 real calendar date.
 
-Six things to know:
+Seven things to know:
 
 - **A pre-existing malformed post blocks it.** `make new` parses the whole Makefile, so a bad
   filename already in `posts/` kills the invocation before it can write a good one. The tool
@@ -340,6 +340,27 @@ Six things to know:
   `posts/2026-01-02-._x.txt` builds the identical page today, on `main`, with no generator
   involved — `.` is simply a legal category slug. `CATEGORY='-.-'` reaches the same state once
   its edge hyphens are trimmed.
+- **A `DATE` with an edge or doubled hyphen, or a trailing or interior space, is refused, and
+  getting that right took two tries.** `date_shape_bad` word-counts on hyphen boundaries, and
+  make's word-splitting collapses a run of separators the same way `$(words "a  b")` is 2 not
+  3 — so `2026-01-02-`, `-2026-01-02`, `2026-01--02` and `2026--01-02` all count 3 words,
+  indistinguishable from a clean date at that stage. Stage two used to erase the decoration
+  along with the count (`$(subst -,,...)`), so all four wrote their raw, decorated string
+  straight into the filename at exit 0 — one of them collided with an existing post's
+  permalink and then wedged every later `make new` in the directory at parse time. The fix
+  compares the digit-stripped string against the word `--` with `$(filter-out)` rather than
+  erasing hyphens outright — but `$(filter-out)` is itself word-based, so on its own it swaps
+  one collapse for another: a *trailing* space in `DATE` is not a hyphen, survives to the
+  digit-stripped form as `-- ` (two hyphens, one space), and `$(filter-out --,...)` treats
+  that as the single word `--` and removes it, wrongly accepting a space into the filename.
+  The actual fix adds `$(findstring $(space),$(1))`, a plain substring search against the
+  *unstripped* `DATE` that cannot collapse anything, so a trailing or interior space is caught
+  independently of the hyphen logic. (Leading whitespace never reaches the check at all — make
+  strips it from a command-line variable before any of this runs.) See the comment above
+  `date_shape_bad` in the Makefile for the full derivation, including the naive
+  `$(subst --,,...)` alternative that fixes the whitespace hole but reopens a different one:
+  `-2026-01-02-`, decorated on *both* edges, digit-strips to `----`, and `$(subst)` removes
+  all non-overlapping `--` pairs in one pass, collapsing `----` straight to empty.
 
 Some legal slugs are ugly and stay legal: `TITLE='.'` builds `..html`, a leading or trailing
 hyphen survives, `'- - -'` gives `-----.html`. All five checks accept them.
