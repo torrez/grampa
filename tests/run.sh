@@ -4117,6 +4117,90 @@ test_new_refuses_a_duplicate_permalink_that_is_a_directory() {
 	assert_no_file posts/2026-04-02-home_d.txt
 }
 
+test_new_backdates_with_date() {
+	sandbox new_backdates
+	build new TITLE="Old news" CATEGORY=home DATE=2026-07-04 || return
+	assert_file posts/2026-07-04-home_old-news.txt
+	build || return
+	assert_file build/2026/07/04/old-news.html
+	assert_grep build/2026/07/04/old-news.html "July 04, 2026"
+}
+
+#
+# The grammar accepts an unpadded date, so the shape check
+# must too, or new would be unable to write a name the build
+# accepts -- the invariant in the other direction.
+#
+test_new_accepts_an_unpadded_date() {
+	sandbox new_unpadded_date
+	build new TITLE="Fourth" CATEGORY=home DATE=2026-7-4 || return
+	assert_file posts/2026-7-4-home_fourth.txt
+	build || return
+	assert_file build/2026/7/4/fourth.html
+}
+
+test_new_refuses_an_impossible_date() {
+	sandbox new_impossible_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-02-30 || return
+	assert_out_grep "2026-02-30"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_malformed_date() {
+	sandbox new_malformed_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=20xx-ab-cd || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# date_select interpolates its argument into RECIPE TEXT,
+# not into the environment, so unlike TITLE it is not
+# protected by the export discipline. Under the gnu twin
+# that text is -d "<date> 00:00:00" and one " escapes it.
+# Verified before the fix: this payload created the file.
+#
+# The shape check is what closes it, and it has to be
+# make-level: $(if) expands only the branch it takes, so a
+# bad shape means date_select is never expanded with the
+# payload at all.
+#
+test_new_does_not_execute_an_injected_date() {
+	sandbox new_injected_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE='x";touch PWNED;"' || return
+	assert_no_file PWNED
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The default-date path expands no date helper, so it works
+# on a tree that has never been set up. The DATE= path goes
+# through date_select, whose else branch is the $(error), so
+# it says what every other unconfigured dated thing says.
+#
+# The first half is the R2 test: it fails against a
+# shell-guarded date_select, because make expands the whole
+# recipe line before the shell sees any of it and the
+# $(error) fires in a branch the shell would never have run.
+#
+test_new_works_without_config_mk() {
+	sandbox new_no_config_mk
+	rm -f config.mk
+	build new TITLE="Unconfigured" CATEGORY=home || return
+	assert_out_grep "Created posts/"
+	if ls posts/*-home_unconfigured.txt >/dev/null 2>&1; then ok; else fail "no post written" "$(ls posts)"; fi
+}
+
+test_new_with_date_needs_config_mk() {
+	sandbox new_date_no_config_mk
+	rm -f config.mk
+	build_expect_fail new TITLE="Unconfigured" CATEGORY=home DATE=2026-01-02 || return
+	assert_out_grep "run \`make setup\` first"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -4292,5 +4376,12 @@ test_new_refuses_an_existing_post
 test_new_refuses_a_duplicate_permalink
 test_new_trims_edge_hyphens_from_category
 test_new_refuses_a_duplicate_permalink_that_is_a_directory
+test_new_backdates_with_date
+test_new_accepts_an_unpadded_date
+test_new_refuses_an_impossible_date
+test_new_refuses_a_malformed_date
+test_new_does_not_execute_an_injected_date
+test_new_works_without_config_mk
+test_new_with_date_needs_config_mk
 
 pass_fail_summary

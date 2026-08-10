@@ -454,6 +454,45 @@ date_from_filename = $(shell date $(call date_select,$(1)) "+%B %d, %Y")
 rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %b %Y %H:%M:%S %z")
 
 #
+# The ten digit characters, removed. make has no character
+# classes, so the enumeration is the check -- the same shape
+# BAD_CHARS uses further down, and closed the same way.
+#
+strip_digits = $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1)))))))))))
+
+#
+# Empty when $(1) is three hyphen-separated runs of digits,
+# non-empty otherwise. make new checks DATE= with this
+# BEFORE date_select is expanded, and that order is the
+# whole point rather than tidiness.
+#
+# date_select interpolates its argument into RECIPE TEXT --
+# it is the one date site whose input is not a filename that
+# has already been through the character check. Under the
+# gnu twin the text is -d "<date> 00:00:00", so a single "
+# in DATE escapes it. Verified against date $(call
+# date_select,$(DATE)) with the shape check removed:
+# DATE='x";>PWNED;"' created PWNED. (The brief's own example
+# payload, DATE='x";touch PWNED;"', does NOT reproduce that --
+# date_select rejoins split words with a literal hyphen
+# regardless of what whitespace separated them, so the space
+# in "touch PWNED" becomes "touch-PWNED", a command that does
+# not exist. The escape is still real; it just needs a
+# space-free payload to demonstrate with this particular
+# shell verb.)
+#
+# $(if) expands only the branch it takes, which is what
+# makes this a fix and not a warning: a bad shape means the
+# branch containing date_select is never expanded, so the
+# payload never becomes recipe text at all.
+#
+# It accepts an unpadded 2026-7-4, because the grammar does.
+# A generator that refused a name the build accepts would be
+# wrong in the other direction.
+#
+date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(subst -,,$(call strip_digits,$(1))),$(1))
+
+#
 # Post filenames are y-m-d-<category>_<title>.txt.
 # Splitting on the underscore first gives two halves:
 # the date and category on the left, the title slug on
@@ -2034,6 +2073,38 @@ posts:
 # TITLE. No quoting in this recipe can close that -- the
 # value is already consumed before the recipe body runs.
 #
+# DATE is not on the environment-read list above, and cannot
+# be: date_select interpolates its argument into RECIPE TEXT,
+# not into the environment, so the export discipline that
+# protects TITLE and CATEGORY does not reach it. Under the gnu
+# dialect that text is -d "<date> 00:00:00", and one " in DATE
+# escapes the quoted string -- verified with the shape check
+# removed, see strip_digits/date_shape_bad above.
+#
+# So DATE gets its own check, date_shape_bad, run BEFORE
+# date_select is ever called: $(if) expands only the branch it
+# takes, so a bad shape means date_select's argument never
+# becomes recipe text at all. A shape that passes is then
+# handed to date $(call date_select,$(DATE)) itself, to catch
+# a well-formed but impossible date (2026-02-30) the same way
+# the parse-time BAD_POST_DATES check does for existing posts.
+# The message names [$$DATE], the environment variable, and
+# never $(DATE) -- interpolating the value into the message
+# would put the payload straight back into recipe text through
+# the door the shape check just closed.
+#
+# The outer $(if $(DATE),...) is what keeps the no-DATE path
+# free of date_select entirely: a shell-level guard cannot do
+# this, because make expands the whole recipe line before the
+# shell sees any of it, so an if [ -n "$$DATE" ]; then date
+# $(call date_select,$(DATE)); fi would still expand
+# date_select's else-branch $(error) on an unconfigured tree
+# even when no DATE was given.
+#
+# The shape check accepts an unpadded 2026-7-4, because the
+# grammar does -- a generator that refused a name the build
+# accepts would be wrong in the other direction.
+#
 # posts is the only prerequisite: its mkdir -p is what makes
 # this work on a tree that has never built. config is not
 # needed -- no config key is read here.
@@ -2129,18 +2200,21 @@ posts:
 #
 # The glob is unquoted, which is safe for slug: * ? [ ] are all
 # BAD_CHARS members, so the slugifier has already translated them
-# out of it before this line ever runs. day is not closed the
-# same way -- DATE= has no validation yet (that is Task 5), so a
-# DATE containing a space or a glob character reaches this line
-# unquoted too. Verified: DATE='2026-01-*' writes
-# posts/2026-01-*-home_hello.txt today, and DATE with a space
-# writes a file whose name contains that space, both at exit 0.
-# Neither is a shell-injection hole -- day is only ever used as
-# data, never evaluated as a command -- but it means the "day
-# can't carry a glob" property this comment would like to claim
-# does not hold yet for a hand-supplied DATE. It holds for the
-# common case, DATE left unset, where day is date(1)'s own
-# %Y-%m-%d output.
+# out of it before this line ever runs. day is closed the same
+# way now: the DATE= validation above runs before day= and
+# refuses anything that is not three hyphen-separated runs of
+# digits, so a hand-supplied DATE can no longer carry a glob
+# character or a space into this line either. Verified post-fix:
+# DATE='2026-01-*' and a DATE containing a space are both refused
+# by the shape check, exit 1, before day is ever assigned. (This
+# used to be open -- DATE had no validation before Task 5, and
+# both shapes above reached this line unquoted and wrote a file
+# at exit 0. Neither was ever a shell-injection hole here --
+# day is only ever used as data on this line, never evaluated as
+# a command -- but the "day can't carry a glob" property this
+# comment claims did not hold for a hand-supplied DATE until now.)
+# The common case, DATE left unset, was always closed: day is
+# then date(1)'s own %Y-%m-%d output.
 #
 .PHONY: new
 new: posts
@@ -2148,6 +2222,10 @@ new: posts
 		echo "grampa: new: TITLE= is required" >&2; exit 1; fi; \
 	if [ -z "$$CATEGORY" ]; then \
 		echo "grampa: new: CATEGORY= is required" >&2; exit 1; fi; \
+	$(if $(DATE),$(if $(call date_shape_bad,$(DATE)),\
+		echo "grampa: new: DATE must be YYYY-MM-DD -- got [$$DATE]" >&2; exit 1;,\
+		date $(call date_select,$(DATE)) >/dev/null 2>&1 || \
+			{ echo "grampa: new: not a real date -- [$$DATE]" >&2; exit 1; };)) \
 	day="$${DATE:-$$(date +%Y-%m-%d)}"; \
 	slug=$$(printf '%s' "$$TITLE" | $(SLUGIFY)); \
 	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
