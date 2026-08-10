@@ -3771,6 +3771,56 @@ test_sandbox_hides_host_markdown_tools() {
 	assert_eq "PATH is prefixed with the sandbox bin" "$SBOX/bin" "${PATH%%:*}"
 }
 
+#
+# ---------------------------------------------------
+# make new: the post generator.
+#
+# The feature's whole value is an invariant: it must be
+# incapable of emitting a filename any of the five
+# parse-time checks rejects. Most of these tests are that
+# invariant from one side or another.
+# ---------------------------------------------------
+#
+
+test_new_requires_a_title() {
+	sandbox new_requires_a_title
+	build_expect_fail new CATEGORY=home || return
+	assert_out_grep "TITLE"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_requires_a_category() {
+	sandbox new_requires_a_category
+	build_expect_fail new TITLE="Hello there" || return
+	assert_out_grep "CATEGORY"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# new joins NONBUILD_GOALS, so BUILD_GOAL is empty for this
+# invocation and the parse-time markdown $(info) stays
+# quiet. Mutation-catchable: drop `new` from the list and
+# this fails.
+#
+test_new_prints_no_markdown_notice() {
+	sandbox new_no_notice
+	build new TITLE="Hello there" CATEGORY=home || return
+	assert_out_not_grep "grampa: markdown:"
+	assert_out_grep "Created posts/"
+}
+
+#
+# Same shape as test_clean_works_with_a_file_named_clean:
+# `new` is named after nothing on disk, but make does not
+# know that until .PHONY says so.
+#
+test_new_works_with_a_file_named_new() {
+	sandbox new_file_named_new
+	touch new
+	build new TITLE="Hello there" CATEGORY=home || return
+	assert_out_grep "Created posts/"
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -3926,5 +3976,10 @@ test_build_works_without_a_static_directory
 test_setup_creates_static_with_the_stylesheet
 test_setup_does_not_clobber_an_edited_stylesheet
 test_stock_stylesheet_is_published_and_linked
+
+test_new_requires_a_title
+test_new_requires_a_category
+test_new_prints_no_markdown_notice
+test_new_works_with_a_file_named_new
 
 pass_fail_summary

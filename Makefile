@@ -61,7 +61,16 @@ SHELL := /bin/bash
 # goal; an allowlist fails silent. It must be kept in sync
 # with the phony non-build targets.
 #
-NONBUILD_GOALS := clean setup test config
+# new is the first goal added to this list after it was
+# written, and it is what the "unlisted future goal" line
+# above was about. Without it BUILD_GOAL is non-empty for a
+# `make new`, so the parse-time markdown notice prints above
+# "Created ...", and on an install predating detection the
+# origin DETECTED_MARKDOWN guard fires -- so make new dies
+# telling you to run make setup, on the one goal that has
+# nothing to do with markdown. Verified both.
+#
+NONBUILD_GOALS := clean setup test config new
 BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter-out $(NONBUILD_GOALS),$(MAKECMDGOALS)),default)
 
 #
@@ -1898,6 +1907,43 @@ config:
 #
 posts:
 	@mkdir -p posts
+
+#
+# make new TITLE="Installing a doorbell" CATEGORY=home
+# make new TITLE="Old news" CATEGORY=home DATE=2026-07-04
+#
+# Writes posts/<date>-<category>_<slug>.txt, prints the
+# path, and stops. It does not build and it does not open
+# an editor: a make recipe that seizes the terminal behaves
+# differently under -j, in a pipe, and over ssh.
+#
+# The point is an invariant, not convenience. There are five
+# parse-time errors a hand-typed filename can trip, and this
+# target must be incapable of emitting a name that trips any
+# of them -- its output set is a subset of the grammar's
+# accepted set. Every refusal below holds that line, and
+# each one happens BEFORE anything is written, so a refused
+# new leaves posts/ byte-identical.
+#
+# TITLE and CATEGORY are read from the ENVIRONMENT, not
+# interpolated into the recipe text. Make exports
+# command-line variables to recipe shells, so "$$TITLE"
+# reads a title containing " ' $ ` & with nothing executed
+# and nothing quoted wrong -- the same discipline BLOG_NAME
+# and SITE_URL use to reach awk through ENVIRON[]. Verified
+# with a title carrying all five.
+#
+# posts is the only prerequisite: its mkdir -p is what makes
+# this work on a tree that has never built. config is not
+# needed -- no config key is read here.
+#
+.PHONY: new
+new: posts
+	@if [ -z "$$TITLE" ]; then \
+		echo "grampa: new: TITLE= is required" >&2; exit 1; fi; \
+	if [ -z "$$CATEGORY" ]; then \
+		echo "grampa: new: CATEGORY= is required" >&2; exit 1; fi; \
+	echo "Created posts/PLACEHOLDER"
 
 #
 # config.mk is generated, not copied: setup probes date(1)
