@@ -454,10 +454,89 @@ date_from_filename = $(shell date $(call date_select,$(1)) "+%B %d, %Y")
 rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %b %Y %H:%M:%S %z")
 
 #
-# Empty when $(1) is three hyphen-separated runs of digits,
-# non-empty otherwise. make new checks DATE= with this
-# BEFORE date_select is expanded, and that order is the
-# whole point rather than tidiness.
+# Empty when $(1) is three hyphen-separated runs of digits
+# with no edge or doubled hyphen and no embedded whitespace,
+# non-empty otherwise. make new checks DATE= with this BEFORE
+# date_select is expanded, and that order is the whole point
+# rather than tidiness.
+#
+# The word-count filter alone is not enough to reject a
+# decorated string like "2026-01-02-", "-2026-01-02" or
+# "2026-01--02": make's word-splitting functions treat a run
+# of separators as one, the same way $(words "a  b") is 2 not
+# 3, so $(subst -,$(space),...) turns an edge or doubled
+# hyphen into an edge or doubled space that $(words) then
+# collapses -- all four decorated shapes above count 3 words,
+# indistinguishable from a clean date at this stage. The old
+# second stage then made it worse: $(subst -,,...) after
+# strip_digits erases hyphens outright, so a decorated string
+# that stripped to nothing but hyphens (e.g. "---" for
+# "2026-01-02-") went to "" -- the same empty-is-good result
+# as a real date -- while the *raw, decorated* string was what
+# got written into the post filename. Stage two was validating
+# a shape stage one had already normalized away, so the two
+# stages agreed with each other about a string neither of them
+# was actually holding.
+#
+# The fix keeps the word-count filter (still needed to refuse
+# a wrong FIELD count, e.g. "2026-01") and tightens stage two:
+# $(filter-out --,$(call strip_digits,$(1))) instead of
+# $(subst -,,...). After digit-stripping, a clean 3-field date
+# leaves exactly the two separator hyphens as one word, "--",
+# which $(filter-out) removes, giving empty; any edge or
+# doubled hyphen leaves a different word ("---", or worse) that
+# $(filter-out) passes through unchanged, so the result is
+# non-empty and the date is refused. A malformed non-digit
+# field (e.g. "20xx-ab-cd") still comes out non-empty either
+# way, just with its hyphens now intact ("xx-ab-cd" instead of
+# "xxabcd") rather than stripped -- $(if) only tests for
+# emptiness, so that difference does not matter to the caller.
+# Verified against a minimal makefile: 2026-01-02, 2026-7-4,
+# 26-7-4 and 2026-02 (a wrong field count, still correctly
+# refused) are unaffected; 2026-01-02-, -2026-01-02,
+# 2026-01--02 and 2026--01-02 go from empty (wrongly accepted)
+# to "---" (refused).
+#
+# $(filter-out) alone is not quite enough, and fuzzing it
+# against a from-scratch regex ground truth (163 mutated
+# dates, every single- and double-hyphen insertion plus
+# leading/trailing/doubled space, 0 mismatches with the fix
+# below) is what found the gap: $(filter-out) is WORD-based,
+# so it collapses whitespace the same way $(words) does, one
+# more level down. DATE=2026-01-02 (a clean date with one
+# TRAILING space) still counts 3 words at the filter stage --
+# that space was never a hyphen -- and its digit-stripped form
+# is "-- " (two hyphens, one trailing space). $(filter-out
+# --,...) treats "-- " as the single word "--" (the trailing
+# space is a word separator, not content, and a word list with
+# nothing after the last separator has no empty trailing word),
+# so it matches and is removed, leaving genuinely empty --
+# wrongly ACCEPTED. Naive substring removal
+# ($(subst --,,...) instead of $(filter-out)) fixes that one
+# but breaks a different shape: -2026-01-02- (both a leading
+# AND a trailing hyphen) digit-strips to "----", and $(subst)
+# removes ALL non-overlapping "--" matches in one pass, not
+# just the first, so "----" collapses in two bites to "" --
+# also wrongly accepted, and by a shape at the heart of this
+# finding.
+#
+# The fix is $(findstring $(space),$(1)) prepended, unrelated
+# to strip_digits entirely: findstring does a plain substring
+# search, so unlike filter-out/words it does not collapse or
+# reorder anything, and it runs against $(1) itself -- the
+# UNSTRIPPED date -- not the digit-stripped, hyphen-mangled
+# derivative the rest of the check works from. If $(1) contains
+# a literal space anywhere, findstring returns that space and
+# the whole expression is non-empty regardless of what
+# filter-out does with the hyphens, so a trailing or interior
+# space is caught before the hyphen logic ever gets a vote. It
+# only needs to catch TRAILING and INTERIOR space: make already
+# strips LEADING whitespace from a command-line variable before
+# this function ever runs, the same fact the $(1) comment
+# earlier in this block relies on for the injection case.
+# filter-out's word-based match is then safe to keep for the
+# hyphen shapes, because by construction $(1) has no whitespace
+# left to collapse by the time filter-out runs on it.
 #
 # date_select interpolates its argument into RECIPE TEXT --
 # it is the one date site whose input is not a filename that
@@ -499,7 +578,7 @@ rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %
 # way this file's own $(space) is built, so a lone leftover
 # space would still refuse rather than silently pass. Verified.
 #
-date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(subst -,,$(call strip_digits,$(1))),$(1))
+date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(findstring $(space),$(1))$(filter-out --,$(call strip_digits,$(1))),$(1))
 
 #
 # Post filenames are y-m-d-<category>_<title>.txt.
@@ -2146,6 +2225,25 @@ posts:
 # the same class of bug the .staged recipe's && chain exists
 # to prevent.
 #
+# Failing loud does not by itself clean up: the trailing
+# || { rm -f "$$f"; exit 1; } is what removes the title-only
+# $$f that && alone would still have left on disk after a
+# failed cat -- $$f is opened for writing (and so exists,
+# truncated to just the printf'd title line) before cat ever
+# runs, since the redirect covers the whole { ...; } group, not
+# each command inside it separately. Without the rm, that
+# residue is otherwise harmless right up until the next build:
+# a delimiter-less post stages with no body split and renders
+# an empty-bodied page at exit 0, silently. A && B || C is
+# (A && B) || C in this shell (&& and || share precedence and
+# associate left to right), so C runs whenever the write or the
+# echo fails and is skipped whenever both succeed -- echo has
+# no realistic failure mode here, the same trust already placed
+# in the echo that ends the %.staged recipe's own && chain.
+# Verified: chmod 000 .source/splitter.txt now fails loud AND
+# leaves posts/ empty, where it previously failed loud but left
+# the title-only file behind.
+#
 # A TITLE or CATEGORY that slugifies to nothing is refused
 # before f is composed, both with "has no usable characters".
 # TITLE="!!!" and CATEGORY="???" are the two shapes: every
@@ -2270,7 +2368,7 @@ new: posts
 		echo "grampa: new: $$dup already builds that permalink" >&2; exit 1; fi; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
 	  cat .source/splitter.txt; } > "$$f" && \
-	echo "Created $$f"
+	echo "Created $$f" || { rm -f "$$f"; exit 1; }
 
 #
 # config.mk is generated, not copied: setup probes date(1)

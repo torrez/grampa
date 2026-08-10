@@ -3851,6 +3851,29 @@ test_new_creates_a_post_that_builds() {
 }
 
 #
+# The write and the final echo are joined with && rather than
+# ; so a failed cat .source/splitter.txt fails loud instead of
+# printing "Created" at exit 0 -- but && alone still leaves a
+# title-only $f behind, since the redirect that creates it
+# covers the whole { ...; } group and opens the file before cat
+# ever runs. The trailing || { rm -f "$f"; exit 1; } is what
+# removes that residue. Without it this test's second
+# assertion is the one that fails: the recipe still exits
+# non-zero, but posts/ is not empty.
+#
+test_new_leaves_no_residue_on_a_failed_write() {
+	sandbox new_no_residue_on_failed_write
+	chmod 000 .source/splitter.txt
+	build_expect_fail new TITLE="Never" CATEGORY=home
+	local failed=$?
+	# Sandboxes are kept after the run, and a 000 file in one
+	# of them breaks any later cp -R or rsync of the checkout.
+	chmod 644 .source/splitter.txt
+	[ $failed -eq 0 ] || return
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
 # The slug table from the spec, one assertion per class.
 # Each title is run in its own sandbox because a failure
 # that leaves a bad filename behind poisons every later
@@ -4156,6 +4179,113 @@ test_new_refuses_a_malformed_date() {
 }
 
 #
+# date_shape_bad used to accept an edge or doubled hyphen:
+# make's word-splitting collapses a run of separators, so
+# "2026-01-02-", "-2026-01-02" and "2026-01--02" all counted
+# 3 words at the filter stage, and the old second stage
+# ($(subst -,,...)) then erased the decoration along with the
+# separators, leaving empty -- the same "looks like a good
+# date" result a real date gives. The raw, decorated string
+# still went into the filename, unvalidated. Each of these
+# four is refused now, and posts/ is left empty by all of
+# them -- not just the shape check firing, but firing BEFORE
+# day is assigned and f is composed, so nothing is written.
+#
+test_new_refuses_a_trailing_hyphen_date() {
+	sandbox new_trailing_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-01-02- || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_leading_hyphen_date() {
+	sandbox new_leading_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=-2026-01-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_an_interior_doubled_hyphen_date() {
+	sandbox new_interior_doubled_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-01--02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_leading_doubled_hyphen_date() {
+	sandbox new_leading_doubled_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026--01-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The point of the fix, not just its shape: before it, a
+# refused-looking DATE=2026-01-02- still wrote
+# posts/2026-01-02--home_x.txt at exit 0 (both collision
+# checks compare raw strings, so neither caught the doubled
+# hyphen), and the file's own parse-time permalink collided
+# with a same-permalink post already on disk -- wedging every
+# LATER `make new` in the directory with "two posts build the
+# same page", before it could print anything of its own. This
+# is the assertion that actually pins that: a refusal that
+# just fails is not enough, it has to fail WITHOUT writing
+# anything, so the very next `make new` for an unrelated
+# permalink still succeeds rather than dying at parse.
+#
+test_new_recovers_after_a_refused_trailing_hyphen_date() {
+	sandbox new_recovers_after_trailing_hyphen_date
+	build new TITLE="Existing" CATEGORY=home DATE=2026-01-02 || return
+	build_expect_fail new TITLE="Existing" CATEGORY=work DATE=2026-01-02- || return
+	assert_no_file posts/2026-01-02--work_existing.txt
+	build new TITLE="Fine" CATEGORY=home DATE=2026-03-04 || return
+	assert_file posts/2026-03-04-home_fine.txt
+	build || return
+	assert_file build/2026/03/04/fine.html
+}
+
+#
+# A DATE with BOTH a leading and a trailing hyphen digit-strips
+# to "----", four hyphens rather than two or three. The first
+# candidate fix considered for this finding used $(subst --,,...)
+# instead of $(filter-out --,...): $(subst) removes ALL
+# non-overlapping occurrences in one pass, and "----" is exactly
+# two non-overlapping "--" pairs, so it collapsed straight to ""
+# -- wrongly accepted, by the very shape at the center of this
+# finding. $(filter-out) does not have this hole: "----" is one
+# word that is not the word "--", so it survives unchanged.
+#
+test_new_refuses_a_both_edges_hyphen_date() {
+	sandbox new_both_edges_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=-2026-01-02- || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# A TRAILING space in DATE is a second way to slip past
+# $(filter-out --,...) alone: that filter is WORD-based, the
+# same as $(words), so it collapses a trailing space the same
+# way "a  b" is two words -- the digit-stripped "-- " (two
+# hyphens, one trailing space) is just the word "--" to
+# $(filter-out), which removes it, leaving genuinely empty and
+# wrongly accepting a DATE that would write a SPACE into a post
+# filename. The fix prepends $(findstring $(space),$(1)), a
+# plain substring search against the UNSTRIPPED date that does
+# not collapse anything, so a trailing (or interior) space is
+# caught before the hyphen logic runs at all. This is the
+# regression the brief's own proposed one-line patch does not
+# close; caught by fuzzing 163 mutated DATE shapes against a
+# from-scratch regex ground truth, not by the brief's table.
+#
+test_new_refuses_a_trailing_space_date() {
+	sandbox new_trailing_space_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="2026-01-02 " || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
 # date_select interpolates its argument into RECIPE TEXT,
 # not into the environment, so unlike TITLE it is not
 # protected by the export discipline. Under the gnu twin
@@ -4374,6 +4504,7 @@ test_new_requires_a_category
 test_new_prints_no_markdown_notice
 test_new_works_with_a_file_named_new
 test_new_creates_a_post_that_builds
+test_new_leaves_no_residue_on_a_failed_write
 test_new_slugifies_a_title
 test_new_slugifies_a_category
 test_new_keeps_non_ascii
@@ -4392,6 +4523,13 @@ test_new_backdates_with_date
 test_new_accepts_an_unpadded_date
 test_new_refuses_an_impossible_date
 test_new_refuses_a_malformed_date
+test_new_refuses_a_trailing_hyphen_date
+test_new_refuses_a_leading_hyphen_date
+test_new_refuses_an_interior_doubled_hyphen_date
+test_new_refuses_a_leading_doubled_hyphen_date
+test_new_recovers_after_a_refused_trailing_hyphen_date
+test_new_refuses_a_both_edges_hyphen_date
+test_new_refuses_a_trailing_space_date
 test_new_does_not_execute_an_injected_date
 test_new_works_without_config_mk
 test_new_with_date_needs_config_mk
