@@ -1928,10 +1928,21 @@ posts:
 # TITLE and CATEGORY are read from the ENVIRONMENT, not
 # interpolated into the recipe text. Make exports
 # command-line variables to recipe shells, so "$$TITLE"
-# reads a title containing " ' $ ` & with nothing executed
-# and nothing quoted wrong -- the same discipline BLOG_NAME
-# and SITE_URL use to reach awk through ENVIRON[]. Verified
-# with a title carrying all five.
+# reads a title containing " ' ` & with nothing executed and
+# nothing quoted wrong -- the same discipline BLOG_NAME and
+# SITE_URL use to reach awk through ENVIRON[].
+#
+# $ is not on that list. TITLE= and CATEGORY= are ordinary
+# make variables, expanded when make builds this recipe's
+# environment -- before the shell that reads "$$TITLE" ever
+# starts -- so a $ in the value is make's to interpret, not
+# the shell's. A bare $5 silently vanishes (make reads it as
+# a reference to variable "5", undefined outside $(call), so
+# it expands empty) and $(shell ...) runs right there.
+# Verified: TITLE='$(shell touch pwned)' creates ./pwned even
+# though the refusal below then fires on the now-empty
+# TITLE. No quoting in this recipe can close that -- the
+# value is already consumed before the recipe body runs.
 #
 # posts is the only prerequisite: its mkdir -p is what makes
 # this work on a tree that has never built. config is not
