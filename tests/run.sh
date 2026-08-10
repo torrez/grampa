@@ -4009,7 +4009,26 @@ test_new_refuses_a_hyphen_only_category() {
 	build_expect_fail new TITLE="Hello there" CATEGORY="-" || return
 	assert_out_grep "no usable characters"
 	build_expect_fail new TITLE="Hello there" CATEGORY="- -" || return
+	assert_out_grep "no usable characters"
 	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The mirror image of the hyphen-only CATEGORY refusal above:
+# an all-hyphen TITLE is legitimate and must keep building.
+# The category gets the stricter (post-strip) check because
+# category_slug re-parses the filename on hyphens and an
+# all-hyphen field collapses to zero words there; the title
+# has no such re-parse -- post_slug is just "whatever survived
+# after the category's _", hyphens included -- so nothing
+# pins this without a test asserting the accept side too.
+#
+test_new_accepts_an_all_hyphen_title() {
+	sandbox new_all_hyphen_title
+	build new TITLE="- - -" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_-----.txt
+	build || return
+	assert_file build/2026/01/02/-----.html
 }
 
 mkdir -p "$TMPROOT"
@@ -4182,5 +4201,6 @@ test_new_keeps_the_front_matter_on_one_line
 test_new_refuses_a_title_with_no_usable_characters
 test_new_refuses_a_category_with_no_usable_characters
 test_new_refuses_a_hyphen_only_category
+test_new_accepts_an_all_hyphen_title
 
 pass_fail_summary

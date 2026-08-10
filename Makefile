@@ -2057,8 +2057,11 @@ posts:
 # before f is composed, both with "has no usable characters".
 # TITLE="!!!" and CATEGORY="???" are the two shapes: every
 # character SLUGIFY sees is punctuation it strips, and an
-# empty slug would otherwise publish build/<y>/<m>/<d>/.html
-# or die on check_post_name's empty-category clause.
+# empty slug would otherwise die at parse time on
+# check_post_name's empty-title-slug clause, or an empty
+# category on its sibling empty-category clause -- and
+# poison every later make new the same way CATEGORY="-" does
+# below, since any written bad name forces the same parse.
 #
 # The category check is not a bare -z. CATEGORY="-" slugifies
 # to a non-empty "-", which -z does not catch -- but
@@ -2090,7 +2093,7 @@ new: posts
 	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
 	if [ -z "$$slug" ]; then \
 		echo "grampa: new: TITLE has no usable characters" >&2; exit 1; fi; \
-	if [ -z "$$(printf '%s' "$$cslug" | tr -d '-')" ]; then \
+	if [ -z "$$(printf '%s' "$$cslug" | LC_ALL=C tr -d '-')" ]; then \
 		echo "grampa: new: CATEGORY has no usable characters" >&2; exit 1; fi; \
 	f="posts/$$day-$${cslug}_$${slug}.txt"; \
 	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
