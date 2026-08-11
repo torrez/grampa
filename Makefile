@@ -61,7 +61,16 @@ SHELL := /bin/bash
 # goal; an allowlist fails silent. It must be kept in sync
 # with the phony non-build targets.
 #
-NONBUILD_GOALS := clean setup test config
+# new is the first goal added to this list after it was
+# written, and it is what the "unlisted future goal" line
+# above was about. Without it BUILD_GOAL is non-empty for a
+# `make new`, so the parse-time markdown notice prints above
+# "Created ...", and on an install predating detection the
+# origin DETECTED_MARKDOWN guard fires -- so make new dies
+# telling you to run make setup, on the one goal that has
+# nothing to do with markdown. Verified both.
+#
+NONBUILD_GOALS := clean setup test config new
 BUILD_GOAL := $(if $(MAKECMDGOALS),$(filter-out $(NONBUILD_GOALS),$(MAKECMDGOALS)),default)
 
 #
@@ -445,6 +454,167 @@ date_from_filename = $(shell date $(call date_select,$(1)) "+%B %d, %Y")
 rfc822_from_filename = $(shell LC_ALL=C date $(call date_select,$(1)) "+%a, %d %b %Y %H:%M:%S %z")
 
 #
+# Empty when $(1) is three hyphen-separated runs of digits
+# with no edge or doubled hyphen, no all-hyphen field, and no
+# byte anywhere that is not a digit or one of the two separator
+# hyphens -- which is what rules out every whitespace byte, not
+# just a plain space. Non-empty otherwise. make new checks
+# DATE= with this BEFORE date_select is expanded, and that
+# order is the whole point rather than tidiness.
+#
+# The word-count filter alone is not enough to reject a
+# decorated string like "2026-01-02-", "-2026-01-02" or
+# "2026-01--02": make's word-splitting functions treat a run
+# of separators as one, the same way $(words "a  b") is 2 not
+# 3, so $(subst -,$(space),...) turns an edge or doubled
+# hyphen into an edge or doubled space that $(words) then
+# collapses -- all four decorated shapes above count 3 words,
+# indistinguishable from a clean date at this stage. The
+# original second stage then made it worse: $(subst -,,...)
+# after strip_digits erased hyphens outright, so a decorated
+# string that stripped to nothing but hyphens (e.g. "---" for
+# "2026-01-02-") went to "" -- the same empty-is-good result as
+# a real date -- while the *raw, decorated* string was what got
+# written into the post filename. Stage two was validating a
+# shape stage one had already normalized away, so the two
+# stages agreed with each other about a string neither of them
+# was actually holding. Verified against a minimal makefile:
+# 2026-01-02-, -2026-01-02, 2026-01--02, 2026--01-02 and
+# -2026-01-02- (decorated on both edges) all went from empty
+# (wrongly accepted) to non-empty once fixed, while
+# 2026-01-02, 2026-7-4, 26-7-4 (all three shapes the grammar
+# actually accepts) and 2026-02 (a wrong field count) were
+# unaffected.
+#
+# Getting stage two right took three tries, because two
+# plausible single-term fixes each closed the hole above while
+# quietly opening a different one, and both were caught only by
+# fuzzing hundreds of mutated DATE shapes against a from-scratch
+# regex ground truth, not by reading the code:
+#
+# $(filter-out --,$(call strip_digits,$(1))) alone: after
+# digit-stripping, a clean date leaves exactly "--", which
+# $(filter-out) removes, giving empty; any edge or doubled
+# hyphen leaves a different word ("---" or worse) that survives,
+# non-empty, refused. But $(filter-out) is itself WORD-based, so
+# it collapses whitespace the same way $(words) does one level
+# up: a DATE with a single TRAILING byte of whitespace --
+# space, tab, CR, LF, VT or FF, all of them, not just space --
+# still counts 3 words at the filter stage (that byte was never
+# a hyphen) and digit-strips to "--<whitespace>", which
+# $(filter-out --,...) treats as the bare word "--" (trailing
+# whitespace is a separator, not content) and removes, leaving
+# genuinely empty -- wrongly ACCEPTED, and the accepted byte
+# lands straight in a post filename. Worse, the very first
+# case of this (a literal tab) reopens Finding 1's wedge through
+# a new door: the write succeeds at exit 0, and the control
+# character then fails CHECKED_POST_NAMES at PARSE time on every
+# later build or `make new` in the same directory, before either
+# can print anything of its own.
+#
+# $(subst --,,$(call strip_digits,$(1))) instead of
+# $(filter-out): fixes the whitespace case, since $(subst) is a
+# plain substring replace and never collapses anything a
+# whitespace byte sits next to -- but $(subst) removes ALL
+# non-overlapping "--" matches in one pass, not just one, so
+# -2026-01-02- (decorated on BOTH edges) digit-strips to "----",
+# which $(subst) empties in two bites -- wrongly ACCEPTED, and by
+# a shape at the heart of the original finding.
+#
+# The fix keeps $(filter-out --,...) for the hyphen shapes (it
+# does not have the both-edges hole) and ADDS
+# $(subst -,,$(call strip_digits,$(1))) as a second, concatenated
+# term rather than swapping one for the other: $(subst -,,...)
+# removes only hyphens, character by character, so any leftover
+# byte that is neither a digit nor a hyphen -- any whitespace
+# byte, or a stray letter from a malformed field like
+# "20xx-ab-cd" -- survives it untouched and makes that term
+# non-empty on its own, independent of whatever $(filter-out)
+# does with the hyphens. A clean date's stripped form is only
+# ever digits and exactly two hyphens, so both terms go empty
+# together and only then does concatenating them stay empty.
+# Verified: the 402-case fuzz below has zero mismatches against
+# a regex ground truth, and a from-only/without-only A-B
+# comparison across the same 402 cases plus every hyphen
+# decoration is identical in both directions -- see the next
+# paragraph for what that comparison was checking.
+#
+# A third, EARLIER draft of this fix used
+# $(findstring $(space),$(1)) instead of the $(subst -,,...)
+# term -- a plain substring search for a literal space in the
+# unstripped $(1), reasoning that $(filter-out)'s collapsing was
+# specific to whitespace. That missed that $(filter-out)'s
+# word-splitting treats EVERY whitespace byte as a separator, not
+# only $(space)'s literal 0x20 -- tab, CR, LF, VT and FF all
+# collapse the same way, and $(findstring $(space),...) tests for
+# none of them. $(subst -,,...) has no such gap, because it does
+# not classify bytes into separators and content at all; it only
+# ever removes the two literal bytes this check is built around,
+# digits and hyphens, leaving every other byte -- whichever kind
+# of whitespace, or none -- as evidence. $(findstring) was
+# removed rather than kept alongside the working fix: an A-B
+# comparison of the formula with and without it, run across 426
+# mutated DATE shapes (every hyphen decoration from above, every
+# one of the six whitespace bytes as a prefix/interior/trailing
+# decoration, and DATE='--'), came back with zero behavioural
+# difference in either direction -- $(subst -,,...) alone already
+# catches everything $(findstring) was added to catch, and more.
+#
+# The word-count filter is not redundant with either stage-two
+# term, and DATE='--' is the assertion that pins it: stripped of
+# a wrapping $(if $(filter 3,...),...,...), stage two alone
+# accepts it -- strip_digits leaves "--" unchanged (there are no
+# digits to remove), $(subst -,,"--") empties it, and
+# $(filter-out --,"--") empties it too, so both terms agree on
+# empty and the concatenation is empty. Only the word-count
+# filter's own else-branch, $(1) itself, catches an all-hyphen
+# DATE: "--" splits into zero words after hyphens become spaces
+# and collapse, $(filter 3,0) is empty, and the $(if) falls to
+# returning "--" unchanged, non-empty, refused.
+#
+# date_select interpolates its argument into RECIPE TEXT --
+# it is the one date site whose input is not a filename that
+# has already been through the character check. Under the
+# gnu twin the text is -d "<date> 00:00:00", so a single "
+# in DATE escapes it. Verified against date $(call
+# date_select,$(DATE)) with the shape check removed:
+# DATE='x";>PWNED;"' created PWNED. (The brief's own example
+# payload, DATE='x";touch PWNED;"', does NOT reproduce that --
+# date_select rejoins split words with a literal hyphen
+# regardless of what whitespace separated them, so the space
+# in "touch PWNED" becomes "touch-PWNED", a command that does
+# not exist. The escape is still real; it just needs a
+# space-free payload to demonstrate with this particular
+# shell verb.)
+#
+# $(if) expands only the branch it takes, which is what
+# makes this a fix and not a warning: a bad shape means the
+# branch containing date_select is never expanded, so the
+# payload never becomes recipe text at all.
+#
+# It accepts an unpadded 2026-7-4, because the grammar does.
+# A generator that refused a name the build accepts would be
+# wrong in the other direction.
+#
+# strip_digits is reused, not redefined -- it already exists
+# below (YEAR_SHAPES' helper, further down this file) with
+# make having no character classes, so the enumeration is the
+# check either way. Both callers are recursively-expanded
+# (=), so the reference resolves at call time regardless of
+# which definition comes first in the file; verified with a
+# minimal makefile where the caller textually precedes the
+# callee and still resolves correctly.
+#
+# A space-separated DATE (2026 01 02, no hyphens) is refused
+# by the word-count filter alone, before strip_digits ever
+# runs on it -- but even if that filter's guard were removed,
+# $(if) treats a whitespace-only expansion as true, the same
+# way this file's own $(space) is built, so a lone leftover
+# space would still refuse rather than silently pass. Verified.
+#
+date_shape_bad = $(if $(filter 3,$(words $(subst -,$(space),$(1)))),$(subst -,,$(call strip_digits,$(1)))$(filter-out --,$(call strip_digits,$(1))),$(1))
+
+#
 # Post filenames are y-m-d-<category>_<title>.txt.
 # Splitting on the underscore first gives two halves:
 # the date and category on the left, the title slug on
@@ -499,6 +669,94 @@ BAD_CHARS := ! " \# $$ % & ' ( ) * + , / : ; < = > ? @ [ \ ] ^ ` { | } ~
 # collects one word per offending character.
 #
 bad_chars_in = $(strip $(foreach c,$(BAD_CHARS),$(findstring $(c),$(1))))
+
+#
+# The two tr sets make new slugifies with, derived from
+# BAD_CHARS rather than retyped. A second, independently
+# written copy of that list is the drift date_select is
+# factored to avoid: a generator that strips a different set
+# than the checker rejects is the same class of defect as no
+# generator at all.
+#
+# SLUG_DELETE is the two quote characters, written as tr's
+# own octal escapes because no single shell quoting handles
+# both at once. They are DELETED rather than translated, so
+# "Tom's doorbell" becomes toms-doorbell and not
+# tom-s-doorbell.
+#
+# SLUG_XLAT is everything else in BAD_CHARS, plus the _ that
+# separates category from slug and which new writes itself.
+# The backslash is DOUBLED, and that is not decoration: a
+# literal \ in a tr set is an escape introducer, so the
+# undoubled set spends it escaping the ] beside it and
+# leaves a backslash in the title untranslated. Verified
+# through the whole SLUGIFY pipeline -- a\b^c]d came through
+# as a\b-c-d before the doubling (the backslash surviving
+# untouched) and a-b-c-d after.
+#
+SLUG_DELETE := \047\042
+SLUG_XLAT := $(subst \,\\,$(subst $(space),,$(filter-out ' ",$(BAD_CHARS))))_
+
+#
+# The slug pipeline, as one shell fragment, used twice --
+# once for the title and once for the category. Written as a
+# variable rather than twice in the recipe for the same
+# reason the tr sets are derived: two copies drift.
+#
+# Every stage is LC_ALL=C, which is what makes it UTF-8
+# safe. A multi-byte character's continuation bytes are all
+# >= 0x80 and can never collide with the ASCII punctuation
+# being stripped, so café and 日記 survive into filenames
+# the grammar already accepts. The lowercase stage is
+# A-Z only for the same reason: a bytewise tr cannot
+# case-fold É, so it leaves it alone rather than mangling
+# it.
+#
+# The [:cntrl:] stage is FIRST, and it is a separate stage
+# rather than a BAD_CHARS clause -- mirroring the split
+# between bad_chars_in above and CONTROL_CHAR_NAMES below,
+# and for the same reason: a control byte cannot be an
+# element of a make list. Without it the invariant is simply
+# false. Control bytes are not in BAD_CHARS, nothing else
+# here touches them, and a lone tab is not an empty slug, so
+# a tab in a title wrote posts/...home_a<TAB>b.txt at exit
+# 0 and a NEWLINE wrote a name that breaks every LATER
+# build: ls prints it as two lines, the grep drops one, and
+# the check dies naming posts/lines.txt, a file that does
+# not exist. The generator built the one name its own
+# successor cannot survive. Reproduced end to end.
+#
+# Translated to a space rather than deleted, so a pasted
+# two-line title becomes two-lines and not twolines.
+#
+# tr's set2 is written '[ *]' and not ' ': GNU tr pads a
+# short set2 with its last character, POSIX leaves that to
+# the implementation, and this project treats macOS as
+# first-class. Verified on GNU; the BSD leg is the standing
+# item for the branch review.
+#
+SLUGIFY := LC_ALL=C tr '[:cntrl:]' '[ *]' \
+	| LC_ALL=C tr -d '$(SLUG_DELETE)' \
+	| LC_ALL=C tr '$(SLUG_XLAT)' '[ *]' \
+	| LC_ALL=C tr 'A-Z' 'a-z' \
+	| LC_ALL=C tr -s ' ' \
+	| sed 's/^ *//; s/ *$$//' \
+	| LC_ALL=C tr ' ' '-'
+
+#
+# The title as it goes into the front matter: kept verbatim
+# except that control characters become spaces.
+#
+# That exception is load-bearing rather than tidy. The front
+# matter is ONE LINE -- printf 'title: %s\n' -- so a newline
+# in the title splits it in two, and PARSE_FRONT_MATTER
+# reads the second line as something it is not. Squeezing
+# runs of spaces afterwards keeps a pasted multi-line title
+# from becoming a line of gaps.
+#
+SANITIZE_TITLE := LC_ALL=C tr '[:cntrl:]' '[ *]' \
+	| LC_ALL=C tr -s ' ' \
+	| sed 's/^ *//; s/ *$$//'
 
 #
 # Control characters, rejected before anything tries to
@@ -1898,6 +2156,253 @@ config:
 #
 posts:
 	@mkdir -p posts
+
+#
+# make new TITLE="Installing a doorbell" CATEGORY=home
+# make new TITLE="Old news" CATEGORY=home DATE=2026-07-04
+#
+# Writes posts/<date>-<category>_<slug>.txt, prints the
+# path, and stops. It does not build and it does not open
+# an editor: a make recipe that seizes the terminal behaves
+# differently under -j, in a pipe, and over ssh.
+#
+# The point is an invariant, not convenience. There are five
+# parse-time errors a hand-typed filename can trip, and this
+# target must be incapable of emitting a name that trips any
+# of them -- its output set is a subset of the grammar's
+# accepted set. Every refusal below holds that line, and each
+# one happens BEFORE anything is written, so a refused new
+# writes nothing into posts/. (posts is still a prerequisite,
+# so its mkdir -p runs first -- on a virgin tree a refused new
+# does leave behind an empty posts/, not a byte-identical one.)
+#
+# TITLE and CATEGORY are read from the ENVIRONMENT, not
+# interpolated into the recipe text. Make exports
+# command-line variables to recipe shells, so "$$TITLE"
+# reads a title containing " ' ` & with nothing executed and
+# nothing quoted wrong -- the same discipline BLOG_NAME and
+# SITE_URL use to reach awk through ENVIRON[].
+#
+# $ is not on that list. TITLE= and CATEGORY= are ordinary
+# make variables, expanded when make builds this recipe's
+# environment -- before the shell that reads "$$TITLE" ever
+# starts -- so a $ in the value is make's to interpret, not
+# the shell's. A bare $5 silently vanishes (make reads it as
+# a reference to variable "5", undefined outside $(call), so
+# it expands empty) and $(shell ...) runs right there.
+# Verified: TITLE='$(shell touch pwned)' creates ./pwned even
+# though the refusal below then fires on the now-empty
+# TITLE. No quoting in this recipe can close that -- the
+# value is already consumed before the recipe body runs.
+#
+# DATE is not on the environment-read list above, and cannot
+# be: date_select interpolates its argument into RECIPE TEXT,
+# not into the environment, so the export discipline that
+# protects TITLE and CATEGORY does not reach it. Under the gnu
+# dialect that text is -d "<date> 00:00:00", and one " in DATE
+# escapes the quoted string -- verified with the shape check
+# removed, see strip_digits/date_shape_bad above.
+#
+# DATE is ALSO make-expanded before any of that, the same $
+# gotcha as TITLE and CATEGORY above and not a second hole:
+# $(DATE) appears inside $(if), $(call date_shape_bad,$(DATE))
+# and $(call date_select,$(DATE)), all make-level, so
+# DATE='$(shell touch pwned)' runs touch right there, during
+# expansion, before date_shape_bad or date_select ever sees a
+# value. Verified: it creates ./pwned and still writes a post
+# dated today, because $(shell touch pwned) prints nothing, so
+# $(DATE) expands empty and the recipe's own
+# day="$${DATE:-$$(date +%Y-%m-%d)}" falls back the same way an
+# unset DATE does. Self-inflicted, same trust level as
+# markdown= in config and as TITLE's own $(shell) case.
+#
+# So DATE gets its own check, date_shape_bad, run BEFORE
+# date_select is ever called: $(if) expands only the branch it
+# takes, so a bad shape means date_select's argument never
+# becomes recipe text at all. A shape that passes is then
+# handed to date $(call date_select,$(DATE)) itself, to catch
+# a well-formed but impossible date (2026-02-30) the same way
+# the parse-time BAD_POST_DATES check does for existing posts.
+# The message names [$$DATE], the environment variable, and
+# never $(DATE) -- interpolating the value into the message
+# would put the payload straight back into recipe text through
+# the door the shape check just closed.
+#
+# The outer $(if $(DATE),...) is what keeps the no-DATE path
+# free of date_select entirely: a shell-level guard cannot do
+# this, because make expands the whole recipe line before the
+# shell sees any of it, so an if [ -n "$$DATE" ]; then date
+# $(call date_select,$(DATE)); fi would still expand
+# date_select's else-branch $(error) on an unconfigured tree
+# even when no DATE was given.
+#
+# The shape check accepts an unpadded 2026-7-4, because the
+# grammar does -- a generator that refused a name the build
+# accepts would be wrong in the other direction.
+#
+# posts is the only prerequisite: its mkdir -p is what makes
+# this work on a tree that has never built. config is not
+# needed -- no config key is read here.
+#
+# The delimiter is catted from .source/splitter.txt rather
+# than printfed, so those 35 hyphens keep exactly one
+# authority -- the %.staged recipe reads the same file.
+#
+# The write and the final echo are joined with && rather than
+# ;, on purpose: this shell runs without -e, so a ; would let
+# a failed cat .source/splitter.txt -- an unreadable or
+# missing file -- still print "Created" at exit 0, leaving a
+# delimiter-less post that a later build silently renders with
+# an empty body. Verified both ways: with ;, chmod 000
+# .source/splitter.txt made new print Created and exit 0 over
+# a title-only file; && makes the same case fail loud instead,
+# the same class of bug the .staged recipe's && chain exists
+# to prevent.
+#
+# Failing loud does not by itself clean up: the trailing
+# || { rm -f "$$f"; exit 1; } is what removes the title-only
+# $$f that && alone would still have left on disk after a
+# failed cat -- $$f is opened for writing (and so exists,
+# truncated to just the printf'd title line) before cat ever
+# runs, since the redirect covers the whole { ...; } group, not
+# each command inside it separately. Without the rm, that
+# residue is otherwise harmless right up until the next build:
+# a delimiter-less post stages with no body split and renders
+# an empty-bodied page at exit 0, silently. A && B || C is
+# (A && B) || C in this shell (&& and || share precedence and
+# associate left to right), so C runs whenever the write or the
+# echo fails and is skipped whenever both succeed -- echo has
+# no realistic failure mode here, the same trust already placed
+# in the echo that ends the %.staged recipe's own && chain.
+# Verified: chmod 000 .source/splitter.txt now fails loud AND
+# leaves posts/ empty, where it previously failed loud but left
+# the title-only file behind.
+#
+# A TITLE or CATEGORY that slugifies to nothing is refused
+# before f is composed, both with "has no usable characters".
+# TITLE="!!!" and CATEGORY="???" are the two shapes: every
+# character SLUGIFY sees is punctuation it strips, and an
+# empty slug would otherwise die at parse time on
+# check_post_name's empty-title-slug clause, or an empty
+# category on its sibling empty-category clause -- and
+# poison every later make new the same way CATEGORY="-" does
+# below, since any written bad name forces the same parse.
+#
+# The category check is not a bare -z. CATEGORY="-" slugifies
+# to a non-empty "-", which -z does not catch -- but
+# category_slug re-parses the filename by splitting on
+# hyphens, and an all-hyphen field collapses back to zero
+# words there, so the written file dies on the same
+# empty-category clause anyway. Worse, it dies at PARSE time,
+# before any recipe runs, which means every LATER make new in
+# the same directory dies with it: the generator would have
+# produced the one name its own successor cannot survive.
+# Verified: CATEGORY=- once wrote posts/2026-01-02--_x.txt at
+# exit 0, and the next make new in that directory then failed
+# with "empty category in filename" before printing anything
+# of its own. Stripping every hyphen from cslug and checking
+# THAT for emptiness catches both the plain-empty case and the
+# hyphen-only one in a single test, and does not touch slug:
+# an all-hyphen TITLE is legitimate and documented -- TITLE='-
+# - -' builds -----.html -- so only the category gets the
+# stricter check.
+#
+# Past that check, cslug still has its EDGE hyphens trimmed --
+# CATEGORY='-x' slugifies to "-x", which is not all-hyphens, so
+# the check above lets it through, but category_slug re-parses
+# the filename by splitting on hyphens and takes a wordlist,
+# which drops a leading or trailing empty field the same way
+# `a-` splits to just "a". Untrimmed, the file is named
+# posts/<date>--x_t.txt but the category it parses to is "x",
+# so the name on disk and the category the post actually lands
+# in disagree. Trimming here makes the filename say what
+# category_slug will read: posts/<date>-x_t.txt for
+# CATEGORY='-x', 'x-', or '- x -' alike (slugify turns each
+# space into a hyphen first, so '- x -' is "--x--" before this
+# trim). An INTERIOR run is untouched -- sed only strips
+# leading and trailing hyphens, so CATEGORY='a--b' keeps its
+# "a--b" in both the filename and the category page, matching
+# category_slug's own preservation of interior runs. Verified
+# all four shapes end-to-end, filename and built category page
+# alike.
+#
+# f is composed, then two refusals run before anything is
+# written: -e and not -f, because a directory or a symlink at
+# that path is still something new must not write through; then
+# a glob over posts/ for any OTHER file already claiming the
+# same date-and-title-slug permalink, since the category is not
+# part of the URL. Both fire before the write, not after --
+# verified by hand, not just by exit status: a second `make new`
+# for the same permalink leaves posts/ holding exactly the one
+# file the first call wrote.
+#
+# -e dereferences, so it does not by itself catch $f being a
+# DANGLING symlink -- but the dup glob below matches $f's own
+# name regardless of what's at the far end of the link, so a
+# dangling symlink at $f is still refused, just via the second
+# check's message rather than the first's. Verified.
+#
+# ls -d, not bare ls: the glob can match an existing DIRECTORY
+# sharing this date and title slug (a category's post published
+# as a directory by some other tool, or by hand), and bare ls on
+# a directory argument lists its CONTENTS, not its name. Verified
+# the failure mode this closes: with a bare ls, an EMPTY such
+# directory made the dup check see no output, so the refusal
+# never fired and new wrote a second, colliding file at exit 0 --
+# the exact duplicate-permalink tree this check exists to refuse.
+# -d makes ls name the directory itself, so head -1 sees it.
+#
+# The glob is unquoted, which is safe for slug: * ? [ ] are all
+# BAD_CHARS members, so the slugifier has already translated them
+# out of it before this line ever runs. day is closed the same
+# way now: the DATE= validation above runs before day= and
+# refuses anything that is not three hyphen-separated runs of
+# digits, so a hand-supplied DATE can no longer carry a glob
+# character or a space into this line either. Verified post-fix:
+# DATE='2026-01-*' is refused by the shape check, exit 1, before
+# day is ever assigned. A DATE containing a space is refused or
+# stripped, never passed through: make strips LEADING whitespace
+# from a command-line variable before the shape check ever sees
+# it, so DATE=' 2026-01-02' reaches this line as a clean
+# 2026-01-02 -- but a TRAILING or INTERIOR space survives that
+# stripping and the shape check refuses it, exit 1, the same as
+# the glob case. Verified all three. (This
+# used to be open -- DATE had no validation before Task 5, and
+# both shapes above reached this line unquoted and wrote a file
+# at exit 0. Neither was ever a shell-injection hole here --
+# day is only ever used as data on this line, never evaluated as
+# a command -- but the "day can't carry a glob" property this
+# comment claims did not hold for a hand-supplied DATE until now.)
+# The common case, DATE left unset, was always closed: day is
+# then date(1)'s own %Y-%m-%d output.
+#
+.PHONY: new
+new: posts
+	@if [ -z "$$TITLE" ]; then \
+		echo "grampa: new: TITLE= is required" >&2; exit 1; fi; \
+	if [ -z "$$CATEGORY" ]; then \
+		echo "grampa: new: CATEGORY= is required" >&2; exit 1; fi; \
+	$(if $(DATE),$(if $(call date_shape_bad,$(DATE)),\
+		echo "grampa: new: DATE must be YYYY-MM-DD -- got [$$DATE]" >&2; exit 1;,\
+		date $(call date_select,$(DATE)) >/dev/null 2>&1 || \
+			{ echo "grampa: new: not a real date -- [$$DATE]" >&2; exit 1; };)) \
+	day="$${DATE:-$$(date +%Y-%m-%d)}"; \
+	slug=$$(printf '%s' "$$TITLE" | $(SLUGIFY)); \
+	cslug=$$(printf '%s' "$$CATEGORY" | $(SLUGIFY)); \
+	if [ -z "$$slug" ]; then \
+		echo "grampa: new: TITLE has no usable characters" >&2; exit 1; fi; \
+	if [ -z "$$(printf '%s' "$$cslug" | LC_ALL=C tr -d '-')" ]; then \
+		echo "grampa: new: CATEGORY has no usable characters" >&2; exit 1; fi; \
+	cslug=$$(printf '%s' "$$cslug" | sed 's/^-*//; s/-*$$//'); \
+	f="posts/$$day-$${cslug}_$${slug}.txt"; \
+	if [ -e "$$f" ]; then \
+		echo "grampa: new: already exists -- $$f" >&2; exit 1; fi; \
+	dup=$$(ls -d posts/$$day-*_$${slug}.txt 2>/dev/null | head -1); \
+	if [ -n "$$dup" ]; then \
+		echo "grampa: new: $$dup already builds that permalink" >&2; exit 1; fi; \
+	{ printf 'title: %s\n' "$$(printf '%s' "$$TITLE" | $(SANITIZE_TITLE))"; \
+	  cat .source/splitter.txt; } > "$$f" && \
+	echo "Created $$f" || { rm -f "$$f"; exit 1; }
 
 #
 # config.mk is generated, not copied: setup probes date(1)

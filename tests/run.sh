@@ -42,6 +42,18 @@ CURRENT=""
 # depend on the environment it inherits.
 #
 unset MAKELEVEL MAKEFLAGS MFLAGS
+#
+# An exported host TITLE or CATEGORY would otherwise satisfy
+# make new's required-variable check on its own, making
+# test_new_requires_a_title/_category fail depending on what
+# the caller's shell happened to have set. DATE joins them for
+# the same reason: every test that calls `new` today passes
+# DATE= explicitly and so is unaffected, but new also reads a
+# bare $$DATE straight from the environment, and an inherited
+# host value would otherwise silently win for any future test
+# that omits it.
+#
+unset TITLE CATEGORY DATE
 
 #
 # Which make the suite drives. Every call below goes through
@@ -3771,6 +3783,652 @@ test_sandbox_hides_host_markdown_tools() {
 	assert_eq "PATH is prefixed with the sandbox bin" "$SBOX/bin" "${PATH%%:*}"
 }
 
+#
+# ---------------------------------------------------
+# make new: the post generator.
+#
+# The feature's whole value is an invariant: it must be
+# incapable of emitting a filename any of the five
+# parse-time checks rejects. Most of these tests are that
+# invariant from one side or another.
+# ---------------------------------------------------
+#
+
+test_new_requires_a_title() {
+	sandbox new_requires_a_title
+	build_expect_fail new CATEGORY=home || return
+	assert_out_grep "TITLE"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_requires_a_category() {
+	sandbox new_requires_a_category
+	build_expect_fail new TITLE="Hello there" || return
+	assert_out_grep "CATEGORY"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# new joins NONBUILD_GOALS, so BUILD_GOAL is empty for this
+# invocation and the parse-time markdown $(info) stays
+# quiet. Mutation-catchable: drop `new` from the list and
+# this fails.
+#
+test_new_prints_no_markdown_notice() {
+	sandbox new_no_notice
+	build new TITLE="Hello there" CATEGORY=home || return
+	assert_out_not_grep "grampa: markdown:"
+	assert_out_grep "Created posts/"
+}
+
+#
+# Same shape as test_clean_works_with_a_file_named_clean:
+# `new` is named after nothing on disk, but make does not
+# know that until .PHONY says so.
+#
+test_new_works_with_a_file_named_new() {
+	sandbox new_file_named_new
+	touch new
+	build new TITLE="Hello there" CATEGORY=home || return
+	assert_out_grep "Created posts/"
+}
+
+#
+# The round trip. The one test that proves the invariant end
+# to end rather than in pieces: whatever name new chose, the
+# build accepts it and publishes the permalink it implies.
+#
+test_new_creates_a_post_that_builds() {
+	sandbox new_round_trip
+	build new TITLE="Installing a Doorbell" CATEGORY=home DATE=2026-08-06 || return
+	assert_file posts/2026-08-06-home_installing-a-doorbell.txt
+	assert_grep posts/2026-08-06-home_installing-a-doorbell.txt "title: Installing a Doorbell"
+	assert_grep posts/2026-08-06-home_installing-a-doorbell.txt "-----------------------------------"
+	build || return
+	assert_file build/2026/08/06/installing-a-doorbell.html
+	assert_grep build/2026/08/06/installing-a-doorbell.html "<h4>Installing a Doorbell</h4>"
+	assert_file build/category/home.html
+}
+
+#
+# The write and the final echo are joined with && rather than
+# ; so a failed cat .source/splitter.txt fails loud instead of
+# printing "Created" at exit 0 -- but && alone still leaves a
+# title-only $f behind, since the redirect that creates it
+# covers the whole { ...; } group and opens the file before cat
+# ever runs. The trailing || { rm -f "$f"; exit 1; } is what
+# removes that residue. Without it this test's second
+# assertion is the one that fails: the recipe still exits
+# non-zero, but posts/ is not empty.
+#
+test_new_leaves_no_residue_on_a_failed_write() {
+	sandbox new_no_residue_on_failed_write
+	chmod 000 .source/splitter.txt
+	build_expect_fail new TITLE="Never" CATEGORY=home
+	local failed=$?
+	# Sandboxes are kept after the run, and a 000 file in one
+	# of them breaks any later cp -R or rsync of the checkout.
+	chmod 644 .source/splitter.txt
+	[ $failed -eq 0 ] || return
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The slug table from the spec, one assertion per class.
+# Each title is run in its own sandbox because a failure
+# that leaves a bad filename behind poisons every later
+# make in the same directory.
+#
+test_new_slugifies_a_title() {
+	sandbox new_slugify
+	build new TITLE="Tom & Jerry: part 2" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_tom-jerry-part-2.txt
+	build new TITLE="Tom's doorbell" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_toms-doorbell.txt
+	build new TITLE="A/B testing" CATEGORY=home DATE=2026-01-04 || return
+	assert_file posts/2026-01-04-home_a-b-testing.txt
+	build new TITLE="Version 2.0 notes" CATEGORY=home DATE=2026-01-05 || return
+	assert_file posts/2026-01-05-home_version-2.0-notes.txt
+	build new TITLE="  spaced   out  " CATEGORY=home DATE=2026-01-06 || return
+	assert_file posts/2026-01-06-home_spaced-out.txt
+	build new TITLE="Under_scored" CATEGORY=home DATE=2026-01-07 || return
+	assert_file posts/2026-01-07-home_under-scored.txt
+	build || return
+	assert_file build/2026/01/05/version-2.0-notes.html
+}
+
+#
+# The category goes through the same pipeline, so a
+# two-word category becomes the hyphenated slug the
+# Makefile's category rules already understand.
+#
+test_new_slugifies_a_category() {
+	sandbox new_slugify_category
+	build new TITLE="Backup script" CATEGORY="Project Ideas" DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-project-ideas_backup-script.txt
+	build || return
+	assert_file build/category/project-ideas.html
+}
+
+#
+# Non-ASCII is legal in a grampa filename, so the slugifier
+# must not eat it. Every tr stage is LC_ALL=C and therefore
+# bytewise, which is exactly what keeps a multi-byte
+# character intact: its continuation bytes are all >= 0x80
+# and cannot collide with the ASCII punctuation being
+# stripped. ASCII is lowercased; É is not, because a
+# bytewise tr cannot case-fold it.
+#
+test_new_keeps_non_ascii() {
+	sandbox new_non_ascii
+	build new TITLE="Café notes" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_café-notes.txt
+	build new TITLE="日記 #1" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_日記-1.txt
+	build || return
+	assert_file build/2026/01/02/café-notes.html
+}
+
+#
+# The hostile title. Nothing executes, and the value the
+# SHELL receives lands in the front matter byte for byte --
+# which is also a test of fill(), since & in a replacement is
+# the bug fill() exists to avoid. "The shell receives" is
+# deliberate and not "typed": $HOME below does not survive as
+# typed, only as make hands it to the shell -- see the note
+# further down.
+#
+#
+# $HOME is deliberately in here too, and it does NOT survive
+# as typed: TITLE is a command-line variable, so make expands
+# it while building the recipe's environment -- before the
+# shell that reads "$$TITLE" starts -- and $H is make's own
+# reference to the (undefined) one-letter variable H, which
+# vanishes and leaves OME behind. That is the same $ gotcha
+# documented above the new rule (a bare $5 vanishes the same
+# way), not a bug in the slugifier; verified with a two-line
+# makefile that only echoes "$$TITLE", independent of this
+# feature. The expected names below say "ome", not "home",
+# for that reason.
+#
+test_new_survives_a_hostile_title() {
+	sandbox new_hostile_title
+	build new TITLE='Tom & "Jerry" '"'"'s $HOME `whoami` \z' CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt
+	assert_grep posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt 'Tom & "Jerry"'
+	assert_grep posts/2026-01-02-home_tom-jerry-s-ome-whoami-z.txt '`whoami`'
+	build || return
+	assert_grep build/2026/01/02/tom-jerry-s-ome-whoami-z.html 'Tom &'
+}
+
+#
+# The blocking finding of the spec review. Control bytes
+# are not in BAD_CHARS and nothing else in the pipeline
+# touches them, so before the [:cntrl:] stage a tab wrote a
+# filename the build rejects -- and a newline wrote one that
+# breaks every LATER make in the directory, which is why the
+# second half of this test builds afterwards rather than
+# only checking the filename.
+#
+test_new_strips_control_characters() {
+	sandbox new_control_chars
+	build new TITLE="$(printf 'Two\nlines')" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_two-lines.txt
+	build new TITLE="$(printf 'a\tb')" CATEGORY=home DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-home_a-b.txt
+	build || return
+	assert_file build/2026/01/02/two-lines.html
+	assert_file build/2026/01/03/a-b.html
+}
+
+#
+# The front matter is one line, so a newline in the title
+# has to be flattened there too -- not only in the slug.
+# Without it PARSE_FRONT_MATTER reads the tail of the title
+# as something it is not.
+#
+test_new_keeps_the_front_matter_on_one_line() {
+	sandbox new_one_line_front_matter
+	build new TITLE="$(printf 'Two\nlines')" CATEGORY=home DATE=2026-01-02 || return
+	assert_grep posts/2026-01-02-home_two-lines.txt "title: Two lines"
+	assert_eq "front matter line count" "1" "$(grep -c '^title: ' posts/2026-01-02-home_two-lines.txt)"
+	build || return
+	assert_grep build/2026/01/02/two-lines.html "<h4>Two lines</h4>"
+}
+
+#
+# An empty title slug never reaches the build: written
+# directly it dies at PARSE time on check_post_name's
+# empty-title-slug clause, before any recipe runs and before
+# anything publishes -- verified against a hand-written
+# posts/2026-01-02-home_.txt. An empty category dies the same
+# way on the sibling clause. new refuses first instead, and
+# refuses without writing, so neither of those parse-time
+# deaths -- which would also poison every LATER make new in
+# the same directory -- is ever reached.
+#
+test_new_refuses_a_title_with_no_usable_characters() {
+	sandbox new_empty_title_slug
+	build_expect_fail new TITLE="!!!" CATEGORY=home || return
+	assert_out_grep "no usable characters"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_category_with_no_usable_characters() {
+	sandbox new_empty_category_slug
+	build_expect_fail new TITLE="Hello there" CATEGORY="???" || return
+	assert_out_grep "no usable characters"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# CATEGORY="-" slugifies to a non-empty "-", so the
+# empty-string check above does not see it -- but the
+# category is re-parsed by splitting the filename on
+# hyphens, so it collapses back to empty and the build
+# dies with "empty category in filename". Worse, so does
+# every LATER make new, the parse failing before any recipe
+# runs: the generator would have produced the one name its
+# own successor cannot survive.
+#
+test_new_refuses_a_hyphen_only_category() {
+	sandbox new_hyphen_only_category
+	build_expect_fail new TITLE="Hello there" CATEGORY="-" || return
+	assert_out_grep "no usable characters"
+	build_expect_fail new TITLE="Hello there" CATEGORY="- -" || return
+	assert_out_grep "no usable characters"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The mirror image of the hyphen-only CATEGORY refusal above:
+# an all-hyphen TITLE is legitimate and must keep building.
+# The category gets the stricter (post-strip) check because
+# category_slug re-parses the filename on hyphens and an
+# all-hyphen field collapses to zero words there; the title
+# has no such re-parse -- post_slug is just "whatever survived
+# after the category's _", hyphens included -- so nothing
+# pins this without a test asserting the accept side too.
+#
+test_new_accepts_an_all_hyphen_title() {
+	sandbox new_all_hyphen_title
+	build new TITLE="- - -" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_-----.txt
+	build || return
+	assert_file build/2026/01/02/-----.html
+}
+
+#
+# Never clobber. Everything else in this Makefile copies
+# with `yes n | cp -i`; this is that rule where cp is not
+# what does the writing. The assertion is on the OLD
+# CONTENT, not the exit status, so it fails against a
+# recipe that writes first and complains after.
+#
+test_new_refuses_an_existing_post() {
+	sandbox new_refuses_existing
+	build new TITLE="Hello there" CATEGORY=home DATE=2026-01-02 || return
+	printf 'title: Edited by hand\n-----------------------------------\n<p>MINE</p>\n' \
+		> posts/2026-01-02-home_hello-there.txt
+	build_expect_fail new TITLE="Hello there" CATEGORY=home DATE=2026-01-02 || return
+	assert_out_grep "already exists"
+	assert_grep posts/2026-01-02-home_hello-there.txt "MINE"
+}
+
+#
+# The category is not in the URL, so two posts sharing a
+# date and title slug in different categories both want
+# /2026/01/02/dup.html. CHECKED_POST_PAGES errors naming
+# both files; new refuses before the second one exists.
+#
+test_new_refuses_a_duplicate_permalink() {
+	sandbox new_refuses_duplicate
+	build new TITLE="Dup" CATEGORY=home DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-home_dup.txt
+	build_expect_fail new TITLE="Dup" CATEGORY=work DATE=2026-01-02 || return
+	assert_out_grep "2026-01-02-home_dup.txt"
+	assert_no_file posts/2026-01-02-work_dup.txt
+	build || return
+	assert_file build/2026/01/02/dup.html
+}
+
+#
+# category_slug re-parses the filename by splitting on
+# hyphens, which drops a leading or trailing empty field the
+# same way `a-`.split("-") drops its trailing "". Untrimmed,
+# CATEGORY='-x' would write posts/<date>--x_t.txt -- a name
+# that parses to category "x", not "-x": the filename and the
+# category the post actually lands under would disagree. The
+# recipe trims cslug's edge hyphens after the hyphen-only
+# check runs (not before), so CATEGORY='-x', 'x-', and
+# '- x -' all collapse to the same file and the same category
+# page. An INTERIOR run is a different case and is left alone:
+# CATEGORY='a--b' keeps "a--b" in both the filename and the
+# page, matching category_slug's own handling of interior
+# hyphen runs.
+#
+test_new_trims_edge_hyphens_from_category() {
+	sandbox new_trims_edge_hyphens
+	build new TITLE=T CATEGORY='-x' DATE=2026-01-02 || return
+	assert_file posts/2026-01-02-x_t.txt
+	build new TITLE=T2 CATEGORY='x-' DATE=2026-01-03 || return
+	assert_file posts/2026-01-03-x_t2.txt
+	build new TITLE=T3 CATEGORY='- x -' DATE=2026-01-04 || return
+	assert_file posts/2026-01-04-x_t3.txt
+	build new TITLE=T4 CATEGORY='a--b' DATE=2026-01-05 || return
+	assert_file posts/2026-01-05-a--b_t4.txt
+	build || return
+	assert_file build/category/x.html
+	assert_file build/category/a--b.html
+}
+
+#
+# The dup glob can match a DIRECTORY sharing this date and
+# title slug, not just another post file. Bare `ls` on a
+# directory argument lists its CONTENTS, not its own name, so
+# an EMPTY directory made the check see no output and new wrote
+# a second, colliding file at exit 0 -- the exact duplicate
+# permalink tree the check exists to refuse. `ls -d` is what
+# closes it, by naming the directory itself instead of
+# listing into it.
+#
+test_new_refuses_a_duplicate_permalink_that_is_a_directory() {
+	sandbox new_refuses_duplicate_directory
+	mkdir -p posts/2026-04-02-work_d.txt
+	build_expect_fail new TITLE=D CATEGORY=home DATE=2026-04-02 || return
+	assert_out_grep "2026-04-02-work_d.txt"
+	assert_no_file posts/2026-04-02-home_d.txt
+}
+
+test_new_backdates_with_date() {
+	sandbox new_backdates
+	build new TITLE="Old news" CATEGORY=home DATE=2026-07-04 || return
+	assert_file posts/2026-07-04-home_old-news.txt
+	build || return
+	assert_file build/2026/07/04/old-news.html
+	assert_grep build/2026/07/04/old-news.html "July 04, 2026"
+}
+
+#
+# The grammar accepts an unpadded date, so the shape check
+# must too, or new would be unable to write a name the build
+# accepts -- the invariant in the other direction.
+#
+test_new_accepts_an_unpadded_date() {
+	sandbox new_unpadded_date
+	build new TITLE="Fourth" CATEGORY=home DATE=2026-7-4 || return
+	assert_file posts/2026-7-4-home_fourth.txt
+	build || return
+	assert_file build/2026/7/4/fourth.html
+}
+
+test_new_refuses_an_impossible_date() {
+	sandbox new_impossible_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-02-30 || return
+	assert_out_grep "2026-02-30"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_malformed_date() {
+	sandbox new_malformed_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=20xx-ab-cd || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# date_shape_bad used to accept an edge or doubled hyphen:
+# make's word-splitting collapses a run of separators, so
+# "2026-01-02-", "-2026-01-02" and "2026-01--02" all counted
+# 3 words at the filter stage, and the old second stage
+# ($(subst -,,...)) then erased the decoration along with the
+# separators, leaving empty -- the same "looks like a good
+# date" result a real date gives. The raw, decorated string
+# still went into the filename, unvalidated. Each of these
+# four is refused now, and posts/ is left empty by all of
+# them -- not just the shape check firing, but firing BEFORE
+# day is assigned and f is composed, so nothing is written.
+#
+test_new_refuses_a_trailing_hyphen_date() {
+	sandbox new_trailing_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-01-02- || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_leading_hyphen_date() {
+	sandbox new_leading_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=-2026-01-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_an_interior_doubled_hyphen_date() {
+	sandbox new_interior_doubled_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026-01--02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_leading_doubled_hyphen_date() {
+	sandbox new_leading_doubled_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=2026--01-02 || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The point of the fix, not just its shape: before it, a
+# refused-looking DATE=2026-01-02- still wrote
+# posts/2026-01-02--home_x.txt at exit 0 (both collision
+# checks compare raw strings, so neither caught the doubled
+# hyphen), and the file's own parse-time permalink collided
+# with a same-permalink post already on disk -- wedging every
+# LATER `make new` in the directory with "two posts build the
+# same page", before it could print anything of its own. This
+# is the assertion that actually pins that: a refusal that
+# just fails is not enough, it has to fail WITHOUT writing
+# anything, so the very next `make new` for an unrelated
+# permalink still succeeds rather than dying at parse.
+#
+test_new_recovers_after_a_refused_trailing_hyphen_date() {
+	sandbox new_recovers_after_trailing_hyphen_date
+	build new TITLE="Existing" CATEGORY=home DATE=2026-01-02 || return
+	build_expect_fail new TITLE="Existing" CATEGORY=work DATE=2026-01-02- || return
+	assert_no_file posts/2026-01-02--work_existing.txt
+	build new TITLE="Fine" CATEGORY=home DATE=2026-03-04 || return
+	assert_file posts/2026-03-04-home_fine.txt
+	build || return
+	assert_file build/2026/03/04/fine.html
+}
+
+#
+# A DATE with BOTH a leading and a trailing hyphen digit-strips
+# to "----", four hyphens rather than two or three. The first
+# candidate fix considered for this finding used $(subst --,,...)
+# instead of $(filter-out --,...): $(subst) removes ALL
+# non-overlapping occurrences in one pass, and "----" is exactly
+# two non-overlapping "--" pairs, so it collapsed straight to ""
+# -- wrongly accepted, by the very shape at the center of this
+# finding. $(filter-out) does not have this hole: "----" is one
+# word that is not the word "--", so it survives unchanged.
+#
+test_new_refuses_a_both_edges_hyphen_date() {
+	sandbox new_both_edges_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE=-2026-01-02- || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# A TRAILING space in DATE is a second way to slip past
+# $(filter-out --,...) alone: that filter is WORD-based, the
+# same as $(words), so it collapses a trailing space the same
+# way "a  b" is two words -- the digit-stripped "-- " (two
+# hyphens, one trailing space) is just the word "--" to
+# $(filter-out), which removes it, leaving genuinely empty and
+# wrongly accepting a DATE that would write a SPACE into a post
+# filename. caught by fuzzing 163 mutated DATE shapes against a
+# from-scratch regex ground truth, not by the brief's table.
+#
+# A first fix for this used $(findstring $(space),$(1))
+# prepended -- a plain substring search against the UNSTRIPPED
+# date that cannot collapse anything, so a trailing or interior
+# space would be caught before the hyphen logic ran. That fix
+# shipped and was itself found to be a regression: $(space) is
+# only the literal byte 0x20, but $(filter-out)'s word-splitting
+# treats TAB, CR, LF, VT and FF as separators too, and
+# $(findstring $(space),...) tests for none of them -- so a
+# trailing TAB, for instance, still slipped through exactly the
+# same way a trailing space had. The actual fix, verified below
+# and in the Makefile comment above date_shape_bad, concatenates
+# $(subst -,,$(call strip_digits,$(1))) instead: $(subst) removes
+# only hyphens, byte by byte, so ANY leftover byte that is
+# neither a digit nor a hyphen -- every whitespace byte, not
+# just space -- survives it and makes the term non-empty on its
+# own. $(findstring) came out; an A-B comparison across 426
+# mutated shapes (every hyphen decoration plus every whitespace
+# byte as a prefix, interior, or trailing decoration) showed
+# zero behavioural difference with or without it.
+#
+test_new_refuses_a_trailing_space_date() {
+	sandbox new_trailing_space_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="2026-01-02 " || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# Tab, CR and LF siblings of the trailing-space test above,
+# pinning the actual regression: at a00ce7a (the $(findstring
+# $(space),...) fix), all three of these were wrongly ACCEPTED
+# at exit 0, writing the raw control byte into a post filename
+# -- and the tab case is Finding 1's poison through a new door,
+# since a control character in a filename then fails
+# CHECKED_POST_NAMES at PARSE time on every later `make` and
+# `make new` in the same directory. Confirmed against a00ce7a
+# before writing the fix: all three created a file. LF is
+# passed as a single command-line token carrying an embedded
+# newline byte, not as a shell-level newline -- $(printf ...)
+# below builds that token the same way `TITLE="$(printf
+# 'Two\nlines')"` already does above for the title tests.
+#
+test_new_refuses_a_trailing_tab_date() {
+	sandbox new_trailing_tab_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$(printf '2026-01-02\t')" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+test_new_refuses_a_trailing_cr_date() {
+	sandbox new_trailing_cr_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$(printf '2026-01-02\r')" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# LF can't use the plain $(printf ...) form the tab and CR
+# tests above use: command substitution strips ALL trailing
+# newlines from what it captures, so $(printf '2026-01-02\n')
+# silently hands DATE the already-clean "2026-01-02" and this
+# test would pass even against the unfixed a00ce7a Makefile --
+# caught by running it there first and seeing it fail for the
+# wrong reason (an accepted, undecorated date) rather than the
+# right one. A trailing sentinel byte, stripped after capture,
+# is what keeps the newline: $(printf '...\nX') captures with
+# the newline still in the middle of the string, and ${…%X}
+# then removes only the sentinel.
+#
+test_new_refuses_a_trailing_lf_date() {
+	sandbox new_trailing_lf_date
+	local d
+	d=$(printf '2026-01-02\nX')
+	d=${d%X}
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE="$d" || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The word-count filter ($(filter 3,$(words ...))) is not
+# redundant with the two stage-two terms: strip a DATE of its
+# digits and "--" is unchanged (there were none to remove), and
+# both $(subst -,,"--") and $(filter-out --,"--") empty it, so
+# stage two alone would accept an all-hyphen DATE. Only the
+# word-count filter's else-branch catches it, by returning $(1)
+# itself unchanged. A mutant that deletes the word-count wrapper
+# entirely still passes every other DATE= assertion in this
+# suite; this is the one that catches it, and it wrote
+# posts/---home_x.txt before this test existed to stop it.
+#
+test_new_refuses_an_all_hyphen_date() {
+	sandbox new_all_hyphen_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE='--' || return
+	assert_out_grep "YYYY-MM-DD"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# date_select interpolates its argument into RECIPE TEXT,
+# not into the environment, so unlike TITLE it is not
+# protected by the export discipline. Under the gnu twin
+# that text is -d "<date> 00:00:00" and one " escapes it.
+# Verified before the fix, with the shape check removed: this
+# payload created the file.
+#
+# The payload has no space in it on purpose. date_words/
+# date_select word-split their argument and rejoin the pieces
+# with a literal hyphen no matter what whitespace originally
+# separated them, so a space-bearing payload like
+# 'x";touch PWNED;"' becomes the single token "touch-PWNED" --
+# a command that does not exist -- and never creates PWNED
+# even with the shape check removed. That would make this
+# test pass against genuinely vulnerable code. ">" needs no
+# space to redirect, so it survives the rejoin and still
+# proves the escape.
+#
+# The shape check is what closes it, and it has to be
+# make-level: $(if) expands only the branch it takes, so a
+# bad shape means date_select is never expanded with the
+# payload at all.
+#
+test_new_does_not_execute_an_injected_date() {
+	sandbox new_injected_date
+	build_expect_fail new TITLE="Never" CATEGORY=home DATE='x";>PWNED;"' || return
+	assert_no_file PWNED
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
+#
+# The default-date path expands no date helper, so it works
+# on a tree that has never been set up. The DATE= path goes
+# through date_select, whose else branch is the $(error), so
+# it says what every other unconfigured dated thing says.
+#
+# The first half is the R2 test: it fails against a
+# shell-guarded date_select, because make expands the whole
+# recipe line before the shell sees any of it and the
+# $(error) fires in a branch the shell would never have run.
+#
+test_new_works_without_config_mk() {
+	sandbox new_no_config_mk
+	rm -f config.mk
+	build new TITLE="Unconfigured" CATEGORY=home || return
+	assert_out_grep "Created posts/"
+	if ls posts/*-home_unconfigured.txt >/dev/null 2>&1; then ok; else fail "no post written" "$(ls posts)"; fi
+}
+
+test_new_with_date_needs_config_mk() {
+	sandbox new_date_no_config_mk
+	rm -f config.mk
+	build_expect_fail new TITLE="Unconfigured" CATEGORY=home DATE=2026-01-02 || return
+	assert_out_grep "run \`make setup\` first"
+	if [ -z "$(ls posts 2>/dev/null)" ]; then ok; else fail "posts/ should be empty" "$(ls posts)"; fi
+}
+
 mkdir -p "$TMPROOT"
 
 test_builds_a_post_and_index
@@ -3926,5 +4584,44 @@ test_build_works_without_a_static_directory
 test_setup_creates_static_with_the_stylesheet
 test_setup_does_not_clobber_an_edited_stylesheet
 test_stock_stylesheet_is_published_and_linked
+
+test_new_requires_a_title
+test_new_requires_a_category
+test_new_prints_no_markdown_notice
+test_new_works_with_a_file_named_new
+test_new_creates_a_post_that_builds
+test_new_leaves_no_residue_on_a_failed_write
+test_new_slugifies_a_title
+test_new_slugifies_a_category
+test_new_keeps_non_ascii
+test_new_survives_a_hostile_title
+test_new_strips_control_characters
+test_new_keeps_the_front_matter_on_one_line
+test_new_refuses_a_title_with_no_usable_characters
+test_new_refuses_a_category_with_no_usable_characters
+test_new_refuses_a_hyphen_only_category
+test_new_accepts_an_all_hyphen_title
+test_new_refuses_an_existing_post
+test_new_refuses_a_duplicate_permalink
+test_new_trims_edge_hyphens_from_category
+test_new_refuses_a_duplicate_permalink_that_is_a_directory
+test_new_backdates_with_date
+test_new_accepts_an_unpadded_date
+test_new_refuses_an_impossible_date
+test_new_refuses_a_malformed_date
+test_new_refuses_a_trailing_hyphen_date
+test_new_refuses_a_leading_hyphen_date
+test_new_refuses_an_interior_doubled_hyphen_date
+test_new_refuses_a_leading_doubled_hyphen_date
+test_new_recovers_after_a_refused_trailing_hyphen_date
+test_new_refuses_a_both_edges_hyphen_date
+test_new_refuses_a_trailing_space_date
+test_new_refuses_a_trailing_tab_date
+test_new_refuses_a_trailing_cr_date
+test_new_refuses_a_trailing_lf_date
+test_new_refuses_an_all_hyphen_date
+test_new_does_not_execute_an_injected_date
+test_new_works_without_config_mk
+test_new_with_date_needs_config_mk
 
 pass_fail_summary
