@@ -2970,6 +2970,82 @@ EOF
 }
 
 #
+# The date-shape clause must stay BELOW the character clause,
+# and the reason is the message rather than safety: $(filter)
+# reaches no shell, so nothing executes in either order. A %
+# in a date field builds a two-% pattern that matches nothing,
+# so the clause placed first refuses this name for a reason
+# that is not the reason.
+#
+# Cannot fail against main -- the character clause is
+# pre-existing. Proved by mutation: move the date-shape clause
+# to first in check_post_name and this reports "repeated or
+# leading hyphen in date" instead.
+#
+test_date_shape_error_follows_the_character_error() {
+	sandbox date_shape_error_follows_the_character_error
+	add_post '2026-%1-02-home_x.txt' <<'EOF'
+title: Both Wrong
+-----------------------------------
+<p>BOTH WRONG BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'illegal character'
+	assert_out_not_grep 'repeated or leading hyphen in date'
+}
+
+#
+# And below the empty-category clause. 2026-01_x.txt has no
+# third field, so $(word 3,...) is empty and the detector
+# refuses it for a reason that is not the reason.
+#
+# Cannot fail against main -- the empty-category clause is
+# pre-existing. Proved by the same mutation as its sibling
+# above: clause first, and this reports the shape message.
+#
+test_date_shape_error_follows_the_empty_category_error() {
+	sandbox date_shape_error_follows_the_empty_category_error
+	add_post '2026-01_x.txt' <<'EOF'
+title: No Category
+-----------------------------------
+<p>NO CATEGORY BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'empty category'
+	assert_out_not_grep 'repeated or leading hyphen in date'
+}
+
+#
+# The scope line: a hyphen run AFTER the day is category
+# territory and stays legal, because category_slug collapses
+# it out of the page path and make new writes such names
+# (CATEGORY='a--b').
+#
+# Cannot fail against main, and it is NOT the only thing that
+# catches the tightening it guards: overtightening the rule to
+# the whole segment ($(findstring --,$(call
+# date_and_category,$(1)))) already fails
+# test_new_trims_edge_hyphens_from_category, measured at
+# 524/1. That test catches it INCIDENTALLY, though -- it is a
+# make new test that happens to build, and its failure reads
+# "make failed unexpectedly (exit 2)", naming nothing about
+# scope. This one exists to name the reason, not to be the
+# only net.
+#
+test_doubled_hyphen_category_still_builds() {
+	sandbox doubled_hyphen_category_still_builds
+	add_post '2026-01-02-a--b_x.txt' <<'EOF'
+title: Interior Run
+-----------------------------------
+<p>INTERIOR BODY</p>
+EOF
+	build || return
+	assert_file 'build/2026/01/02/x.html'
+	assert_file 'build/category/a--b.html'
+	assert_grep 'build/category/a--b.html' 'INTERIOR BODY'
+}
+
+#
 # ---------------------------------------------------
 # Control characters. These fall outside BAD_CHARS' own
 # taxonomy -- a control byte is neither a letter, a digit,
@@ -4617,6 +4693,9 @@ test_empty_title_slug_is_rejected
 test_repeated_hyphen_before_the_day_is_rejected
 test_repeated_hyphen_before_the_month_is_rejected
 test_leading_hyphen_in_date_is_rejected
+test_date_shape_error_follows_the_character_error
+test_date_shape_error_follows_the_empty_category_error
+test_doubled_hyphen_category_still_builds
 test_control_character_slug_is_rejected
 test_tab_in_filename_names_the_whole_file
 test_del_character_slug_is_rejected
