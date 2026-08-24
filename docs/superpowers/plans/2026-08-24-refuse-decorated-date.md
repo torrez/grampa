@@ -26,7 +26,7 @@
 
 **Files:**
 - Modify: `Makefile` — insert two helpers above `check_post_name` (currently line 845) and a sixth clause into it (clauses currently lines 846-850)
-- Modify: `tests/run.sh` — two new test functions, plus two registrations in the runner list near line 4543
+- Modify: `tests/run.sh` — two new test functions, plus three registrations in the runner list, after the `test_empty_title_slug_is_rejected` line at 4530
 
 **Interfaces:**
 - Produces: `date_prefix` and `filter_date_prefix`, two recursively-expanded make functions taking a bare post filename (no `posts/` prefix). `filter_date_prefix` returns non-empty when the name is **acceptable** and empty when it must be refused. Task 2 refers to both by name.
@@ -51,28 +51,53 @@ Add both functions to `tests/run.sh`, immediately after `test_empty_title_slug_i
 # status would pass against a "fix" that refused the name
 # after clobbering.
 #
-test_repeated_hyphen_in_date_is_rejected() {
-	local i=0
-	for name in '2026-01--02-evil_x' '2026--01-02-evil_x'; do
-		i=$((i + 1))
-		sandbox "repeated_hyphen_in_date_is_rejected_$i"
-		add_post '2026-01-02-home_x.txt' <<'EOF'
+test_repeated_hyphen_before_the_day_is_rejected() {
+	sandbox repeated_hyphen_before_the_day_is_rejected
+	add_post '2026-01-02-home_x.txt' <<'EOF'
 title: Real
 -----------------------------------
 <p>REAL BODY</p>
 EOF
-		build || return
-		assert_grep build/2026/01/02/x.html 'REAL BODY'
-		add_post "${name}.txt" <<'EOF'
+	build || return
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+	add_post '2026-01--02-evil_x.txt' <<'EOF'
 title: Evil
 -----------------------------------
 <p>EVIL BODY</p>
 EOF
-		build_expect_fail || return
-		assert_out_grep "posts/${name}.txt"
-		assert_out_grep 'repeated or leading hyphen in date'
-		assert_grep build/2026/01/02/x.html 'REAL BODY'
-	done
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-01--02-evil_x.txt'
+	assert_out_grep 'repeated or leading hyphen in date'
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+}
+
+#
+# The sibling shape, between the year and the month. It gets
+# its own function rather than a second loop iteration
+# because `build_expect_fail || return` returns from the whole
+# FUNCTION, not from the loop -- so a looped form stops at the
+# first shape during the RED run and the second shape is never
+# watched failing at all. Verified: the looped form failed
+# only iteration 1 against the unfixed Makefile.
+#
+test_repeated_hyphen_before_the_month_is_rejected() {
+	sandbox repeated_hyphen_before_the_month_is_rejected
+	add_post '2026-01-02-home_x.txt' <<'EOF'
+title: Real
+-----------------------------------
+<p>REAL BODY</p>
+EOF
+	build || return
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+	add_post '2026--01-02-evil_x.txt' <<'EOF'
+title: Evil
+-----------------------------------
+<p>EVIL BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026--01-02-evil_x.txt'
+	assert_out_grep 'repeated or leading hyphen in date'
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
 }
 
 #
@@ -102,7 +127,8 @@ EOF
 Register both by adding these two lines to the runner list, directly after the existing `test_empty_title_slug_is_rejected` line (near line 4530):
 
 ```
-test_repeated_hyphen_in_date_is_rejected
+test_repeated_hyphen_before_the_day_is_rejected
+test_repeated_hyphen_before_the_month_is_rejected
 test_leading_hyphen_in_date_is_rejected
 ```
 
@@ -112,11 +138,13 @@ test_leading_hyphen_in_date_is_rejected
 cd "$(mktemp -d)" && cp -r /home/andre/Code/grampa/{Makefile,.source,tests,tools} . && MAKE=make bash tests/run.sh 2>&1 | grep -E "^FAIL|^passed:"
 ```
 
-Expected: both new tests FAIL. `repeated_hyphen_in_date_is_rejected_1` and `_2` fail at `make succeeded but should have failed` — the clobber is live, so the second build exits 0. `leading_hyphen_in_date_is_rejected` fails the same way. **If either passes here, stop** — the fixture is wrong and would guard nothing.
+Expected: **all three** new tests FAIL, each at `make succeeded but should have failed` — the clobber is live, so the second build exits 0. **If any of the three passes here, stop**: the fixture is wrong and would guard nothing.
+
+Three and not two is the whole reason the two repeated-hyphen shapes are separate functions. `build_expect_fail || return` returns from the *function*, so a single looped test stops after the first shape and the second is never watched failing — measured, in the looped form this plan originally carried: `passed: 527 failed: 2`, with iteration 2 never reached.
 
 - [ ] **Step 3: Write the two helpers**
 
-Insert immediately above `check_post_name` (before the line `check_post_name = \`), including the whole comment block:
+Insert **above `check_post_name`'s existing comment banner** — not between that banner and the function it describes — including the whole comment block below. The banner currently ends at line 844 and `check_post_name = \` begins at 845; the new helpers and their block go above line 844, so the banner stays adjacent to the function. Step 4 then appends a paragraph to the end of that banner.
 
 ```make
 #
@@ -139,9 +167,13 @@ Insert immediately above `check_post_name` (before the line `check_post_name = \
 # day is category territory, where runs are legal and where
 # make new writes them: CATEGORY='a--b' produces
 # 2026-01-02-a--b_x.txt, which builds category/a--b.html.
-# Such a name is harmless here because category_slug collapses
-# the run out of the page path, so a twin of it is caught by
-# CHECKED_POST_PAGES the ordinary way.
+# Such a run is harmless here because it falls OUTSIDE
+# $(wordlist 1, 3, ...)'s window, so path_from_filename
+# returns a byte-identical 2026/01/02 and a twin is caught by
+# CHECKED_POST_PAGES the ordinary way. It is not that anything
+# collapses the run: category_slug preserves it -- that is why
+# the page is a--b.html -- and the category never appears in a
+# post URL at all.
 #
 # This closes // in a page path but NOT /./, and . is a legal
 # filename character: 2026-.-01-home_x.txt would build
@@ -187,7 +219,7 @@ Then extend the existing comment banner above `check_post_name` — the one that
 cd "$(mktemp -d)" && cp -r /home/andre/Code/grampa/{Makefile,.source,tests,tools} . && MAKE=make bash tests/run.sh 2>&1 | tail -3
 ```
 
-Expected: 0 failed, and a pass count **above** 526. Record the actual number; it goes in the commit message.
+Expected: 0 failed, and a pass count **above** 526. The review measured **537** after Task 1 and **544** after Task 2; splitting the looped test moves assertions between functions rather than adding any, so those should still hold. Record the actual number — it goes in the commit message, and a predicted count is not a measured one.
 
 - [ ] **Step 6: Verify the closure measurement, which needs an unbuilt tree**
 
@@ -346,7 +378,9 @@ In a fresh scratch copy, replace the clause's condition with the overtightened f
 MAKE=make bash tests/run.sh 2>&1 | grep -E "^FAIL|^passed:"
 ```
 
-Expected: `doubled_hyphen_category_still_builds` FAILS, alongside the pre-existing `new_trims_edge_hyphens`. Record both. Discard the scratch copy.
+Expected: **three** failures — `doubled_hyphen_category_still_builds`, the pre-existing `new_trims_edge_hyphens`, and `leading_hyphen_in_date_is_rejected`. Measured `passed: 536 failed: 3`.
+
+The third is not noise and is worth recording: `$(findstring --,-2026-01-02-home)` is empty, so the overtightened form does not see a lone leading hyphen at all and `-2026-01-02-home_q.txt` builds under it. Task 1's collateral test independently pins that mutation. Record all three. Discard the scratch copy.
 
 - [ ] **Step 5: Commit**
 

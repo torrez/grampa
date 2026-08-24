@@ -121,9 +121,22 @@ Makefile:
 
 The asymmetry between a leading hyphen (refused) and a run after the day (accepted) is one
 sentence: **decoration before the day is date territory; decoration after it is category
-territory**, where doubled hyphens are legal, `make new`-producible, and — because
-`category_slug` collapses them out of the page path — already caught by the existing
-collision check in the only case that can clobber anything.
+territory**, where doubled hyphens are legal and `make new`-producible.
+
+The reason a run after the day is *safe* is not that anything collapses it — an earlier draft
+of this paragraph said `category_slug` collapses it out of the page path, and that is false in
+both halves. `category_slug` **preserves** runs, which is exactly why `CATEGORY='a--b'` builds
+`category/a--b.html`; and the category never appears in a post URL at all. The real reason is
+that a run after the day falls **outside `$(wordlist 1, 3, …)`'s window**, so
+`path_from_filename` returns a byte-identical `2026/01/02` and `page_for` a byte-identical
+`2026/01/02/x` — which is precisely what the existing collision check compares. Verified
+against the real definitions:
+
+```
+category_slug(2026-01-02-a--b_x.txt)    = [a--b]     <- preserved, not collapsed
+path_from_filename(2026-01-02--evil_x)  = [2026/01/02]
+path_from_filename(2026-01-02-home_x)   = [2026/01/02]   <- byte-identical, hence caught
+```
 
 ## Collateral
 
