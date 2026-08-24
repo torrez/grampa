@@ -22,11 +22,11 @@
 
 ---
 
-### Task 1: The clause, and the two tests that can be watched failing
+### Task 1: The clause, and the three tests that can be watched failing
 
 **Files:**
 - Modify: `Makefile` — insert two helpers above `check_post_name` (currently line 845) and a sixth clause into it (clauses currently lines 846-850)
-- Modify: `tests/run.sh` — two new test functions, plus three registrations in the runner list, after the `test_empty_title_slug_is_rejected` line at 4530
+- Modify: `tests/run.sh` — three new test functions, plus three registrations in the runner list, after the `test_empty_title_slug_is_rejected` line at 4530
 
 **Interfaces:**
 - Produces: `date_prefix` and `filter_date_prefix`, two recursively-expanded make functions taking a bare post filename (no `posts/` prefix). `filter_date_prefix` returns non-empty when the name is **acceptable** and empty when it must be refused. Task 2 refers to both by name.
@@ -34,7 +34,7 @@
 
 - [ ] **Step 1: Write the two failing tests**
 
-Add both functions to `tests/run.sh`, immediately after `test_empty_title_slug_is_rejected` (which ends around line 2884), keeping the `#`-banner style:
+Add all three functions to `tests/run.sh`, immediately after `test_empty_title_slug_is_rejected` (which ends around line 2884), keeping the `#`-banner style:
 
 ```bash
 #
@@ -254,7 +254,7 @@ Use a body explaining the mechanism ( `$(wordlist)` preserves internal spacing, 
 
 ---
 
-### Task 2: The three tests that cannot fail on `main`, each proved by a named mutation
+### Task 2: The two tests that cannot fail on `main`, plus the scope test, each proved by a named mutation
 
 **Files:**
 - Modify: `tests/run.sh` — three new test functions plus three registrations
