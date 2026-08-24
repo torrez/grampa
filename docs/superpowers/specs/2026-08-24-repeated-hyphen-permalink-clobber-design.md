@@ -135,6 +135,13 @@ for `BAD_CHARS`: `%` and `+` also built correctly before they were enumerated ou
 closed by enumeration is worth more than one closed by judging which shapes look dangerous,
 which is how `[` and `]` got through in the first place.
 
+**Do not generalize the refused column into "leading decoration is refused".** A leading *dot*
+is neither refused nor built — it is invisible. `POST_LS` is `ls posts` without `-A`, so
+`posts/..-2026-01-home_x.txt` never enters `POST_NAMES` and every check in the file is blind to
+it: verified exit 0, the name absent from `POST_NAMES`, and nothing published. That is
+pre-existing on `main` and out of scope here, but the `-2026` and `--2026` rows invite exactly
+the wrong generalization, so the counterexample is recorded next to them.
+
 ## Ordering is load-bearing
 
 Two dependencies, both real, both inside `check_post_name`'s clause sequence rather than
@@ -162,7 +169,11 @@ file's own recurring defect — a confident, checkable, false claim — in the s
 **Below the empty-category clause.** `posts/2026-01_x.txt` has no third field, so
 `$(word 3,…)` is empty and the detector refuses it for a reason that is not the reason.
 Verified by mutation: placed first it reports `repeated or leading hyphen in date`; placed
-last, `empty category in filename`, which is accurate.
+last, `empty category in filename`, which is accurate. This one is fractionally more than a message
+concern: `%` matches the empty string in `$(filter)`, so a segment exactly equal to its own
+date prefix would be *accepted* by the detector. Unreachable in shipping order — such a segment
+means an empty category, which clause 4 refuses first — but the Makefile comment should say so,
+since it is the empty-category clause that makes it unreachable.
 
 Both want pinning by test, on the precedent of `test_character_error_precedes_the_date_error`
 — which exists because the Task 2 review of that feature found the same property guarded by a
@@ -171,14 +182,45 @@ comment and nothing else, with every other test using a name bad in exactly one 
 ## What closes the item
 
 A checkable claim rather than a story: **no post page path can contain a repeated slash.**
-A `//` in a page can only come from a preserved double space inside `$(wordlist 1, 3, …)`;
-the slug half cannot contribute one, since `/` is in `BAD_CHARS`. Measured: `find build -name
-'*.html' | grep -c '//'` is 0 against a prototype corpus containing every accepted shape in
-the table above.
+A `//` can only come from a preserved double space inside `$(wordlist 1, 3, …)`; the slug half
+cannot contribute one, since `/` is in `BAD_CHARS`.
+
+**The instrument has to read make's target strings, not the built tree, and the first draft of
+this section got that wrong.** It measured `find build -name '*.html' | grep -c '//'`, which
+returns 0 on *every* Makefile ever written: the kernel collapses the repeated slash at file
+creation, so `find` structurally cannot print one. Verified vacuous — it scores 0 on an
+unmodified tree with the clobber demonstrably live and `EVIL BODY` in the twin's page. The
+working instrument is
+
+```sh
+make clean && make -n 2>/dev/null | grep -o 'build/[^ "]*' | grep -c '//'
+```
+
+which reports **4** on the unmodified tree carrying `2026-01--02-evil_x.txt` (naming
+`build/2026/01//02/x.html` and its directory) and **0** on a prototype corpus containing every
+accepted shape in the table above. The `make clean` is load-bearing and cost me one wrong
+measurement: on an already-built tree `make -n` has nothing to print and scores 0 regardless.
+Do not simplify to a bare `make -n | grep -c '//'` either — that scores 10 false hits from
+recipe text on a clean corpus.
+
+**One dependency worth naming, because a future relaxation elsewhere would reopen this.** The
+claim covers `//` but not `/./`, and `.` is a legal filename character: `2026-.-01-home_x.txt`
+would build the path `2026/./01/x.html` and collide with `2026-01-.-…`'s `2026/01/./x.html`
+after the same kernel normalization — item 15's mechanism without a doubled hyphen. The new
+clause accepts both names. They do not build only because `CHECKED_POST_DATES` refuses every
+dotted field first; verified that `2026-.-01`, `2026-01-.` and `2026-..-01` all die at
+`no such calendar date`. So the closure leans on the calendar check, which is
+`DATE_DIALECT`-gated, and that reliance belongs in the Makefile comment rather than left for
+someone to rediscover.
 
 ## Testing
 
-Five tests, each watched failing first against the unmodified Makefile.
+Five tests. **Two can be watched failing against the unmodified Makefile; three cannot, and
+saying otherwise would be this file's own recurring defect.** Tests 3-5 assert behaviour that
+is already correct on `main` — their job is to stop a *future* edit from breaking it, so each
+is proved by mutation instead, in the manner the suite's own
+`test_static_character_error_precedes_the_collision_error` comment records ("proved by mutation
+in both directions"). The mutations are named per test below and each was run.
 
 - `test_repeated_hyphen_in_date_is_rejected` — both `Y--M-D` and `Y-M--D`. The load-bearing
   assertion is that the **twin's** page still holds the real body, not merely that the build
@@ -186,13 +228,18 @@ Five tests, each watched failing first against the unmodified Makefile.
   is the sibling's page rather than the exit status.
 - `test_leading_hyphen_in_date_is_rejected` — the collateral, asserted deliberately so a
   future reader finds it intended rather than incidental.
-- `test_date_shape_error_follows_the_character_error` — the `$(>PWN)` name bad in both ways,
-  asserting the character message and the absence of the payload file.
+- `test_date_shape_error_follows_the_character_error` — `2026-%1-02-home_x.txt`, a name bad in
+  both ways, asserting the character message. Already passes on `main`; **mutation**: move the
+  clause to first in `check_post_name` and it reports `repeated or leading hyphen in date`
+  instead. The `%` fixture is chosen over `$(>PWN)` because the `%` is what the detector
+  interpolates into a pattern; the assertion is about the message, not about execution.
 - `test_date_shape_error_follows_the_empty_category_error` — `2026-01_x.txt` asserting
-  `empty category`, so the message cannot silently regress to the shape error.
-- `test_doubled_hyphen_category_still_builds` — pins the scope line, so a future tightening
-  of the rule to the whole segment fails loudly here instead of quietly breaking a documented
-  `make new` output.
+  `empty category`. Already passes on `main`; **mutation**: same clause move, which flips it to
+  the shape message.
+- `test_doubled_hyphen_category_still_builds` — pins the scope line. Already passes on `main`;
+  **mutation**: overtighten the rule to the whole segment (`$(findstring --,$(call
+  date_and_category,$(1)))`), which refuses `2026-01-02-a--b_x.txt` — a name `make new
+  CATEGORY='a--b'` writes today. Without this test that tightening is silent.
 
 Baseline before the change is **526 passed, 0 failed**; a prototype carrying the clause is
 also **526 passed, 0 failed**, which establishes both that nothing regresses and that no
