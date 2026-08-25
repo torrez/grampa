@@ -840,8 +840,9 @@ was found by **running something**; not one was found by reading. The ten:
     introduced a fresh instance of it, which is the strongest available argument that the cure
     for the class is not care but execution.
 
-**The pattern, and it is the whole finding: ten for ten were caught by execution, zero by
-inspection** — and several had survived multiple careful readings by reviewers who were
+**The pattern, and it is the whole finding — the ten here being instances 9 through 18, the
+static-assets branch, and instance 19 below extending it to eleven: ten for ten were caught by
+execution, zero by inspection** — and several had survived multiple careful readings by reviewers who were
 specifically looking for this class, because a false claim about code reads exactly like a true
 one. Instance 16 is the sharpest case, since the thing that was false was a test's own claim to
 be testing something, and instance 18 the most instructive. What separates the ten from the earlier eight is not the rate but the
@@ -865,7 +866,8 @@ four checkpoints — by running the instrument against the *unfixed* tree, which
 operation that separates an instrument from a sentence.** Reading it again would not have done
 it. Replaced by `make clean && make -n | grep -o 'build/[^ "]*' | grep -c '//'`, which reads
 make's target strings before the filesystem gets a chance to normalize them: **4** on the bug,
-**0** on the fix. Eleven for eleven caught by execution; still none by reading.
+**0** on the fix. That takes the execution-caught run from ten of ten to **eleven of eleven**,
+counting from instance 9; still none found by reading.
 
 **How it was finally stopped is itself worth recording: by *deleting* the fourth claim rather
 than splitting the sentence a third way.** After three consecutive corrections each replaced
@@ -902,8 +904,10 @@ make clean && make -n 2>/dev/null | grep -o 'build/[^ "]*' | grep -c '//'
 **4** on the unfixed tree carrying `2026-01--02-evil_x.txt` — `build/2026/01//02/x.html` and
 its directory — and **0** on the fixed tree carrying every accepted shape. The `make clean` is
 load-bearing: on an already-built tree `make -n` has nothing left to print and scores 0 either
-way. A bare `make -n | grep -c '//'` is not a substitute either, scoring 10 false hits off
-recipe text on a clean corpus.
+way. A bare `make -n | grep -c '//'` is not a substitute either: the `.staged` recipe's own
+`sed` text carries a `//`, so it scores **one false hit per post** on a corpus with no bug in it
+at all — measured as 3 on three posts and 10 on ten. The `grep -o 'build/[^ "]*'` is what keeps
+the count to target strings.
 
 **Three of the five tests cannot be watched failing against `main`, and are mutation-proved
 instead.** `test_repeated_hyphen_in_date_is_rejected` and
@@ -935,9 +939,11 @@ but not `/./`, and `.` is a legal filename character: `2026-.-01-home_x.txt` wou
 `2026/./01/x.html` and collide with `2026-01-.-…`'s `2026/01/./x.html` by exactly this item's
 mechanism, without a doubled hyphen anywhere. The new clause accepts both names; they do not
 build only because `CHECKED_POST_DATES` refuses every dotted field first, so the closure leans
-on the calendar check — which is `DATE_DIALECT`-gated. That dependency is written down once, in
-the comment above `date_prefix` in the `Makefile`, on item 14's rule, and is not restated here
-or in `CLAUDE.md`. Second, a **leading dot** is neither refused nor built but *invisible*:
+on the calendar check — which is `DATE_DIALECT`-gated. The full statement of that dependency,
+including what relaxing the calendar check would reopen, lives in the comment above
+`date_prefix` in the `Makefile`; this entry records the conclusion, because a closed item has to
+say what its closure rests on, and `CLAUDE.md` carries neither — one copy of the argument plus
+two pointers, on item 14's rule. Second, a **leading dot** is neither refused nor built but *invisible*:
 `POST_LS` is `ls posts` without `-A`, so `posts/.-2026-01-02-home_x.txt` never enters
 `POST_NAMES` and no rule in the file can see it. Pre-existing on `main` and out of scope here,
 recorded because the two refused leading-hyphen shapes invite exactly the wrong generalisation.
@@ -947,7 +953,6 @@ RED-able tests, 544 with the three mutation-proved ones. The counter counts `ass
 not test functions, which is why three tests add seven.
 
 Original finding follows.
-
 
 Found during the `make new` branch's pre-merge fix wave, while reproducing the DATE=
 validation finding below it (a `date_shape_bad` hole that let `make new` *write* a filename
