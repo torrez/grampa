@@ -704,7 +704,7 @@ and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect — nineteen confident-but-false claims across three branches, and the finding is that counting them was the wrong instrument
+### 14. The branch's own recurring defect — twenty confident-but-false claims across three branches, and the finding is that counting them was the wrong instrument
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
 formerly-true, empirically-false claim". It happened four times on this branch before this
@@ -841,12 +841,13 @@ was found by **running something**; not one was found by reading. The ten:
     for the class is not care but execution.
 
 **The pattern, and it is the whole finding — the ten here being instances 9 through 18, the
-static-assets branch, and instance 19 below extending it to eleven: ten for ten were caught by
-execution, zero by inspection** — and several had survived multiple careful readings by reviewers who were
-specifically looking for this class, because a false claim about code reads exactly like a true
-one. Instance 16 is the sharpest case, since the thing that was false was a test's own claim to
-be testing something, and instance 18 the most instructive. What separates the ten from the earlier eight is not the rate but the
-cure that now exists for their commonest cause: instances 9, 12 and 13 are all the same
+static-assets branch, with instances 19 and 20 below extending the run to twelve: ten for ten
+were caught by execution, zero by inspection** — and several had survived multiple careful
+readings by reviewers who were specifically looking for this class, because a false claim about
+code reads exactly like a true one. Instance 16 is the sharpest case, since the thing that was
+false was a test's own claim to be testing something, and instance 18 the most instructive.
+What separates the ten from the earlier eight is not the rate but the cure that now exists for
+their commonest cause: instances 9, 12 and 13 are all the same
 argument stated in three places — Makefile comment, `CLAUDE.md`, spec — where re-running it in
 one place left two copies asserting something that had stopped being true. That fix wave
 collapsed `CLAUDE.md`'s copy to the conclusion plus a pointer at the Makefile's, which is the
@@ -868,6 +869,22 @@ it. Replaced by `make clean && make -n | grep -o 'build/[^ "]*' | grep -c '//'`,
 make's target strings before the filesystem gets a chance to normalize them: **4** on the bug,
 **0** on the fix. That takes the execution-caught run from ten of ten to **eleven of eleven**,
 counting from instance 9; still none found by reading.
+
+**20. And the commit that collapsed instance 19's duplicate argument made the twentieth, which
+is instance 18's shape exactly.** `09addec` de-duplicated the date-shape mechanism down to one
+copy plus two pointers — the cure this entry prescribes — and in the same commit corrected the
+`make -n | grep -c '//'` false-hit count from a flat 10 to one per post, attributing the hit to
+"the `.staged` recipe's own `sed` text". The rate is right and was measured; the attribution is
+wrong and was not. The `.staged` recipe contains no `sed` at all (`Makefile:2118`); the `//` is
+the empty replacement in `s/^title:[[:space:]]*//p` in the `$(BUILD_DIR)%.html` page rule
+(`Makefile:1917`), which `make -n` prints directly under that page's `Building`/`mkdir` lines.
+Caught by a re-reviewer locating the line in `make -n` output instead of reading the recipe it
+had been assigned to. **The mechanism worth naming is that half the sentence was measured and
+half was assumed** — running the count proved the number and said nothing about where it came
+from, and the measured half lent its credibility to the other. Twelve of twelve by
+execution, counting from instance 9. That is twice now that a de-duplication written to cure this defect
+has produced a fresh instance of it, which is the argument instance 18 makes, made again
+without help.
 
 **How it was finally stopped is itself worth recording: by *deleting* the fourth claim rather
 than splitting the sentence a third way.** After three consecutive corrections each replaced
@@ -904,10 +921,11 @@ make clean && make -n 2>/dev/null | grep -o 'build/[^ "]*' | grep -c '//'
 **4** on the unfixed tree carrying `2026-01--02-evil_x.txt` — `build/2026/01//02/x.html` and
 its directory — and **0** on the fixed tree carrying every accepted shape. The `make clean` is
 load-bearing: on an already-built tree `make -n` has nothing left to print and scores 0 either
-way. A bare `make -n | grep -c '//'` is not a substitute either: the `.staged` recipe's own
-`sed` text carries a `//`, so it scores **one false hit per post** on a corpus with no bug in it
-at all — measured as 3 on three posts and 10 on ten. The `grep -o 'build/[^ "]*'` is what keeps
-the count to target strings.
+way. A bare `make -n | grep -c '//'` is not a substitute either: the `$(BUILD_DIR)%.html` page
+rule's `sed` line (`Makefile:1917`) carries a `//` in `s/^title:[[:space:]]*//p`, so the bare
+form scores **one false hit per post** on a corpus with no bug in it at all — measured as 3 on
+three posts and 10 on ten. The `grep -o 'build/[^ "]*'` is what keeps the count to target
+strings.
 
 **Three of the five tests cannot be watched failing against `main`, and are mutation-proved
 instead.** `test_repeated_hyphen_in_date_is_rejected` and
@@ -943,8 +961,8 @@ on the calendar check — which is `DATE_DIALECT`-gated. The full statement of t
 including what relaxing the calendar check would reopen, lives in the comment above
 `date_prefix` in the `Makefile`; this entry records the conclusion, because a closed item has to
 say what its closure rests on, and `CLAUDE.md` carries neither — one copy of the argument plus
-two pointers, on item 14's rule. Second, a **leading dot** is neither refused nor built but *invisible*:
-`POST_LS` is `ls posts` without `-A`, so `posts/.-2026-01-02-home_x.txt` never enters
+two pointers, on item 14's rule. Second, a **leading dot** is neither refused nor built but
+*invisible*: `POST_LS` is `ls posts` without `-A`, so `posts/.-2026-01-02-home_x.txt` never enters
 `POST_NAMES` and no rule in the file can see it. Pre-existing on `main` and out of scope here,
 recorded because the two refused leading-hyphen shapes invite exactly the wrong generalisation.
 
