@@ -704,7 +704,7 @@ and nothing on this branch's scope required it.
 
 ---
 
-### 14. The branch's own recurring defect — eighteen confident-but-false claims across two branches, and the finding is that counting them was the wrong instrument
+### 14. The branch's own recurring defect — nineteen confident-but-false claims across three branches, and the finding is that counting them was the wrong instrument
 
 This file's own recurring lesson, stated in "If only three get done" below, is "a confident,
 formerly-true, empirically-false claim". It happened four times on this branch before this
@@ -852,6 +852,21 @@ collapsed `CLAUDE.md`'s copy to the conclusion plus a pointer at the Makefile's,
 same subtraction that ended the run at instance 4 and the run at instance 8, applied a third
 time. It is the only move that has ever worked on this defect.
 
+**19. The `refuse-decorated-date` branch's spec measured its own closure with an instrument
+that could not fail.** Its section titled "What closes the item" backed the claim *no post page
+path can contain a repeated slash* with `find build -name '*.html' | grep -c '//'` — a
+measurement that returns 0 on **every** Makefile ever written, since the kernel collapses a
+repeated `/` at file creation and `find` therefore structurally cannot print one. It scored 0
+on an unmodified tree with the clobber live and `EVIL BODY` sitting in the twin's page. The
+error is ordinary; the disguise is what earns it a number. It read as a *measurement* rather
+than as an argument, which is the form this file trusts most, and a reader checking the section
+for hand-waving would have found none. **Caught by the Fable spec review — the first of the
+four checkpoints — by running the instrument against the *unfixed* tree, which is the single
+operation that separates an instrument from a sentence.** Reading it again would not have done
+it. Replaced by `make clean && make -n | grep -o 'build/[^ "]*' | grep -c '//'`, which reads
+make's target strings before the filesystem gets a chance to normalize them: **4** on the bug,
+**0** on the fix. Eleven for eleven caught by execution; still none by reading.
+
 **How it was finally stopped is itself worth recording: by *deleting* the fourth claim rather
 than splitting the sentence a third way.** After three consecutive corrections each replaced
 one false generalization with a narrower one that turned out to still be false in a new spot,
@@ -862,7 +877,77 @@ correctly in three tries.
 
 ---
 
-### 15. NEW, STILL OPEN — a hand-typed doubled-hyphen date in a post filename silently clobbers a same-permalink post's page at exit 0, on `main` today, no `make new` involved
+### 15. DONE — a hand-typed doubled-hyphen date in a post filename silently clobbered a same-permalink post's page at exit 0
+
+Fixed by a sixth and last clause in `check_post_name`: the date-and-category segment must
+**begin with its own three date fields rejoined by single hyphens** — the prefix built with
+`$(word)`, which normalizes, and matched against the raw segment with `$(filter)`, which sees
+what `$(wordlist)` preserved. **Scoped to the date span on purpose.** A hyphen run *after* the
+day is category territory, where runs are legal and `make new CATEGORY='a--b'` writes them, so
+`2026-01-02-a--b_x.txt` still builds `build/category/a--b.html`. The collateral is one shape
+and is accepted on the `BAD_CHARS` precedent: a lone `posts/-2026-01-02-home_q.txt` built
+correctly before and no longer builds. Design:
+`docs/superpowers/specs/2026-08-24-repeated-hyphen-permalink-clobber-design.md`.
+
+**The spec's first closure measurement was vacuous, which is item 14's instance 19 above.**
+`find build -name '*.html' | grep -c '//'` returns 0 on every Makefile ever written — the
+kernel collapses the repeated slash at file creation, so `find` cannot print one — and it duly
+scored 0 on an unmodified tree with the clobber live. The instrument that works reads make's
+target strings off an **unbuilt** tree:
+
+```sh
+make clean && make -n 2>/dev/null | grep -o 'build/[^ "]*' | grep -c '//'
+```
+
+**4** on the unfixed tree carrying `2026-01--02-evil_x.txt` — `build/2026/01//02/x.html` and
+its directory — and **0** on the fixed tree carrying every accepted shape. The `make clean` is
+load-bearing: on an already-built tree `make -n` has nothing left to print and scores 0 either
+way. A bare `make -n | grep -c '//'` is not a substitute either, scoring 10 false hits off
+recipe text on a clean corpus.
+
+**Three of the five tests cannot be watched failing against `main`, and are mutation-proved
+instead.** `test_repeated_hyphen_in_date_is_rejected` and
+`test_leading_hyphen_in_date_is_rejected` were watched RED. The other three —
+`test_date_shape_error_follows_the_character_error`,
+`test_date_shape_error_follows_the_empty_category_error` and
+`test_doubled_hyphen_category_still_builds` — assert behaviour already correct on `main`, so
+their whole job is to stop a future edit from breaking it, and each was proved by mutation:
+
+- **A**, the clause moved to *first* in `check_post_name`: **540 passed, 4 failed**, the
+  failures falling in the two ordering tests and nowhere else.
+- **B**, the clause overtightened to `$(findstring --,$(call date_and_category,$(1)))` — a
+  whole-segment test where the shipped one is a date-span test: **536 passed, 3 failed**, in
+  `test_doubled_hyphen_category_still_builds`, the pre-existing
+  `test_new_trims_edge_hyphens_from_category`, and `test_leading_hyphen_in_date_is_rejected`.
+  The third is worth its own sentence: `$(findstring --,-2026-01-02-home)` is empty, so under
+  that mutant a *lone* leading hyphen builds again. The overtightening is simultaneously an
+  under-tightening, which is not what "tighten the rule" sounds like.
+
+**The scope test is not the only net for mutation B, and it exists to name the reason rather
+than to be the only thing that fires.** Applied to `main` before any of this branch's tests
+existed, the same overtightening scores **524 passed, 1 failed** — caught by
+`test_new_trims_edge_hyphens_from_category` alone, a `make new` test, which reports that
+`CATEGORY='a--b'` stopped working without saying that the rule's *scope* is what changed.
+`test_doubled_hyphen_category_still_builds` says it in its name.
+
+**Two residuals this does not close, both deliberate.** The claim covers `//` in a page path
+but not `/./`, and `.` is a legal filename character: `2026-.-01-home_x.txt` would build
+`2026/./01/x.html` and collide with `2026-01-.-…`'s `2026/01/./x.html` by exactly this item's
+mechanism, without a doubled hyphen anywhere. The new clause accepts both names; they do not
+build only because `CHECKED_POST_DATES` refuses every dotted field first, so the closure leans
+on the calendar check — which is `DATE_DIALECT`-gated. That dependency is written down once, in
+the comment above `date_prefix` in the `Makefile`, on item 14's rule, and is not restated here
+or in `CLAUDE.md`. Second, a **leading dot** is neither refused nor built but *invisible*:
+`POST_LS` is `ls posts` without `-A`, so `posts/.-2026-01-02-home_x.txt` never enters
+`POST_NAMES` and no rule in the file can see it. Pre-existing on `main` and out of scope here,
+recorded because the two refused leading-hyphen shapes invite exactly the wrong generalisation.
+
+Full suite: **544 passed, 0 failed** — 526 before the branch, 537 after the clause and its two
+RED-able tests, 544 with the three mutation-proved ones. The counter counts `assert_*` calls,
+not test functions, which is why three tests add seven.
+
+Original finding follows.
+
 
 Found during the `make new` branch's pre-merge fix wave, while reproducing the DATE=
 validation finding below it (a `date_shape_bad` hole that let `make new` *write* a filename

@@ -232,7 +232,7 @@ date and title slug in different categories — `2026-08-06-home_dup.txt` and
 `2026-08-06-work_dup.txt` — both want `/2026/08/06/dup.html`. `CHECKED_POST_PAGES` errors
 naming both files rather than letting filename sort order pick a winner.
 
-Three more parse-time errors guard the filename itself, so there are five rules in all and
+Four more parse-time errors guard the filename itself, so there are six rules in all and
 this is the one place to find them.
 
 **A filename may contain letters, digits, and only `-`, `_`, and `.`.** Every other ASCII
@@ -378,7 +378,45 @@ Seven things to know:
   comment above `date_shape_bad` in the Makefile for the full derivation and the fuzz counts.
 
 Some legal slugs are ugly and stay legal: `TITLE='.'` builds `..html`, a leading or trailing
-hyphen survives, `'- - -'` gives `-----.html`. All five checks accept them.
+hyphen survives, `'- - -'` gives `-----.html`. All six checks accept them.
+
+**A date may not carry a repeated or leading hyphen.** `2026--01-02-evil_x.txt`,
+`2026-01--02-evil_x.txt` and `-2026-01-02-home_q.txt` are refused by `check_post_name`'s sixth
+and last clause, which requires the date-and-category segment to *begin* with its own three
+date fields rejoined by single hyphens. The mechanism it closes is one sentence:
+`$(wordlist)` returns the substring running from the first selected word to the last and so
+preserves the internal spacing `$(word)` would have normalized, which turned `2026-01--02` into
+the page path `build/2026/01//02/x.html` — a path the kernel collapses onto another post's
+permalink while `CHECKED_POST_PAGES` compares the two path *strings* byte-exactly and reports
+nothing, so one post silently overwrote the other at exit 0 and `make deploy` shipped it.
+
+**Scoped to the date span, deliberately.** A hyphen run *after* the day is category territory,
+where runs are legal and `make new` writes them: `CATEGORY='a--b'` produces
+`2026-01-02-a--b_x.txt`, which builds `build/category/a--b.html`. Both it and
+`2026-01-02--evil_x.txt` still build. Such a run is harmless because it falls **outside**
+`$(wordlist 1, 3, …)`'s window, so `path_from_filename` returns a byte-identical `2026/01/02`
+and a twin is caught by the ordinary duplicate-permalink error above. It is not that anything
+collapses the run — `category_slug` preserves it, which is exactly why the page is
+`a--b.html`, and the category never appears in a post URL at all.
+
+The collateral is one shape and it is accepted on the `BAD_CHARS` precedent: a lone
+`posts/-2026-01-02-home_q.txt` **built correctly before and no longer builds.** Make's
+word-splitting skips the leading hyphen, so with no twin present it published
+`/2026/01/02/q.html` like any other post — verified against the pre-fix Makefile. It is refused
+now because decoration before the day is date territory, closed by rule rather than by judging
+which shapes look dangerous, which is how `[` and `]` got through the character set in the
+first place.
+
+**Do not generalise that into "leading decoration is refused".** A leading *dot* is neither
+refused nor built — it is invisible. `POST_LS` is `ls posts` without `-A`, so
+`posts/.-2026-01-02-home_x.txt` never enters `POST_NAMES` at all and every rule in this section
+is blind to it: verified exit 0, an empty `POST_NAMES`, and nothing published for it. That is
+pre-existing and out of scope, but the two refused leading-hyphen shapes invite exactly the
+wrong generalisation.
+
+What the closure covers, and which other check it leans on to cover it, is stated once — in the
+comment above `date_prefix` in the `Makefile` — and deliberately not repeated here, for the
+reason `docs/backlog.md` item 14 gives.
 
 **The date must be a real one.** `2026-13-40`, `20xx-ab-cd`, `2026-02-30`, and non-leap
 `2026-02-29` are all rejected; `2026-7-4` unpadded, `26-7-4` two-digit (rendered year `0026`

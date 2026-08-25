@@ -886,8 +886,18 @@ filter_date_prefix = $(filter $(call date_prefix,$(1))%,$(call date_and_category
 # BAD_POST_DATES, this detector reaches no shell at all:
 # $(filter) is pure text and executes nothing. Placed first
 # it merely reports its own message for a name whose real
-# fault is a bad character -- a % in a date field builds a
-# two-% pattern, which matches nothing -- or a missing field.
+# fault is a bad character or a missing field. A % in a date
+# field builds a two-% pattern, and in $(filter) only the
+# FIRST % is a wildcard -- every later one is matched
+# literally -- so the ordering test's own fixture,
+# 2026-%1-02-home_x.txt, matches nothing and would be refused
+# here. "Matches nothing" is not a general property of a
+# two-% pattern, though: $(filter 2%26-01-02-%,2%26-01-02-%)
+# does match, because the text carries the same literal % in
+# the same place. Neither shape reaches this clause in
+# shipping order -- any name with a % dies at the character
+# clause above -- so all of this is about which message a
+# mutant prints, not about a name that gets here.
 # It follows the empty-category clause for a second reason
 # too: % matches the empty string, so a segment exactly equal
 # to its own date prefix would be ACCEPTED here, and is
