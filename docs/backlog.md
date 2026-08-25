@@ -882,9 +882,9 @@ Caught by a re-reviewer locating the line in `make -n` output instead of reading
 had been assigned to. **The mechanism worth naming is that half the sentence was measured and
 half was assumed** — running the count proved the number and said nothing about where it came
 from, and the measured half lent its credibility to the other. Twelve of twelve by
-execution, counting from instance 9. That is twice now that a de-duplication written to cure this defect
-has produced a fresh instance of it, which is the argument instance 18 makes, made again
-without help.
+execution, counting from instance 9. That is twice now that a de-duplication written to cure
+this defect has produced a fresh instance of it, which is the argument instance 18 makes, made
+again without help.
 
 **How it was finally stopped is itself worth recording: by *deleting* the fourth claim rather
 than splitting the sentence a third way.** After three consecutive corrections each replaced
@@ -903,9 +903,11 @@ Fixed by a sixth and last clause in `check_post_name`: the date-and-category seg
 `$(word)`, which normalizes, and matched against the raw segment with `$(filter)`, which sees
 what `$(wordlist)` preserved. **Scoped to the date span on purpose.** A hyphen run *after* the
 day is category territory, where runs are legal and `make new CATEGORY='a--b'` writes them, so
-`2026-01-02-a--b_x.txt` still builds `build/category/a--b.html`. The collateral is one shape
-and is accepted on the `BAD_CHARS` precedent: a lone `posts/-2026-01-02-home_q.txt` built
-correctly before and no longer builds. Design:
+`2026-01-02-a--b_x.txt` still builds `build/category/a--b.html`. The collateral is a family
+rather than one shape, and is accepted on the `BAD_CHARS` precedent: a leading hyphen run of
+**any length** built
+correctly before, alone, and no longer builds — measured at one, two and three hyphens against
+`86cea81`'s Makefile, every one of them publishing `/2026/01/02/q.html`. Design:
 `docs/superpowers/specs/2026-08-24-repeated-hyphen-permalink-clobber-design.md`.
 
 **The spec's first closure measurement was vacuous, which is item 14's instance 19 above.**
@@ -927,9 +929,13 @@ form scores **one false hit per post** on a corpus with no bug in it at all — 
 three posts and 10 on ten. The `grep -o 'build/[^ "]*'` is what keeps the count to target
 strings.
 
-**Three of the five tests cannot be watched failing against `main`, and are mutation-proved
-instead.** `test_repeated_hyphen_in_date_is_rejected` and
-`test_leading_hyphen_in_date_is_rejected` were watched RED. The other three —
+**Three of the branch's six tests cannot be watched failing against `main`, and are
+mutation-proved instead.** `test_repeated_hyphen_before_the_day_is_rejected`,
+`test_repeated_hyphen_before_the_month_is_rejected` and
+`test_leading_hyphen_in_date_is_rejected` were watched RED, three assertion failures across the
+three. The first two are one test in the spec, split in `e83146e` because
+`build_expect_fail || return` returns from the whole function, so the looped form never watched
+the second shape fail at all. The other three —
 `test_date_shape_error_follows_the_character_error`,
 `test_date_shape_error_follows_the_empty_category_error` and
 `test_doubled_hyphen_category_still_builds` — assert behaviour already correct on `main`, so
@@ -966,9 +972,11 @@ two pointers, on item 14's rule. Second, a **leading dot** is neither refused no
 `POST_NAMES` and no rule in the file can see it. Pre-existing on `main` and out of scope here,
 recorded because the two refused leading-hyphen shapes invite exactly the wrong generalisation.
 
-Full suite: **544 passed, 0 failed** — 526 before the branch, 537 after the clause and its two
-RED-able tests, 544 with the three mutation-proved ones. The counter counts `assert_*` calls,
-not test functions, which is why three tests add seven.
+Full suite: **544 passed, 0 failed** — 526 before the branch, 537 after the clause and its
+three RED-able tests, 544 with the three mutation-proved ones. The counter counts `assert_*`
+calls, not test functions, so the six tests add eighteen assertions: 11 in the first three,
+7 in the second three. Counted off `git diff 86cea81..HEAD -- tests/run.sh`, not off the spec,
+which still says five tests and two RED-able because it is a record of its moment.
 
 Original finding follows.
 

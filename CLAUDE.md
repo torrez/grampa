@@ -394,12 +394,14 @@ where runs are legal and `make new` writes them: `CATEGORY='a--b'` produces
 `2026-01-02--evil_x.txt` still build, and two posts colliding through either are refused the
 ordinary way, by the duplicate-permalink error above, rather than by this clause.
 
-The collateral is one shape and it is accepted on the `BAD_CHARS` precedent: a lone
-`posts/-2026-01-02-home_q.txt` **built correctly before and no longer builds.** With no twin
-present it published `/2026/01/02/q.html` like any other post — verified against the pre-fix
-Makefile. It is refused now because decoration before the day is date territory, closed by rule
-rather than by judging which shapes look dangerous, which is how `[` and `]` got through the
-character set in the first place.
+The collateral is a family, not one shape, and it is accepted on the `BAD_CHARS` precedent: a
+**leading hyphen run of any length** — `posts/-2026-01-02-home_q.txt`,
+`posts/--2026-01-02-home_q.txt`, and longer — **built correctly before and no longer builds.**
+With no twin present every one of them published `/2026/01/02/q.html` like any other post;
+twinned, they collided loudly by the duplicate-permalink error above rather than silently.
+Verified at one, two and three hyphens against the pre-fix Makefile. It is refused now because
+decoration before the day is date territory, closed by rule rather than by judging which shapes
+look dangerous, which is how `[` and `]` got through the character set in the first place.
 
 **Do not generalise that into "leading decoration is refused".** A leading *dot* is neither
 refused nor built — it is invisible. `POST_LS` is `ls posts` without `-A`, so
