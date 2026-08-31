@@ -2884,6 +2884,168 @@ EOF
 }
 
 #
+# A doubled hyphen INSIDE the y-m-d span builds a page path
+# carrying a doubled slash -- build/2026/01//02/x.html --
+# which the kernel collapses onto build/2026/01/02/x.html
+# while CHECKED_POST_PAGES compares the two path strings
+# byte-exactly and reports no collision. Exit 0, and
+# whichever rule runs last wins the write.
+#
+# The load-bearing assertion is that the TWIN's page still
+# holds its own body, not merely that the build failed. The
+# bug is a silent overwrite; a test asserting only exit
+# status would pass against a "fix" that refused the name
+# after clobbering.
+#
+test_repeated_hyphen_before_the_day_is_rejected() {
+	sandbox repeated_hyphen_before_the_day_is_rejected
+	add_post '2026-01-02-home_x.txt' <<'EOF'
+title: Real
+-----------------------------------
+<p>REAL BODY</p>
+EOF
+	build || return
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+	add_post '2026-01--02-evil_x.txt' <<'EOF'
+title: Evil
+-----------------------------------
+<p>EVIL BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026-01--02-evil_x.txt'
+	assert_out_grep 'repeated or leading hyphen in date'
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+}
+
+#
+# The sibling shape, between the year and the month. It gets
+# its own function rather than a second loop iteration
+# because `build_expect_fail || return` returns from the whole
+# FUNCTION, not from the loop -- so a looped form stops at the
+# first shape during the RED run and the second shape is never
+# watched failing at all. Verified: the looped form failed
+# only iteration 1 against the unfixed Makefile.
+#
+test_repeated_hyphen_before_the_month_is_rejected() {
+	sandbox repeated_hyphen_before_the_month_is_rejected
+	add_post '2026-01-02-home_x.txt' <<'EOF'
+title: Real
+-----------------------------------
+<p>REAL BODY</p>
+EOF
+	build || return
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+	add_post '2026--01-02-evil_x.txt' <<'EOF'
+title: Evil
+-----------------------------------
+<p>EVIL BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/2026--01-02-evil_x.txt'
+	assert_out_grep 'repeated or leading hyphen in date'
+	assert_grep build/2026/01/02/x.html 'REAL BODY'
+}
+
+#
+# The collateral, asserted deliberately so a reader finds it
+# intended rather than incidental. A leading hyphen builds
+# correctly today when it is alone: make's tokenizer skips
+# it, so the page path is identical to the undecorated
+# name's and the existing collision check already catches
+# the only case that can clobber anything. It is refused
+# anyway, because the date span is where decoration is
+# refused and `make new` already refuses DATE=-2026-01-02.
+#
+test_leading_hyphen_in_date_is_rejected() {
+	sandbox leading_hyphen_in_date_is_rejected
+	add_post '-2026-01-02-home_q.txt' <<'EOF'
+title: Leading
+-----------------------------------
+<p>LEADING BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'posts/-2026-01-02-home_q.txt'
+	assert_out_grep 'repeated or leading hyphen in date'
+	assert_no_file 'build/2026/01/02/q.html'
+}
+
+#
+# The date-shape clause must stay BELOW the character clause,
+# and the reason is the message rather than safety: $(filter)
+# reaches no shell, so nothing executes in either order. A %
+# in a date field builds a two-% pattern that matches nothing,
+# so the clause placed first refuses this name for a reason
+# that is not the reason.
+#
+# Cannot fail against main -- the character clause is
+# pre-existing. Proved by mutation: move the date-shape clause
+# to first in check_post_name and this reports "repeated or
+# leading hyphen in date" instead.
+#
+test_date_shape_error_follows_the_character_error() {
+	sandbox date_shape_error_follows_the_character_error
+	add_post '2026-%1-02-home_x.txt' <<'EOF'
+title: Both Wrong
+-----------------------------------
+<p>BOTH WRONG BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'illegal character'
+	assert_out_not_grep 'repeated or leading hyphen in date'
+}
+
+#
+# And below the empty-category clause. 2026-01_x.txt has no
+# third field, so $(word 3,...) is empty and the detector
+# refuses it for a reason that is not the reason.
+#
+# Cannot fail against main -- the empty-category clause is
+# pre-existing. Proved by the same mutation as its sibling
+# above: clause first, and this reports the shape message.
+#
+test_date_shape_error_follows_the_empty_category_error() {
+	sandbox date_shape_error_follows_the_empty_category_error
+	add_post '2026-01_x.txt' <<'EOF'
+title: No Category
+-----------------------------------
+<p>NO CATEGORY BODY</p>
+EOF
+	build_expect_fail || return
+	assert_out_grep 'empty category'
+	assert_out_not_grep 'repeated or leading hyphen in date'
+}
+
+#
+# The scope line: a hyphen run AFTER the day is category
+# territory and stays legal, because category_slug collapses
+# it out of the page path and make new writes such names
+# (CATEGORY='a--b').
+#
+# Cannot fail against main, and it is NOT the only thing that
+# catches the tightening it guards: overtightening the rule to
+# the whole segment ($(findstring --,$(call
+# date_and_category,$(1)))) already fails
+# test_new_trims_edge_hyphens_from_category, measured at
+# 524/1. That test catches it INCIDENTALLY, though -- it is a
+# make new test that happens to build, and its failure reads
+# "make failed unexpectedly (exit 2)", naming nothing about
+# scope. This one exists to name the reason, not to be the
+# only net.
+#
+test_doubled_hyphen_category_still_builds() {
+	sandbox doubled_hyphen_category_still_builds
+	add_post '2026-01-02-a--b_x.txt' <<'EOF'
+title: Interior Run
+-----------------------------------
+<p>INTERIOR BODY</p>
+EOF
+	build || return
+	assert_file 'build/2026/01/02/x.html'
+	assert_file 'build/category/a--b.html'
+	assert_grep 'build/category/a--b.html' 'INTERIOR BODY'
+}
+
+#
 # ---------------------------------------------------
 # Control characters. These fall outside BAD_CHARS' own
 # taxonomy -- a control byte is neither a letter, a digit,
@@ -4528,6 +4690,12 @@ test_glob_character_slug_is_rejected
 test_shell_metacharacter_slug_is_rejected
 test_unusual_but_safe_slug_still_builds
 test_empty_title_slug_is_rejected
+test_repeated_hyphen_before_the_day_is_rejected
+test_repeated_hyphen_before_the_month_is_rejected
+test_leading_hyphen_in_date_is_rejected
+test_date_shape_error_follows_the_character_error
+test_date_shape_error_follows_the_empty_category_error
+test_doubled_hyphen_category_still_builds
 test_control_character_slug_is_rejected
 test_tab_in_filename_names_the_whole_file
 test_del_character_slug_is_rejected

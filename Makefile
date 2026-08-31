@@ -816,6 +816,44 @@ CONTROL_CHAR_NAMES := $(shell $(POST_LS) | LC_ALL=C grep '[[:cntrl:]]' | cat -vt
 CHECKED_CONTROL_CHARS := $(if $(CONTROL_CHAR_NAMES),$(error control character in filename: $(addprefix posts/,$(CONTROL_CHAR_NAMES)); shown rendered, so ^A is one byte. A post filename may contain letters, digits, and only these punctuation marks: - _ .))
 
 #
+# The date span must be undecorated: the filename's
+# date-and-category segment has to BEGIN with its own three
+# date fields joined by single hyphens.
+#
+# $(word) normalizes where $(wordlist) preserves. $(wordlist)
+# returns the substring of the original text running from the
+# first selected word to the last, so internal spacing
+# survives it -- which is why path_from_filename turns
+# 2026-01--02 into 2026/01//02, a path the kernel collapses
+# onto another post's permalink while CHECKED_POST_PAGES
+# compares the two strings byte-exactly and sees nothing
+# wrong. Building the prefix from $(word) and matching it
+# against the raw segment detects exactly the decoration
+# $(wordlist) would otherwise carry into the path.
+#
+# Scoped to the date span on purpose. A hyphen run AFTER the
+# day is category territory, where runs are legal and where
+# make new writes them: CATEGORY='a--b' produces
+# 2026-01-02-a--b_x.txt, which builds category/a--b.html.
+# Such a run is harmless here because it falls OUTSIDE
+# $(wordlist 1, 3, ...)'s window, so path_from_filename
+# returns a byte-identical 2026/01/02 and a twin is caught by
+# CHECKED_POST_PAGES the ordinary way. It is not that anything
+# collapses the run: category_slug preserves it -- that is why
+# the page is a--b.html -- and the category never appears in a
+# post URL at all.
+#
+# This closes // in a page path but NOT /./, and . is a legal
+# filename character: 2026-.-01-home_x.txt would build
+# 2026/./01/x.html and collide by the same mechanism. It does
+# not build only because CHECKED_POST_DATES refuses every
+# dotted field first. Relaxing the calendar check reopens
+# this.
+#
+date_prefix = $(word 1,$(call dc_words,$(1)))-$(word 2,$(call dc_words,$(1)))-$(word 3,$(call dc_words,$(1)))-
+filter_date_prefix = $(filter $(call date_prefix,$(1))%,$(call date_and_category,$(1)))
+
+#
 # A malformed filename is a parse-time error, so the
 # build stops before any recipe runs. Assigning with
 # := forces the check to happen now; the result is
@@ -842,12 +880,36 @@ CHECKED_CONTROL_CHARS := $(if $(CONTROL_CHAR_NAMES),$(error control character in
 # reason. Loud either way, and the one character out of the
 # 29 whose error is make's rather than ours.
 #
+# The date-shape clause is last of the six, and both clauses
+# it must follow are about the MESSAGE rather than about
+# safety. Unlike the character check's standing over
+# BAD_POST_DATES, this detector reaches no shell at all:
+# $(filter) is pure text and executes nothing. Placed first
+# it merely reports its own message for a name whose real
+# fault is a bad character or a missing field. A % in a date
+# field builds a two-% pattern, and in $(filter) only the
+# FIRST % is a wildcard -- every later one is matched
+# literally -- so the ordering test's own fixture,
+# 2026-%1-02-home_x.txt, matches nothing and would be refused
+# here. "Matches nothing" is not a general property of a
+# two-% pattern, though: $(filter 2%26-01-02-%,2%26-01-02-%)
+# does match, because the text carries the same literal % in
+# the same place. Neither shape reaches this clause in
+# shipping order -- any name with a % dies at the character
+# clause above -- so all of this is about which message a
+# mutant prints, not about a name that gets here.
+# It follows the empty-category clause for a second reason
+# too: % matches the empty string, so a segment exactly equal
+# to its own date prefix would be ACCEPTED here, and is
+# unreachable only because such a segment means an empty
+# category, refused by the clause above.
 check_post_name = \
 	$(if $(call bad_chars_in,$(1)),$(error posts/$(1): illegal character in filename: $(call bad_chars_in,$(1)); a post filename may contain letters, digits, and only these punctuation marks: - _ .))\
 	$(if $(word 3,$(call underscore_split,$(1))),$(error posts/$(1): more than one _ in filename; expected y-m-d-category_title.txt))\
 	$(if $(word 2,$(call underscore_split,$(1))),,$(error posts/$(1): no category in filename; expected y-m-d-category_title.txt))\
 	$(if $(call category_slug,$(1)),,$(error posts/$(1): empty category in filename; expected y-m-d-category_title.txt))\
-	$(if $(call post_slug,$(1)),,$(error posts/$(1): empty title slug in filename; expected y-m-d-category_title.txt))
+	$(if $(call post_slug,$(1)),,$(error posts/$(1): empty title slug in filename; expected y-m-d-category_title.txt))\
+	$(if $(call filter_date_prefix,$(1)),,$(error posts/$(1): repeated or leading hyphen in date; expected y-m-d-category_title.txt))
 CHECKED_POST_NAMES := $(foreach f,$(POST_NAMES),$(call check_post_name,$(f)))
 
 #
